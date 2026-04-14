@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ditto</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>DITTO</h1>
+      <span id="connection-status" class="status disconnected">Disconnected</span>
+    </div>
+    <div class="header-right">
+      <button id="btn-reload" onclick="reloadMocks()">Reload Mocks</button>
+      <button id="btn-clear" onclick="clearLog()">Clear Log</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <h2>Mocks <span id="mock-count" class="badge">0</span></h2>
+      <ul id="mock-list"></ul>
+    </aside>
+
+    <section id="log-panel">
+      <h2>Request Log</h2>
+      <div id="log-empty" class="empty-state">Waiting for requests...</div>
+      <table id="log-table" class="hidden">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Type</th>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Status</th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <span id="footer-info"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

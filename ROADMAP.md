@@ -25,14 +25,14 @@ If the answer is no, we need to fix the UX before adding new capabilities.
 - ~~Drop the `git clone` + `go build` requirement — README now shows binary download as the primary install path~~
 - Future: signed `.dmg` / `.pkg` / `.deb` installers, Homebrew tap
 
-## v0.4 — Web UI (foundation)
+## v0.4 — Web UI (foundation) ✅
 
-A browser-based dashboard served by the same Go binary. This is the single biggest lever for non-technical adoption.
-
-- Embed a small SPA into the binary (no separate frontend project to maintain)
-- Live request log via WebSocket (see what's flowing through Ditto in real time)
-- Visual list of mocks with on/off toggles
-- Open the UI on startup (`--no-ui` to opt out)
+- ~~Embed a small SPA into the binary (no separate frontend project to maintain)~~
+- ~~Live request log via SSE (see what's flowing through Ditto in real time)~~
+- ~~Visual list of mocks with on/off toggles~~
+- ~~Open the UI on startup (`--no-ui` to opt out)~~
+- ~~Mock reload from UI (re-reads mocks directory without restarting)~~
+- ~~REST API at `/__ditto__/api/` for programmatic access~~
 
 ## v0.5 — Mock management in the UI
 

@@ -1,0 +1,341 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --blue: #58a6ff;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-left h1 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--accent);
+}
+
+.header-right {
+  display: flex;
+  gap: 8px;
+}
+
+.status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.status.connected {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--green);
+}
+
+.status.disconnected {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--red);
+}
+
+button {
+  background: var(--border);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+button:hover {
+  background: #3d444d;
+}
+
+main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+#sidebar {
+  width: 300px;
+  min-width: 300px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#sidebar h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  background: var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+#mock-list {
+  list-style: none;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.mock-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mock-item:hover {
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.mock-item.disabled {
+  opacity: 0.4;
+}
+
+.mock-item .method {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  min-width: 50px;
+}
+
+.mock-item .path {
+  font-size: 13px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.mock-item .mock-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.toggle {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle .slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 9px;
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.toggle .slider::before {
+  content: '';
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  bottom: 2px;
+  background: var(--text);
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.toggle input:checked + .slider {
+  background: var(--green);
+}
+
+.toggle input:checked + .slider::before {
+  transform: translateX(14px);
+}
+
+#log-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#log-panel h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+#log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+#log-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+#log-table th {
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+#log-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+  white-space: nowrap;
+}
+
+#log-table tbody {
+  display: block;
+  overflow-y: auto;
+  max-height: calc(100vh - 160px);
+}
+
+#log-table thead,
+#log-table tbody tr {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+#log-table th:nth-child(1),
+#log-table td:nth-child(1) { width: 90px; }
+#log-table th:nth-child(2),
+#log-table td:nth-child(2) { width: 70px; }
+#log-table th:nth-child(3),
+#log-table td:nth-child(3) { width: 70px; }
+#log-table th:nth-child(4),
+#log-table td:nth-child(4) { width: auto; }
+#log-table th:nth-child(5),
+#log-table td:nth-child(5) { width: 70px; }
+#log-table th:nth-child(6),
+#log-table td:nth-child(6) { width: 80px; }
+
+#log-body tr {
+  transition: background 0.1s;
+}
+
+#log-body tr:hover {
+  background: rgba(88, 166, 255, 0.04);
+}
+
+.type-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.type-mock {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--green);
+}
+
+.type-proxy {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--blue);
+}
+
+.type-miss {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--red);
+}
+
+.method-get { color: var(--green); }
+.method-post { color: var(--blue); }
+.method-put { color: var(--orange); }
+.method-delete { color: var(--red); }
+.method-patch { color: var(--orange); }
+
+.hidden {
+  display: none !important;
+}
+
+footer {
+  padding: 8px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text-muted);
+}

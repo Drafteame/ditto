@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -19,6 +22,7 @@ func main() {
 	mocksDir := flag.String("mocks", "./mocks", "Directory containing mock JSON files")
 	https := flag.Bool("https", false, "Enable HTTPS using a self-signed certificate")
 	certDir := flag.String("certs", "./certs", "Directory to store the self-signed certificate")
+	noUI := flag.Bool("no-ui", false, "Disable the web dashboard")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -27,11 +31,16 @@ func main() {
 		return
 	}
 
-	mocks, err := LoadMocks(*mocksDir)
-	if err != nil {
+	// Load mocks
+	store := NewMockStore(*mocksDir)
+	if err := store.Load(); err != nil {
 		log.Fatalf("Failed to load mocks: %v", err)
 	}
 
+	// Event bus for live log streaming
+	bus := NewEventBus()
+
+	// Reverse proxy
 	var proxy *httputil.ReverseProxy
 	if *target != "" {
 		targetURL, err := url.Parse(*target)
@@ -44,32 +53,48 @@ func main() {
 			originalDirector(req)
 			req.Host = targetURL.Host
 		}
-		log.Printf("Proxying unmatched requests to %s", *target)
 	}
 
+	// TLS
 	var certPath, keyPath string
 	if *https {
+		var err error
 		certPath, keyPath, err = EnsureCert(*certDir)
 		if err != nil {
 			log.Fatalf("Failed to prepare TLS certificate: %v", err)
 		}
 	}
 
-	printStartup(mocks, *port, *target, *mocksDir, *https, certPath)
+	// HTTP mux
+	mux := http.NewServeMux()
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Reload mocks on every request so you can edit files without restarting
-		mocks, err = LoadMocks(*mocksDir)
-		if err != nil {
-			log.Printf("Warning: failed to reload mocks: %v", err)
+	// Register UI routes
+	if !*noUI {
+		info := ServerInfo{
+			Port:     *port,
+			Target:   *target,
+			HTTPS:    *https,
+			MocksDir: *mocksDir,
+		}
+		RegisterUI(mux, store, bus, info)
+	}
+
+	// Main proxy/mock handler
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Skip UI paths
+		if strings.HasPrefix(r.URL.Path, "/__ditto__/") {
+			return
 		}
 
-		mock := FindMock(mocks, r.Method, r.URL.Path)
+		start := time.Now()
+
+		mock := store.Find(r.Method, r.URL.Path)
 		if mock != nil {
-			log.Printf("MOCK   %s %s → %d", r.Method, r.URL.Path, mock.Status)
 			if mock.DelayMs > 0 {
 				time.Sleep(time.Duration(mock.DelayMs) * time.Millisecond)
 			}
+			duration := time.Since(start).Milliseconds()
+
 			for k, v := range mock.Headers {
 				w.Header().Set(k, v)
 			}
@@ -78,30 +103,85 @@ func main() {
 			}
 			w.WriteHeader(mock.Status)
 			w.Write(mock.RawBody)
+
+			log.Printf("MOCK   %s %s → %d (%dms)", r.Method, r.URL.Path, mock.Status, duration)
+			bus.Publish(LogEvent{
+				Timestamp:  time.Now().Format("15:04:05"),
+				Type:       "MOCK",
+				Method:     r.Method,
+				Path:       r.URL.Path,
+				Status:     mock.Status,
+				DurationMs: duration,
+			})
 			return
 		}
 
 		if proxy != nil {
 			log.Printf("PROXY  %s %s", r.Method, r.URL.Path)
+			proxyStart := time.Now()
 			proxy.ServeHTTP(w, r)
+			duration := time.Since(proxyStart).Milliseconds()
+
+			bus.Publish(LogEvent{
+				Timestamp:  time.Now().Format("15:04:05"),
+				Type:       "PROXY",
+				Method:     r.Method,
+				Path:       r.URL.Path,
+				Status:     200,
+				DurationMs: duration,
+			})
 			return
 		}
 
+		duration := time.Since(start).Milliseconds()
 		log.Printf("MISS   %s %s (no target configured)", r.Method, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(`{"error": "no mock found and no target configured"}`))
+
+		bus.Publish(LogEvent{
+			Timestamp:  time.Now().Format("15:04:05"),
+			Type:       "MISS",
+			Method:     r.Method,
+			Path:       r.URL.Path,
+			Status:     502,
+			DurationMs: duration,
+		})
 	})
+
+	// Startup
+	scheme := "http"
+	if *https {
+		scheme = "https"
+	}
+	printStartup(store.All(), *port, *target, *mocksDir, *https, certPath, !*noUI)
+
+	// Open browser
+	if !*noUI {
+		go openBrowser(fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, *port))
+	}
 
 	addr := fmt.Sprintf("0.0.0.0:%d", *port)
 	if *https {
-		log.Fatal(http.ListenAndServeTLS(addr, certPath, keyPath, handler))
+		log.Fatal(http.ListenAndServeTLS(addr, certPath, keyPath, mux))
 	} else {
-		log.Fatal(http.ListenAndServe(addr, handler))
+		log.Fatal(http.ListenAndServe(addr, mux))
 	}
 }
 
-func printStartup(mocks []Mock, port int, target, mocksDir string, https bool, certPath string) {
+func openBrowser(url string) {
+	time.Sleep(500 * time.Millisecond)
+	switch runtime.GOOS {
+	case "darwin":
+		exec.Command("open", url).Start()
+	case "linux":
+		exec.Command("xdg-open", url).Start()
+	case "windows":
+		exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	}
+}
+
+func printStartup(mocks []Mock, port int, target, mocksDir string, https bool, certPath string, ui bool) {
 	scheme := "http"
 	if https {
 		scheme = "https"
@@ -122,6 +202,9 @@ func printStartup(mocks []Mock, port int, target, mocksDir string, https bool, c
 		fmt.Printf("  Target:     (none — unmatched requests return 502)\n")
 	}
 	fmt.Printf("  Mocks:      %d loaded\n", len(mocks))
+	if ui {
+		fmt.Printf("  Dashboard:  %s://localhost:%d/__ditto__/\n", scheme, port)
+	}
 	fmt.Println()
 	if len(mocks) > 0 {
 		fmt.Println("  Registered mocks:")
