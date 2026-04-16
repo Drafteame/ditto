@@ -10,11 +10,24 @@ Drop a JSON file in the `mocks/` folder, start Ditto, and point your app to it. 
 
 Grab the latest release for your platform from the [Releases page](https://github.com/dtlucho/ditto/releases). Extract the archive and you're done — no Go toolchain required.
 
-**macOS**: Download the `.zip`, double-click to extract, then double-click **Ditto.app** to launch. A Terminal window opens with Ditto running and the dashboard opens in your browser. On first launch, macOS may show a security warning — right-click the app and select "Open" to bypass it (one-time only).
+**macOS**: Download the `.zip` for your chip (Apple Silicon = `darwin_arm64`, Intel = `darwin_amd64`). Double-click to extract, then:
 
-To stop Ditto, press **Ctrl+C** in the Terminal window or simply close it.
+1. **First launch only** — macOS blocks unsigned apps by default. To open Ditto:
+   - **Right-click** (or Control+click) on `Ditto.app` and select **Open**
+   - A dialog appears — click **Open** to confirm
+   - If macOS still blocks it (shows "Move to Trash" with no Open option), run this in Terminal:
+     ```bash
+     xattr -cr /path/to/Ditto.app
+     ```
+     Then double-click `Ditto.app` normally.
+2. Ditto opens as a native desktop window with the dashboard inside.
+3. To stop, close the window.
 
-**Linux / Windows**: Extract the archive and run the `ditto` binary from the terminal.
+After the first launch, subsequent opens work with a normal double-click.
+
+**Linux**: Extract the `.tar.gz` and run `./ditto`. On amd64, you get the full desktop app (requires GTK3 + WebKit2GTK). On arm64, it runs in headless mode and opens the dashboard in your browser.
+
+**Windows**: Extract the `.zip` and run `ditto.exe`. The desktop app opens automatically.
 
 Available builds: macOS (Intel + Apple Silicon), Linux (amd64 + arm64), Windows (amd64).
 
