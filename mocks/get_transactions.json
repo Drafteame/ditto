@@ -1,0 +1,118 @@
+{
+  "method": "GET",
+  "path": "/transactions",
+  "status": 200,
+  "body": {
+    "transactions": [
+      {
+        "id": "trl_AjxRzxZRMRuHiCEOw",
+        "credits": 20000,
+        "price": 20000,
+        "userId": "6275777a9152f5087bdee234",
+        "type": "credit",
+        "kind": "CASH_IN",
+        "description": "Depósito OXXO",
+        "status": "PENDING",
+        "statusDescription": "waiting_payment",
+        "provider": "oxxo",
+        "hasCoupon": false,
+        "isReverse": false,
+        "paymentProductName": "",
+        "paymentMethodType": "cash",
+        "createdAt": "2026-03-02T12:32:16.223726Z"
+      },
+      {
+        "id": "trl_6hzCKT3JfJkHZMerT",
+        "credits": 20000,
+        "price": 20000,
+        "userId": "6275777a9152f5087bdee234",
+        "type": "credit",
+        "kind": "CASH_IN",
+        "description": "Depósito OXXO",
+        "status": "PENDING",
+        "statusDescription": "waiting_payment",
+        "provider": "oxxo",
+        "hasCoupon": false,
+        "isReverse": false,
+        "paymentProductName": "",
+        "paymentMethodType": "cash",
+        "createdAt": "2026-03-02T12:28:10.412415Z"
+      },
+      {
+        "id": "trl_LXjOXZgDl3okFCbCN",
+        "credits": 20000,
+        "price": 20000,
+        "userId": "6275777a9152f5087bdee234",
+        "type": "credit",
+        "kind": "CASH_IN",
+        "description": "Tarjeta(Credito/Debito)",
+        "status": "PENDING",
+        "statusDescription": "",
+        "provider": "yuno",
+        "hasCoupon": false,
+        "isReverse": false,
+        "paymentProductName": "",
+        "paymentMethodType": "card",
+        "createdAt": "2026-02-24T15:10:12.896614Z"
+      },
+      {
+        "id": "trl_zuLNLbXiCCp7co4G1",
+        "credits": 20000,
+        "price": 20000,
+        "userId": "6275777a9152f5087bdee234",
+        "type": "credit",
+        "kind": "CASH_IN",
+        "description": "Tarjeta(Credito/Debito)",
+        "status": "PENDING",
+        "statusDescription": "",
+        "provider": "yuno",
+        "hasCoupon": false,
+        "isReverse": false,
+        "paymentProductName": "",
+        "paymentMethodType": "card",
+        "createdAt": "2026-02-24T15:00:53.671472Z"
+      },
+      {
+        "id": "trl_h3LXBMXMkYvksdMsb",
+        "credits": 20000,
+        "price": 20000,
+        "userId": "6275777a9152f5087bdee234",
+        "type": "credit",
+        "kind": "CASH_IN",
+        "description": "Tarjeta(Credito/Debito)",
+        "status": "PENDING",
+        "statusDescription": "",
+        "provider": "yuno",
+        "hasCoupon": false,
+        "isReverse": false,
+        "paymentProductName": "",
+        "paymentMethodType": "card",
+        "createdAt": "2026-02-24T14:53:49.707059Z"
+      },
+      {
+        "id": "trl_nEzTFUIgcu8sLzC8k",
+        "credits": 10000,
+        "price": 10000,
+        "userId": "6275777a9152f5087bdee234",
+        "type": "credit",
+        "kind": "CASH_IN",
+        "description": "Tarjeta(Credito/Debito)",
+        "status": "PENDING",
+        "statusDescription": "",
+        "provider": "yuno",
+        "hasCoupon": false,
+        "isReverse": false,
+        "paymentProductName": "",
+        "paymentMethodType": "card",
+        "createdAt": "2026-01-12T17:05:21.819189Z"
+      }
+    ],
+    "cursor": "eyJMaW1pdCI6MjAsIlNraXAiOjIwfQ"
+  },
+  "match": {
+    "query": {
+      "limit": "20",
+      "status": "pending"
+    }
+  }
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -151,7 +152,15 @@ func main() {
 
 		start := time.Now()
 
-		mock := store.Find(r.Method, r.URL.Path)
+		// Read the request body so it can be inspected by mock matching AND
+		// still forwarded by the reverse proxy.
+		var reqBody []byte
+		if r.Body != nil && r.ContentLength != 0 {
+			reqBody, _ = io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(reqBody))
+		}
+
+		mock := store.Find(r, reqBody)
 		if mock != nil {
 			if mock.DelayMs > 0 {
 				time.Sleep(time.Duration(mock.DelayMs) * time.Millisecond)
@@ -172,7 +181,7 @@ func main() {
 				Timestamp:    time.Now().Format("15:04:05"),
 				Type:         "MOCK",
 				Method:       r.Method,
-				Path:         r.URL.Path,
+				Path:         r.URL.RequestURI(),
 				Status:       mock.Status,
 				DurationMs:   duration,
 				ResponseBody: string(mock.RawBody),
@@ -192,7 +201,7 @@ func main() {
 				Timestamp:    time.Now().Format("15:04:05"),
 				Type:         "PROXY",
 				Method:       r.Method,
-				Path:         r.URL.Path,
+				Path:         r.URL.RequestURI(),
 				Status:       status,
 				DurationMs:   duration,
 				ResponseBody: capture.body.String(),
@@ -210,7 +219,7 @@ func main() {
 			Timestamp:    time.Now().Format("15:04:05"),
 			Type:         "MISS",
 			Method:       r.Method,
-			Path:         r.URL.Path,
+			Path:         r.URL.RequestURI(),
 			Status:       502,
 			DurationMs:   duration,
 			ResponseBody: `{"error": "no mock found and no target configured"}`,

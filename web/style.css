@@ -646,6 +646,101 @@ main {
   border-color: var(--accent);
 }
 
+.form-help {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 8px 0 12px;
+  line-height: 1.5;
+}
+
+#match-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+#match-section summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+
+#match-section summary:hover {
+  color: var(--text);
+}
+
+#match-section[open] summary {
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+#match-section .form-group {
+  margin-top: 12px;
+}
+
+#match-section textarea {
+  min-height: 60px;
+  font-size: 12px;
+}
+
+code {
+  background: var(--bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.match-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 16px 8px 56px;
+  margin-top: -4px;
+}
+
+.match-pill {
+  font-size: 10px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  background: rgba(210, 153, 34, 0.12);
+  color: var(--orange);
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toast {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 200;
+  animation: toast-in 0.2s ease-out;
+}
+
+.toast.warn {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+@keyframes toast-in {
+  from { transform: translate(-50%, 12px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
 /* --- Utility --- */
 
 .hidden {

@@ -4,11 +4,11 @@
   "status": 200,
   "body": {
     "id": "c9qnf4noa1tc70gu4r1g",
-    "balance": 7938663,
+    "balance": 7939663,
     "userBalance": 4114150,
     "promotionalBalance": 50000,
-    "winningsBalance": 3774513,
-    "withdrawableBalance": 4000013,
+    "winningsBalance": 3775513,
+    "withdrawableBalance": 3775513,
     "balanceLimit": 6000000,
     "currency": "MXN"
   }

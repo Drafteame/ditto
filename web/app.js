@@ -163,12 +163,43 @@ function renderMocks(mocks) {
     `;
 
     list.appendChild(li);
+
+    const pills = matchPills(mock.match);
+    if (pills.length > 0) {
+      const pillsEl = document.createElement('div');
+      pillsEl.className = 'match-pills';
+      pillsEl.innerHTML = pills.map(p => `<span class="match-pill" title="${escapeAttr(p)}">${escapeHtml(p)}</span>`).join('');
+      list.appendChild(pillsEl);
+    }
   });
+}
+
+function matchPills(match) {
+  if (!match) return [];
+  const pills = [];
+  if (match.query) {
+    Object.entries(match.query).forEach(([k, v]) => pills.push(`?${k}=${v}`));
+  }
+  if (match.headers) {
+    Object.entries(match.headers).forEach(([k, v]) => pills.push(`${k}: ${v}`));
+  }
+  if (match.body && Object.keys(match.body).length > 0) {
+    pills.push(`body: ${JSON.stringify(match.body)}`);
+  }
+  return pills;
+}
+
+function escapeAttr(str) {
+  return String(str).replace(/"/g, '&quot;');
 }
 
 async function toggleMock(index) {
   try {
-    await fetch(`${API_BASE}/mocks/${index}/toggle`, { method: 'POST' });
+    const res = await fetch(`${API_BASE}/mocks/${index}/toggle`, { method: 'POST' });
+    const result = await res.json().catch(() => ({}));
+    if (result.disabled_duplicates && result.disabled_duplicates.length > 0) {
+      showToast(`${result.disabled_duplicates.length} duplicate mock(s) auto-disabled`, 'warn');
+    }
     await loadMocks();
   } catch (err) {
     console.error('Failed to toggle mock:', err);
@@ -200,7 +231,17 @@ function openEditorForNewMock(method, path, status, responseBody) {
   editingIndex = -1;
   document.getElementById('modal-title').textContent = 'Save as Mock';
   document.getElementById('edit-method').value = method || 'GET';
-  document.getElementById('edit-path').value = path || '';
+
+  // Strip query string from path; populate it as a match condition instead
+  let cleanPath = path || '';
+  let queryString = '';
+  const queryIdx = cleanPath.indexOf('?');
+  if (queryIdx >= 0) {
+    queryString = cleanPath.slice(queryIdx + 1);
+    cleanPath = cleanPath.slice(0, queryIdx);
+  }
+
+  document.getElementById('edit-path').value = cleanPath;
   document.getElementById('edit-status').value = status || 200;
   document.getElementById('edit-delay').value = 0;
 
@@ -211,6 +252,14 @@ function openEditorForNewMock(method, path, status, responseBody) {
     prettyBody = responseBody || '{}';
   }
   document.getElementById('edit-body').value = prettyBody;
+
+  // Populate query conditions from the request URL so the user can keep them
+  document.getElementById('edit-match-query').value = queryString
+    ? new URLSearchParams(queryString).toString().split('&').join('\n').replace(/=/g, '=')
+    : '';
+  document.getElementById('edit-match-headers').value = '';
+  document.getElementById('edit-match-body').value = '';
+  document.getElementById('match-section').open = !!queryString;
 
   document.getElementById('modal-overlay').classList.remove('hidden');
 }
@@ -237,10 +286,40 @@ async function openEditorForExisting(index) {
     }
     document.getElementById('edit-body').value = prettyBody;
 
+    const match = mock.match || {};
+    document.getElementById('edit-match-query').value = mapToLines(match.query, '=');
+    document.getElementById('edit-match-headers').value = mapToLines(match.headers, ': ');
+    document.getElementById('edit-match-body').value = match.body
+      ? JSON.stringify(match.body, null, 2)
+      : '';
+    document.getElementById('match-section').open = matchPills(match).length > 0;
+
     document.getElementById('modal-overlay').classList.remove('hidden');
   } catch (err) {
     console.error('Failed to load mock for editing:', err);
   }
+}
+
+function mapToLines(obj, separator) {
+  if (!obj) return '';
+  return Object.entries(obj)
+    .map(([k, v]) => `${k}${separator}${v}`)
+    .join('\n');
+}
+
+function linesToMap(text, separator) {
+  if (!text || !text.trim()) return null;
+  const result = {};
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const sepIdx = trimmed.indexOf(separator);
+    if (sepIdx <= 0) continue;
+    const key = trimmed.slice(0, sepIdx).trim();
+    const value = trimmed.slice(sepIdx + separator.length).trim();
+    if (key) result[key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 function closeModal(event) {
@@ -263,28 +342,67 @@ async function saveMock() {
     return;
   }
 
+  // Build match conditions
+  const match = {};
+  const queryMap = linesToMap(document.getElementById('edit-match-query').value, '=');
+  const headersMap = linesToMap(document.getElementById('edit-match-headers').value, ':');
+  const bodyMatchText = document.getElementById('edit-match-body').value.trim();
+
+  if (queryMap) match.query = queryMap;
+  if (headersMap) match.headers = headersMap;
+  if (bodyMatchText) {
+    try {
+      match.body = JSON.parse(bodyMatchText);
+    } catch (err) {
+      alert('Invalid JSON in match body: ' + err.message);
+      return;
+    }
+  }
+
   const mock = { method, path, status, body, delay_ms: delayMs };
+  if (Object.keys(match).length > 0) mock.match = match;
 
   try {
+    let res;
     if (editingIndex >= 0) {
-      await fetch(`${API_BASE}/mocks/${editingIndex}`, {
+      res = await fetch(`${API_BASE}/mocks/${editingIndex}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mock),
       });
     } else {
-      await fetch(`${API_BASE}/mocks`, {
+      res = await fetch(`${API_BASE}/mocks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mock),
       });
     }
+
+    if (!res.ok) {
+      const text = await res.text();
+      alert('Failed to save mock: ' + text);
+      return;
+    }
+
+    const result = await res.json().catch(() => ({}));
+    if (result.disabled_duplicates && result.disabled_duplicates.length > 0) {
+      showToast(`${result.disabled_duplicates.length} duplicate mock(s) auto-disabled`, 'warn');
+    }
+
     closeModal();
     await loadMocks();
   } catch (err) {
     console.error('Failed to save mock:', err);
     alert('Failed to save mock: ' + err.message);
   }
+}
+
+function showToast(message, kind) {
+  const toast = document.createElement('div');
+  toast.className = 'toast' + (kind ? ` ${kind}` : '');
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
 }
 
 // --- Target URL ---

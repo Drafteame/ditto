@@ -95,8 +95,28 @@
         </div>
         <div class="form-group">
           <label>Response Body (JSON)</label>
-          <textarea id="edit-body" rows="16" spellcheck="false"></textarea>
+          <textarea id="edit-body" rows="12" spellcheck="false"></textarea>
         </div>
+
+        <details id="match-section">
+          <summary>Match conditions (optional)</summary>
+          <p class="form-help">Use these to differentiate multiple mocks for the same method + path. A request must satisfy every defined condition to match. Leave empty to match any request.</p>
+
+          <div class="form-group">
+            <label>Query parameters (one per line, <code>key=value</code>)</label>
+            <textarea id="edit-match-query" rows="3" spellcheck="false" placeholder="status=pending&#10;limit=20"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Request headers (one per line, <code>key: value</code>)</label>
+            <textarea id="edit-match-headers" rows="3" spellcheck="false" placeholder="x-user-id: 123"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Request body subset (JSON — partial match)</label>
+            <textarea id="edit-match-body" rows="4" spellcheck="false" placeholder='{"type": "credit"}'></textarea>
+          </div>
+        </details>
       </div>
       <div class="modal-footer">
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>

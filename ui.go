@@ -138,11 +138,14 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 				http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-			if err := store.Create(mock); err != nil {
+			disabled, err := store.Create(mock)
+			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]any{"disabled_duplicates": disabled})
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -178,11 +181,14 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 
 		// POST /__ditto__/api/mocks/{index}/toggle
 		if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "toggle" {
-			if !store.Toggle(index) {
+			ok, disabled := store.Toggle(index)
+			if !ok {
 				http.Error(w, "mock not found", http.StatusNotFound)
 				return
 			}
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{"disabled_duplicates": disabled})
 			return
 		}
 
@@ -198,11 +204,14 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 				http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-			if err := store.Update(index, mock); err != nil {
+			disabled, err := store.Update(index, mock)
+			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{"disabled_duplicates": disabled})
 			return
 		}
 

@@ -3,20 +3,58 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 )
+
+// Match holds optional conditions a request must satisfy beyond method + path.
+// All fields are optional; a request matches if every specified condition is met.
+type Match struct {
+	Query   map[string]string `json:"query,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    json.RawMessage   `json:"body,omitempty"`
+}
+
+// IsEmpty reports whether no conditions are defined.
+func (m Match) IsEmpty() bool {
+	return len(m.Query) == 0 && len(m.Headers) == 0 && len(m.Body) == 0
+}
+
+// Specificity returns the number of conditions defined; used to prefer the
+// most specific mock when multiple mocks could match the same request.
+func (m Match) Specificity() int {
+	score := len(m.Query) + len(m.Headers)
+	if len(m.Body) > 0 {
+		score++
+	}
+	return score
+}
+
+// Equals reports whether two Match definitions describe the same conditions.
+func (m Match) Equals(other Match) bool {
+	if !reflect.DeepEqual(m.Query, other.Query) {
+		return false
+	}
+	if !equalCaseInsensitive(m.Headers, other.Headers) {
+		return false
+	}
+	return jsonEqual(m.Body, other.Body)
+}
 
 type Mock struct {
 	Method  string            `json:"method"`
 	Path    string            `json:"path"`
 	Status  int               `json:"status"`
-	Headers map[string]string `json:"headers"`
+	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body"`
 	RawBody []byte            `json:"-"`
-	DelayMs int               `json:"delay_ms"`
+	DelayMs int               `json:"delay_ms,omitempty"`
+	Match   Match             `json:"match,omitempty"`
 	Enabled bool              `json:"enabled"`
 	Source  string            `json:"source"`
 }
@@ -43,19 +81,33 @@ func (s *MockStore) Load() error {
 	return nil
 }
 
-func (s *MockStore) Find(method, path string) *Mock {
+// Find returns the most specific enabled mock that matches the request.
+// reqBody may be nil if the request has no body to inspect.
+func (s *MockStore) Find(r *http.Request, reqBody []byte) *Mock {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	var best *Mock
+	bestScore := -1
+
 	for i := range s.mocks {
-		if !s.mocks[i].Enabled {
+		m := &s.mocks[i]
+		if !m.Enabled {
 			continue
 		}
-		if strings.EqualFold(s.mocks[i].Method, method) && matchPath(s.mocks[i].Path, path) {
-			return &s.mocks[i]
+		if !strings.EqualFold(m.Method, r.Method) || !matchPath(m.Path, r.URL.Path) {
+			continue
+		}
+		if !matchConditions(m.Match, r, reqBody) {
+			continue
+		}
+		score := m.Match.Specificity()
+		if score > bestScore {
+			best = m
+			bestScore = score
 		}
 	}
-	return nil
+	return best
 }
 
 func (s *MockStore) All() []Mock {
@@ -67,15 +119,23 @@ func (s *MockStore) All() []Mock {
 	return result
 }
 
-func (s *MockStore) Toggle(index int) bool {
+// Toggle flips a mock's enabled state. When enabling, any other mock with
+// identical method + path + match conditions is auto-disabled to prevent
+// ambiguity. Returns the indices of any mocks that were auto-disabled.
+func (s *MockStore) Toggle(index int) (bool, []int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if index < 0 || index >= len(s.mocks) {
-		return false
+		return false, nil
 	}
 	s.mocks[index].Enabled = !s.mocks[index].Enabled
-	return true
+
+	var disabled []int
+	if s.mocks[index].Enabled {
+		disabled = s.disableDuplicatesLocked(index)
+	}
+	return true, disabled
 }
 
 func (s *MockStore) Count() int {
@@ -84,12 +144,12 @@ func (s *MockStore) Count() int {
 	return len(s.mocks)
 }
 
-func (s *MockStore) Create(mock Mock) error {
+func (s *MockStore) Create(mock Mock) ([]int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if mock.Method == "" || mock.Path == "" {
-		return fmt.Errorf("method and path are required")
+		return nil, fmt.Errorf("method and path are required")
 	}
 	if mock.Status == 0 {
 		mock.Status = 200
@@ -97,29 +157,28 @@ func (s *MockStore) Create(mock Mock) error {
 	mock.RawBody = []byte(mock.Body)
 	mock.Enabled = true
 
-	// Generate filename from method + path
 	if mock.Source == "" {
-		mock.Source = generateFilename(mock.Method, mock.Path)
+		mock.Source = generateFilename(mock.Method, mock.Path, s.mocks)
 	}
 
-	// Write to disk
 	if err := writeMockFile(s.dir, mock); err != nil {
-		return err
+		return nil, err
 	}
 
 	s.mocks = append(s.mocks, mock)
-	return nil
+	disabled := s.disableDuplicatesLocked(len(s.mocks) - 1)
+	return disabled, nil
 }
 
-func (s *MockStore) Update(index int, mock Mock) error {
+func (s *MockStore) Update(index int, mock Mock) ([]int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if index < 0 || index >= len(s.mocks) {
-		return fmt.Errorf("mock not found")
+		return nil, fmt.Errorf("mock not found")
 	}
 	if mock.Method == "" || mock.Path == "" {
-		return fmt.Errorf("method and path are required")
+		return nil, fmt.Errorf("method and path are required")
 	}
 	if mock.Status == 0 {
 		mock.Status = 200
@@ -127,23 +186,26 @@ func (s *MockStore) Update(index int, mock Mock) error {
 	mock.RawBody = []byte(mock.Body)
 	mock.Enabled = s.mocks[index].Enabled
 
-	// Keep existing filename or generate new one
 	oldSource := s.mocks[index].Source
 	if mock.Source == "" {
 		mock.Source = oldSource
 	}
 
-	// If source changed, remove old file
 	if mock.Source != oldSource {
 		os.Remove(filepath.Join(s.dir, oldSource))
 	}
 
 	if err := writeMockFile(s.dir, mock); err != nil {
-		return err
+		return nil, err
 	}
 
 	s.mocks[index] = mock
-	return nil
+
+	var disabled []int
+	if mock.Enabled {
+		disabled = s.disableDuplicatesLocked(index)
+	}
+	return disabled, nil
 }
 
 func (s *MockStore) Delete(index int) error {
@@ -154,24 +216,62 @@ func (s *MockStore) Delete(index int) error {
 		return fmt.Errorf("mock not found")
 	}
 
-	// Remove file from disk
 	filePath := filepath.Join(s.dir, s.mocks[index].Source)
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting %s: %w", filePath, err)
 	}
 
-	// Remove from slice
 	s.mocks = append(s.mocks[:index], s.mocks[index+1:]...)
 	return nil
 }
 
-func generateFilename(method, path string) string {
+// disableDuplicatesLocked auto-disables any other enabled mocks that share
+// method + path + match conditions with the mock at the given index.
+// MUST be called with s.mu held.
+func (s *MockStore) disableDuplicatesLocked(activeIndex int) []int {
+	active := s.mocks[activeIndex]
+	if !active.Enabled {
+		return nil
+	}
+
+	var disabled []int
+	for i := range s.mocks {
+		if i == activeIndex || !s.mocks[i].Enabled {
+			continue
+		}
+		other := s.mocks[i]
+		if !strings.EqualFold(other.Method, active.Method) {
+			continue
+		}
+		if other.Path != active.Path {
+			continue
+		}
+		if !other.Match.Equals(active.Match) {
+			continue
+		}
+		s.mocks[i].Enabled = false
+		disabled = append(disabled, i)
+	}
+	return disabled
+}
+
+func generateFilename(method, path string, existing []Mock) string {
 	clean := strings.ReplaceAll(path, "/", "_")
 	clean = strings.TrimPrefix(clean, "_")
 	if clean == "" {
 		clean = "root"
 	}
-	name := fmt.Sprintf("%s_%s.json", strings.ToLower(method), clean)
+	base := fmt.Sprintf("%s_%s", strings.ToLower(method), clean)
+	name := base + ".json"
+
+	taken := make(map[string]bool, len(existing))
+	for _, m := range existing {
+		taken[m.Source] = true
+	}
+
+	for i := 2; taken[name]; i++ {
+		name = fmt.Sprintf("%s_%d.json", base, i)
+	}
 	return name
 }
 
@@ -187,6 +287,7 @@ func writeMockFile(dir string, mock Mock) error {
 		Headers map[string]string `json:"headers,omitempty"`
 		Body    json.RawMessage   `json:"body"`
 		DelayMs int               `json:"delay_ms,omitempty"`
+		Match   *Match            `json:"match,omitempty"`
 	}{
 		Method:  mock.Method,
 		Path:    mock.Path,
@@ -194,6 +295,9 @@ func writeMockFile(dir string, mock Mock) error {
 		Headers: mock.Headers,
 		Body:    mock.Body,
 		DelayMs: mock.DelayMs,
+	}
+	if !mock.Match.IsEmpty() {
+		fileData.Match = &mock.Match
 	}
 
 	data, err := json.MarshalIndent(fileData, "", "  ")
@@ -267,4 +371,108 @@ func matchPath(pattern, path string) bool {
 	}
 
 	return true
+}
+
+// matchConditions checks whether the request satisfies the given Match block.
+// An empty Match always matches.
+func matchConditions(m Match, r *http.Request, reqBody []byte) bool {
+	if m.IsEmpty() {
+		return true
+	}
+
+	if !matchQuery(m.Query, r.URL.Query()) {
+		return false
+	}
+	if !matchHeaders(m.Headers, r.Header) {
+		return false
+	}
+	if len(m.Body) > 0 && !matchBody(m.Body, reqBody) {
+		return false
+	}
+	return true
+}
+
+func matchQuery(expected map[string]string, actual url.Values) bool {
+	for k, v := range expected {
+		if actual.Get(k) != v {
+			return false
+		}
+	}
+	return true
+}
+
+func matchHeaders(expected map[string]string, actual http.Header) bool {
+	for k, v := range expected {
+		if actual.Get(k) != v {
+			return false
+		}
+	}
+	return true
+}
+
+// matchBody returns true when every field in expected is present in actual
+// with the same value (partial / subset match).
+func matchBody(expected, actual []byte) bool {
+	if len(actual) == 0 {
+		return false
+	}
+	var exp, got any
+	if err := json.Unmarshal(expected, &exp); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(actual, &got); err != nil {
+		return false
+	}
+	return jsonSubset(exp, got)
+}
+
+// jsonSubset reports whether expected is a subset of actual.
+// Maps are compared field-by-field; non-map values must be deeply equal.
+func jsonSubset(expected, actual any) bool {
+	expMap, expIsMap := expected.(map[string]any)
+	gotMap, gotIsMap := actual.(map[string]any)
+
+	if expIsMap && gotIsMap {
+		for k, v := range expMap {
+			gv, ok := gotMap[k]
+			if !ok || !jsonSubset(v, gv) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return reflect.DeepEqual(expected, actual)
+}
+
+func equalCaseInsensitive(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	lowerA := make(map[string]string, len(a))
+	lowerB := make(map[string]string, len(b))
+	for k, v := range a {
+		lowerA[strings.ToLower(k)] = v
+	}
+	for k, v := range b {
+		lowerB[strings.ToLower(k)] = v
+	}
+	return reflect.DeepEqual(lowerA, lowerB)
+}
+
+func jsonEqual(a, b json.RawMessage) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	var av, bv any
+	if err := json.Unmarshal(a, &av); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
 }

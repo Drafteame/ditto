@@ -41,13 +41,14 @@ If the answer is no, we need to fix the UX before adding new capabilities.
 - ~~Mock editor: edit body, status, headers, delay inline in the dashboard~~
 - ~~Target URL input: change the backend URL from the dashboard without restarting~~
 
-## v0.6 — Smart matching + de-duplication
+## v0.6 — Smart matching + de-duplication ✅
 
-- Match mocks on query parameters (e.g., `/transactions?status=pending` vs `/transactions?status=completed`)
-- Match on request headers
-- Match on request body content
-- Multiple mocks per `method + path` with different conditions
-- **De-duplication**: prevent two mocks with identical method + path + conditions from being enabled at the same time
+- ~~Match mocks on query parameters (e.g., `/transactions?status=pending` vs `/transactions?status=completed`)~~
+- ~~Match on request headers~~
+- ~~Match on request body content (partial JSON subset)~~
+- ~~Multiple mocks per `method + path` with different conditions — most specific wins~~
+- ~~De-duplication: identical mocks are auto-disabled when one is enabled, with a UI toast warning~~
+- ~~Match conditions visible in the mock list (sidebar pills) and editable in the mock editor~~
 
 ## v0.7 — Headless mode
 
