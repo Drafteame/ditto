@@ -9,14 +9,12 @@ import (
 	"log"
 	"os"
 
-	"io/fs"
-
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
-//go:embed all:frontend/dist
+//go:embed all:desktop
 var desktopAssets embed.FS
 
 func runDesktop(srv *Server, cfg ServerConfig) {
@@ -48,10 +46,7 @@ func runDesktop(srv *Server, cfg ServerConfig) {
 		MinHeight:        500,
 		BackgroundColour: bgColor,
 		AssetServer: &assetserver.Options{
-			Assets: func() fs.FS {
-				sub, _ := fs.Sub(desktopAssets, "frontend/dist")
-				return sub
-			}(),
+			Assets: desktopAssets,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
