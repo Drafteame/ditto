@@ -505,13 +505,128 @@ main {
   overflow: hidden;
 }
 
-#log-panel h2 {
+.log-header {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.log-header h2 {
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--text-muted);
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.log-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.search-wrapper {
+  position: relative;
+  flex: 1;
+  min-width: 120px;
+  max-width: 300px;
+}
+
+#log-search {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 28px 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  width: 100%;
+}
+
+.search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.search-clear:hover {
+  color: var(--text);
+}
+
+#log-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#log-search::placeholder {
+  color: var(--text-muted);
+}
+
+.filter-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.filter-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+
+.filter-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.filter-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.1);
+}
+
+.filter-btn[data-type="mock"].active {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(63, 185, 80, 0.1);
+}
+
+.filter-btn[data-type="proxy"].active {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: rgba(88, 166, 255, 0.1);
+}
+
+.filter-btn[data-type="miss"].active {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.log-row.filtered-out {
+  display: none !important;
+}
+
+.log-row.filtered-out + .log-detail {
+  display: none !important;
 }
 
 .jump-btn {
@@ -948,6 +1063,151 @@ code {
   color: var(--accent);
   margin-top: 16px !important;
   word-break: break-all;
+}
+
+/* --- Responsive --- */
+
+.sidebar-close-row {
+  display: none;
+  justify-content: flex-end;
+  padding: 8px 12px 0;
+}
+
+.sidebar-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0 6px;
+  line-height: 1;
+}
+
+.sidebar-close-btn:hover {
+  color: var(--text);
+}
+
+.menu-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.sidebar-overlay {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .menu-btn {
+    display: block;
+  }
+
+  #sidebar {
+    position: fixed;
+    left: -300px;
+    top: 0;
+    height: 100vh;
+    z-index: 50;
+    transition: left 0.2s ease;
+    box-shadow: none;
+  }
+
+  #sidebar.open {
+    left: 0;
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.4);
+  }
+
+  .sidebar-close-row {
+    display: flex;
+  }
+
+  .sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 40;
+  }
+
+  .sidebar-overlay.visible {
+    display: block;
+  }
+
+  /* Log table: hide Time, Method, Status, Duration on mobile — keep Type + Path + Save */
+  #log-table th:nth-child(1),
+  #log-table td:nth-child(1),
+  #log-table th:nth-child(3),
+  #log-table td:nth-child(3),
+  #log-table th:nth-child(5),
+  #log-table td:nth-child(5),
+  #log-table th:nth-child(6),
+  #log-table td:nth-child(6) {
+    display: none;
+  }
+
+  #log-table td, #log-table th {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  #log-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  /* Type column: just wide enough for the badge */
+  #log-table th:nth-child(2),
+  #log-table td:nth-child(2) {
+    width: 60px;
+  }
+
+  /* Path column: takes all remaining space */
+  #log-table td.td-path {
+    max-width: none;
+    width: auto;
+  }
+
+  /* Filter bar: stack vertically */
+  .log-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .log-filters {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .search-wrapper {
+    max-width: none;
+  }
+
+  /* Modal: full screen */
+  #modal {
+    width: 100%;
+    max-width: 100vw;
+    max-height: 100vh;
+    height: 100vh;
+    border-radius: 0;
+  }
+
+  .form-row {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .form-row .form-group {
+    width: 100% !important;
+  }
+
+  /* Header buttons: smaller */
+  .header-right button {
+    padding: 5px 10px;
+    font-size: 11px;
+  }
 }
 
 /* --- Utility --- */

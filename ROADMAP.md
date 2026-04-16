@@ -89,11 +89,13 @@ If the answer is no, we need to fix the UX before adding new capabilities.
 - ~~Config auto-saved on every change (port, target)~~
 - ~~Reset to defaults endpoint~~
 
-### v1.3 — UI improvements
+### v1.3 — UI improvements ✅
 
-- **Responsive layout**: dashboard adapts to phone, tablet, and desktop sizes. Sidebar collapses to a hamburger/tabs on small screens, log table becomes a card layout, modal goes full-screen on mobile.
-- **Log search/filter**: text input that filters log rows by substring match on path, method, or type. Instant client-side filtering as you type.
-- **Quick-filter buttons**: one-click buttons for MOCK / PROXY / MISS to isolate a specific type in the log.
+- ~~Log search/filter with clear button: instant client-side filtering by path, method, type, status~~
+- ~~Quick-filter buttons: ALL / MOCK / PROXY / MISS with colored active states~~
+- ~~Responsive sidebar: hamburger toggle below 768px, overlay with close button~~
+- ~~Responsive log: hides Time/Method/Status/Duration on mobile, path fills available width~~
+- ~~Responsive modal: full-screen on mobile, form fields stack vertically~~
 
 ### v1.4 — Migrate to React + Tailwind
 

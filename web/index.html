@@ -10,6 +10,7 @@
 <body>
   <header>
     <div class="header-left">
+      <button id="btn-menu" class="menu-btn" onclick="toggleSidebar()">&#9776;</button>
       <h1>DITTO</h1>
       <span id="version-badge" class="version-badge"></span>
       <span id="connection-status" class="status disconnected">Disconnected</span>
@@ -29,7 +30,11 @@
   </div>
 
   <main>
+    <div id="sidebar-overlay" class="sidebar-overlay" onclick="toggleSidebar()"></div>
     <aside id="sidebar">
+      <div class="sidebar-close-row">
+        <button class="sidebar-close-btn" onclick="toggleSidebar()">&times;</button>
+      </div>
       <div id="port-panel">
         <h2>Port</h2>
         <div class="port-input-row">
@@ -60,7 +65,21 @@
     </aside>
 
     <section id="log-panel">
-      <h2>Request Log</h2>
+      <div class="log-header">
+        <h2>Request Log</h2>
+        <div class="log-filters">
+          <div class="search-wrapper">
+            <input type="text" id="log-search" placeholder="Filter by path, method..." oninput="filterLog()">
+            <button id="search-clear" class="search-clear hidden" onclick="clearSearch()">&times;</button>
+          </div>
+          <div class="filter-buttons">
+            <button class="filter-btn active" data-type="all" onclick="toggleFilter('all')">All</button>
+            <button class="filter-btn" data-type="mock" onclick="toggleFilter('mock')">Mock</button>
+            <button class="filter-btn" data-type="proxy" onclick="toggleFilter('proxy')">Proxy</button>
+            <button class="filter-btn" data-type="miss" onclick="toggleFilter('miss')">Miss</button>
+          </div>
+        </div>
+      </div>
       <button id="btn-jump" class="jump-btn hidden" onclick="jumpToLatest()">New requests below</button>
       <div id="log-empty" class="empty-state">Waiting for requests...</div>
       <div id="log-container" class="hidden">

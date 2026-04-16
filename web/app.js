@@ -49,6 +49,8 @@ function addLogEntry(event) {
   // Main row
   const row = document.createElement('tr');
   row.className = 'log-row' + (typeLower === 'miss' ? ' row-miss' : '');
+  row.dataset.type = typeLower;
+  row.dataset.searchText = `${event.method} ${event.path} ${event.type} ${event.status}`.toLowerCase();
   row.innerHTML = `
     <td>${event.timestamp}</td>
     <td><span class="type-badge type-${typeLower}">${event.type}</span></td>
@@ -99,6 +101,14 @@ function addLogEntry(event) {
 
   body.appendChild(row);
   body.appendChild(detailRow);
+
+  // Apply current filter to new row
+  const search = document.getElementById('log-search').value.toLowerCase().trim();
+  const matchesType = activeTypeFilter === 'all' || typeLower === activeTypeFilter;
+  const matchesSearch = !search || row.dataset.searchText.includes(search);
+  if (!matchesType || !matchesSearch) {
+    row.classList.add('filtered-out');
+  }
 
   if (autoScroll) {
     container.scrollTop = container.scrollHeight;
@@ -589,6 +599,15 @@ function closeQR(event) {
   document.getElementById('qr-overlay').classList.add('hidden');
 }
 
+// --- Sidebar toggle (mobile) ---
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const isOpen = sidebar.classList.toggle('open');
+  overlay.classList.toggle('visible', isOpen);
+}
+
 // --- Keyboard shortcuts ---
 
 document.addEventListener('keydown', (e) => {
@@ -597,6 +616,43 @@ document.addEventListener('keydown', (e) => {
     closeQR();
   }
 });
+
+// --- Log filtering ---
+
+let activeTypeFilter = 'all';
+
+function toggleFilter(type) {
+  activeTypeFilter = type;
+
+  // Update button states
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.type === type);
+  });
+
+  filterLog();
+}
+
+function clearSearch() {
+  document.getElementById('log-search').value = '';
+  document.getElementById('search-clear').classList.add('hidden');
+  filterLog();
+}
+
+function filterLog() {
+  const search = document.getElementById('log-search').value.toLowerCase().trim();
+  document.getElementById('search-clear').classList.toggle('hidden', !search);
+  const rows = document.querySelectorAll('.log-row');
+
+  rows.forEach(row => {
+    const type = row.dataset.type || '';
+    const text = row.dataset.searchText || '';
+
+    const matchesType = activeTypeFilter === 'all' || type === activeTypeFilter;
+    const matchesSearch = !search || text.includes(search);
+
+    row.classList.toggle('filtered-out', !matchesType || !matchesSearch);
+  });
+}
 
 // --- Scroll tracking ---
 
