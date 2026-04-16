@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
 )
@@ -117,11 +120,20 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 	mux.HandleFunc("/__ditto__/api/mocks", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
+			// Derive actual port from the request (handles port changes at runtime)
+			actualPort := info.Port
+			if host := r.Host; host != "" {
+				if _, portStr, err := net.SplitHostPort(host); err == nil {
+					if p, err := strconv.Atoi(portStr); err == nil {
+						actualPort = p
+					}
+				}
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"mocks": store.All(),
 				"info": ServerInfo{
-					Port:     info.Port,
+					Port:     actualPort,
 					Target:   proxyMgr.Target(),
 					HTTPS:    info.HTTPS,
 					MocksDir: info.MocksDir,
@@ -326,6 +338,130 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 		}
 		dashURL := fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, info.Port)
 		openBrowser(dashURL)
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+// RegisterPortRoutes adds port management and config persistence endpoints.
+// Called after the server is created so the server reference is available.
+func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *ProxyManager, cfgStore *ConfigStore) {
+	// Port check — probe if a port is available
+	mux.HandleFunc("/__ditto__/api/port/check", func(w http.ResponseWriter, r *http.Request) {
+		portStr := r.URL.Query().Get("port")
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			http.Error(w, "invalid port", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := CheckPort(port); err != nil {
+			json.NewEncoder(w).Encode(map[string]any{
+				"port":        port,
+				"available":   false,
+				"error":       err.Error(),
+				"suggestions": SuggestPorts(port),
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"port":      port,
+			"available": true,
+		})
+	})
+
+	// Port get/change
+	mux.HandleFunc("/__ditto__/api/port", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"port":        srv.Port(),
+				"suggestions": SuggestPorts(srv.Port()),
+			})
+
+		case http.MethodPut:
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "failed to read body", http.StatusBadRequest)
+				return
+			}
+			var req struct {
+				Port int `json:"port"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			if err := CheckPort(req.Port); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]any{
+					"error":       err.Error(),
+					"suggestions": SuggestPorts(req.Port),
+				})
+				return
+			}
+			// Respond first, then restart async (closing the listener kills in-flight requests)
+			if cfgStore != nil {
+				cfgStore.SetPort(req.Port)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"port": req.Port,
+			})
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				if err := srv.Restart(req.Port); err != nil {
+					log.Printf("Failed to restart on port %d: %v", req.Port, err)
+				}
+			}()
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Target change with auto-save (overrides the basic target endpoint)
+	mux.HandleFunc("/__ditto__/api/target/save", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "failed to read body", http.StatusBadRequest)
+			return
+		}
+		var req struct {
+			Target string `json:"target"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		if err := proxyMgr.SetTarget(req.Target); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if cfgStore != nil {
+			cfgStore.SetTarget(req.Target)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Config reset
+	mux.HandleFunc("/__ditto__/api/config/reset", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if cfgStore != nil {
+			cfgStore.Reset()
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 }

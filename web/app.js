@@ -16,6 +16,7 @@ function connectSSE() {
   eventSource.onopen = () => {
     status.textContent = 'Connected';
     status.className = 'status connected';
+    loadMocks(); // refresh info (port, target, URLs) on reconnect
   };
 
   eventSource.onmessage = (e) => {
@@ -132,6 +133,7 @@ async function loadMocks() {
     renderConnectURLs(data.info);
     updateFooter(data.info);
     document.getElementById('target-input').value = data.info.target || '';
+    document.getElementById('port-input').value = data.info.port || 8888;
   } catch (err) {
     console.error('Failed to load mocks:', err);
   }
@@ -415,7 +417,7 @@ async function updateTarget() {
   if (!url) return;
 
   try {
-    const res = await fetch(`${API_BASE}/target`, {
+    const res = await fetch(`${API_BASE}/target/save`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target: url }),
@@ -429,6 +431,77 @@ async function updateTarget() {
   } catch (err) {
     console.error('Failed to update target:', err);
   }
+}
+
+// --- Port management ---
+
+async function changePort() {
+  const input = document.getElementById('port-input');
+  const port = parseInt(input.value);
+  if (!port || port < 1024 || port > 65535) {
+    showPortError('Port must be between 1024 and 65535');
+    return;
+  }
+
+  hidePortError();
+
+  try {
+    const res = await fetch(`${API_BASE}/port`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showPortError(data.error || 'Failed to change port');
+      if (data.suggestions && data.suggestions.length > 0) {
+        showPortSuggestions(data.suggestions);
+      }
+      return;
+    }
+    showToast(`Port changed to ${data.port}, reconnecting...`);
+    // Wait for the new port to be ready before redirecting
+    await waitForPort(data.port);
+    window.location.href = `http://localhost:${data.port}/__ditto__/`;
+  } catch (err) {
+    showPortError('Failed to change port: ' + err.message);
+  }
+}
+
+function showPortError(msg) {
+  const el = document.getElementById('port-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function hidePortError() {
+  document.getElementById('port-error').classList.add('hidden');
+  document.getElementById('port-suggestions').classList.add('hidden');
+}
+
+function showPortSuggestions(ports) {
+  const el = document.getElementById('port-suggestions');
+  el.innerHTML = ports.map(p =>
+    `<button class="port-suggestion" onclick="selectPort(${p})">${p}</button>`
+  ).join('');
+  el.classList.remove('hidden');
+}
+
+async function waitForPort(port, maxAttempts = 30) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const res = await fetch(`http://localhost:${port}/__ditto__/api/mocks`, { mode: 'no-cors' });
+      return; // server is ready
+    } catch {
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+}
+
+function selectPort(port) {
+  document.getElementById('port-input').value = port;
+  hidePortError();
+  changePort();
 }
 
 // --- Connection URLs ---

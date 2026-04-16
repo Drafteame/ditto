@@ -30,6 +30,16 @@
 
   <main>
     <aside id="sidebar">
+      <div id="port-panel">
+        <h2>Port</h2>
+        <div class="port-input-row">
+          <input type="number" id="port-input" min="1024" max="65535" placeholder="8888">
+          <button onclick="changePort()">Set</button>
+        </div>
+        <div id="port-error" class="port-error hidden"></div>
+        <div id="port-suggestions" class="port-suggestions hidden"></div>
+      </div>
+
       <div id="target-panel">
         <h2>Target URL</h2>
         <div class="target-input-row">

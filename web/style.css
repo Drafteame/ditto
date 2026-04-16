@@ -207,6 +207,73 @@ main {
   gap: 8px;
 }
 
+/* --- Port --- */
+
+#port-panel {
+  border-bottom: 1px solid var(--border);
+}
+
+#port-panel h2 {
+  border-bottom: none;
+  padding-bottom: 4px;
+}
+
+.port-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 8px;
+}
+
+.port-input-row input {
+  width: 80px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.port-input-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.port-input-row button {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.port-error {
+  padding: 4px 16px 8px;
+  font-size: 11px;
+  color: var(--red);
+}
+
+.port-suggestions {
+  padding: 0 16px 12px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.port-suggestion {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  cursor: pointer;
+}
+
+.port-suggestion:hover {
+  background: rgba(88, 166, 255, 0.1);
+  border-color: var(--accent);
+}
+
 /* --- Target URL --- */
 
 #target-panel {

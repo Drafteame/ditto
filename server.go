@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,6 +92,9 @@ type Server struct {
 	Config   ServerConfig
 	CertPath string
 	KeyPath  string
+
+	mu       sync.Mutex
+	listener net.Listener
 }
 
 // NewServer creates and configures the HTTP server with all routes.
@@ -231,10 +238,20 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 // ListenAndServe starts the HTTP server (blocking).
 func (s *Server) ListenAndServe() error {
 	addr := fmt.Sprintf("0.0.0.0:%d", s.Config.Port)
-	if s.Config.HTTPS {
-		return http.ListenAndServeTLS(addr, s.CertPath, s.KeyPath, s.Mux)
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
 	}
-	return http.ListenAndServe(addr, s.Mux)
+
+	s.mu.Lock()
+	s.listener = ln
+	s.mu.Unlock()
+
+	if s.Config.HTTPS {
+		return http.ServeTLS(ln, s.Mux, s.CertPath, s.KeyPath)
+	}
+	return http.Serve(ln, s.Mux)
 }
 
 // ListenAndServeAsync starts the HTTP server in a goroutine and returns
@@ -260,6 +277,92 @@ func (s *Server) ListenAndServeAsync() error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("server failed to start within 5s")
+}
+
+// Stop closes the listener, freeing the port.
+func (s *Server) Stop() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener != nil {
+		err := s.listener.Close()
+		s.listener = nil
+		return err
+	}
+	return nil
+}
+
+// Restart stops the server and starts it on a new port.
+func (s *Server) Restart(newPort int) error {
+	s.Stop()
+	time.Sleep(500 * time.Millisecond)
+	s.Config.Port = newPort
+	s.Info.Port = newPort
+	return s.ListenAndServeAsync()
+}
+
+// Port returns the current port.
+func (s *Server) Port() int {
+	return s.Config.Port
+}
+
+// CheckPort tests if a port is available. Returns nil if free,
+// or an error with details about what's using it.
+func CheckPort(port int) error {
+	if port < 1024 || port > 65535 {
+		return fmt.Errorf("port must be between 1024 and 65535")
+	}
+
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		process := identifyProcess(port)
+		if process != "" {
+			return fmt.Errorf("port %d is in use by %s", port, process)
+		}
+		return fmt.Errorf("port %d is in use", port)
+	}
+	ln.Close()
+	return nil
+}
+
+// identifyProcess tries to find which process is using a port.
+func identifyProcess(port int) string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	out, err := exec.Command("lsof", "-ti", fmt.Sprintf(":%d", port)).Output()
+	if err != nil || len(out) == 0 {
+		return ""
+	}
+	pid := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+	nameOut, err := exec.Command("ps", "-p", pid, "-o", "comm=").Output()
+	if err != nil {
+		return "PID " + pid
+	}
+	name := strings.TrimSpace(string(nameOut))
+	if name != "" {
+		return fmt.Sprintf("%s (PID %s)", name, pid)
+	}
+	return "PID " + pid
+}
+
+// SuggestPorts returns a list of common alternative ports, skipping any that are in use.
+func SuggestPorts(exclude int) []int {
+	candidates := []int{8888, 8080, 3001, 9000, 9090, 4000}
+	var available []int
+	for _, p := range candidates {
+		if p == exclude {
+			continue
+		}
+		if CheckPort(p) == nil {
+			available = append(available, p)
+		}
+	}
+	return available
+}
+
+// portStr helper for API responses
+func portStr(port int) string {
+	return strconv.Itoa(port)
 }
 
 // responseCapture wraps http.ResponseWriter to capture the status code and body.

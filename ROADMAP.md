@@ -79,14 +79,15 @@ If the answer is no, we need to fix the UX before adding new capabilities.
 - ~~Auto-update notification: checks GitHub Releases on startup, shows banner if newer version available.~~
 - ~~CI pipeline: macOS builds via Wails on `macos-latest`, Linux/Windows headless on `ubuntu-latest`.~~
 
-### v1.2 — Port management
+### v1.2 — Port management ✅
 
-Configurable port from the UI with full error handling.
-
-- Check if port is available before binding. If taken, show an error with the process name using it.
-- Suggest alternative common ports (8888, 8080, 3001, 9000) and let the user pick.
-- App starts even if the default port is busy — dashboard loads in a "disconnected" state with the port selector visible, so the user can pick an available one.
-- Changing the port restarts the listener; connection URLs update automatically.
+- ~~Port input in sidebar, changeable at runtime~~
+- ~~Port check shows process name using the port + suggests alternatives~~
+- ~~One-click suggestion buttons for common ports~~
+- ~~Server restarts on new port; page redirects after polling confirms new port is ready~~
+- ~~Persistent config: port and target URL saved to `config.json`, loaded on next launch~~
+- ~~Config auto-saved on every change (port, target)~~
+- ~~Reset to defaults endpoint~~
 
 ### v1.3 — UI improvements
 

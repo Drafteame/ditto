@@ -42,6 +42,13 @@ func main() {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(0)
 
+	// Load persistent config
+	cfgStore, err := NewConfigStore()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	savedCfg := cfgStore.Get()
+
 	// Resolve mocks directory: explicit flag > persistent storage
 	if *mocksDir == "" {
 		defaultDir, err := DefaultMocksDir()
@@ -49,6 +56,14 @@ func main() {
 			log.Fatalf("Failed to determine data directory: %v", err)
 		}
 		*mocksDir = defaultDir
+	}
+
+	// Use saved config values as defaults when flags aren't explicitly set
+	if *port == 8888 && savedCfg.Port != 0 && savedCfg.Port != 8888 {
+		*port = savedCfg.Port
+	}
+	if *target == "" && savedCfg.Target != "" {
+		*target = savedCfg.Target
 	}
 
 	cfg := ServerConfig{
@@ -66,6 +81,9 @@ func main() {
 		log.Fatalf("Error: %v", err)
 	}
 
+	// Register port/config management routes (needs server reference)
+	RegisterPortRoutes(srv.Mux, srv, srv.ProxyMgr, cfgStore)
+
 	if *headless {
 		runHeadless(srv, cfg)
 	} else {
@@ -80,7 +98,11 @@ func runHeadless(srv *Server, cfg ServerConfig) {
 		printStartup(srv.Store.All(), cfg.Port, cfg.Target, cfg.MocksDir, cfg.HTTPS, srv.CertPath, true)
 	}
 
-	log.Fatal(srv.ListenAndServe())
+	if err := srv.ListenAndServeAsync(); err != nil {
+		log.Fatal(err)
+	}
+	// Block forever — server runs in goroutine, restarts are handled there
+	select {}
 }
 
 func openBrowser(url string) {
