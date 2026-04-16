@@ -135,6 +135,46 @@ button:hover {
   border-color: rgba(63, 185, 80, 0.5);
 }
 
+/* --- Update banner --- */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: rgba(88, 166, 255, 0.1);
+  border-bottom: 1px solid rgba(88, 166, 255, 0.2);
+  font-size: 13px;
+}
+
+.update-banner span {
+  flex: 1;
+  color: var(--text);
+}
+
+.update-banner a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.update-banner a:hover {
+  text-decoration: underline;
+}
+
+.update-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+.update-dismiss:hover {
+  color: var(--text);
+}
+
 /* --- Layout --- */
 
 main {
@@ -795,6 +835,52 @@ code {
 @keyframes toast-in {
   from { transform: translate(-50%, 12px); opacity: 0; }
   to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+/* --- QR modal --- */
+
+#qr-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+#qr-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 340px;
+  overflow: hidden;
+}
+
+.qr-body {
+  padding: 20px;
+  text-align: center;
+}
+
+.qr-body p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.qr-body canvas {
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.qr-url {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--accent);
+  margin-top: 16px !important;
+  word-break: break-all;
 }
 
 /* --- Utility --- */

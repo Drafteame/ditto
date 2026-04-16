@@ -9,16 +9,59 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # macOS desktop app (Wails) — needs macOS runner for CGO + native frameworks
+  build-macos:
+    name: Build macOS ${{ matrix.goarch }}
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+          - goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Build Wails app
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          wails build -skipbindings -ldflags "-X main.version=${VERSION}" -platform darwin/${{ matrix.goarch }}
+
+      - name: Package archive
+        id: package
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          NAME="ditto_${VERSION}_darwin_${{ matrix.goarch }}"
+
+          mkdir -p "dist/${NAME}"
+          cp -R build/bin/Ditto.app "dist/${NAME}/Ditto.app"
+          cp README.md ROADMAP.md "dist/${NAME}/"
+
+          cd dist && zip -r "${NAME}.zip" "${NAME}"
+          echo "asset=dist/${NAME}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-${{ matrix.goarch }}
+          path: ${{ steps.package.outputs.asset }}
+          retention-days: 1
+
+  # Linux + Windows headless builds — standard cross-compilation on ubuntu
+  build-headless:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
           - goos: linux
             goarch: amd64
           - goos: linux
@@ -53,48 +96,16 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           NAME="ditto_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}"
 
-          if [ "${{ matrix.goos }}" = "darwin" ]; then
-            # Build Ditto.app bundle for macOS
-            APP="dist/${NAME}/Ditto.app"
-            mkdir -p "${APP}/Contents/MacOS"
-            mkdir -p "${APP}/Contents/Resources"
+          mkdir -p "dist/${NAME}/mocks"
+          cp README.md ROADMAP.md "dist/${NAME}/"
+          cp mocks/example.json "dist/${NAME}/mocks/"
 
-            # Copy binary, icon, Info.plist
-            cp ditto "${APP}/Contents/MacOS/ditto"
-            cp packaging/Info.plist "${APP}/Contents/Info.plist"
-            # Update version in Info.plist
-            sed -i "s/1.0.0/${VERSION}/g" "${APP}/Contents/Info.plist"
-            # Copy launcher script
-            cp packaging/launcher.sh "${APP}/Contents/MacOS/launcher"
-            chmod +x "${APP}/Contents/MacOS/launcher"
-            chmod +x "${APP}/Contents/MacOS/ditto"
-            # Copy icon
-            cp ditto.icns "${APP}/Contents/Resources/ditto.icns"
-
-            # Also include the raw binary + docs at the top level for CLI users
-            cp ditto "dist/${NAME}/ditto"
-            cp README.md ROADMAP.md "dist/${NAME}/"
-
-            # Create example mocks directory
-            mkdir -p "dist/${NAME}/mocks"
-            cp mocks/example.json "dist/${NAME}/mocks/"
-
-            # Package as .zip (macOS users can double-click to extract)
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            cp ditto.exe "dist/${NAME}/"
             cd dist && zip -r "${NAME}.zip" "${NAME}"
             echo "asset=dist/${NAME}.zip" >> "$GITHUB_OUTPUT"
-
-          elif [ "${{ matrix.goos }}" = "windows" ]; then
-            mkdir -p "dist/${NAME}/mocks"
-            cp ditto.exe README.md ROADMAP.md "dist/${NAME}/"
-            cp mocks/example.json "dist/${NAME}/mocks/"
-            cd dist && zip -r "${NAME}.zip" "${NAME}"
-            echo "asset=dist/${NAME}.zip" >> "$GITHUB_OUTPUT"
-
           else
-            # Linux: tar.gz
-            mkdir -p "dist/${NAME}/mocks"
-            cp ditto README.md ROADMAP.md "dist/${NAME}/"
-            cp mocks/example.json "dist/${NAME}/mocks/"
+            cp ditto "dist/${NAME}/"
             cd dist && tar -czf "${NAME}.tar.gz" "${NAME}"
             echo "asset=dist/${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
           fi
@@ -108,7 +119,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs: [build-macos, build-headless]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

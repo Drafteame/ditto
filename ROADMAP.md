@@ -70,18 +70,14 @@ If the answer is no, we need to fix the UX before adding new capabilities.
 
 ## Post-v1.0 — Prioritized
 
-### v1.1 — Native desktop app
+### v1.1 — Native desktop app ✅
 
-Replace the browser + Terminal setup with a standalone native application using [Wails](https://wails.io) (Go + web frontend in a native window).
-
-- **Single window**: dashboard runs inside the app, not in a browser. Close the window = process dies. No orphaned processes, no port leaks.
-- **Persistent storage**: mocks, scenarios, and config stored in `~/Library/Application Support/Ditto/` (macOS), `~/.config/ditto/` (Linux), `%APPDATA%\Ditto\` (Windows). Data survives app updates and reinstalls.
-- **Launch in browser**: button in the header opens the dashboard in the default browser. Useful for screen sharing, second monitors, or sharing with teammates on the same network.
-- **QR code for phone**: "Open on phone" button shows a QR code encoding the physical device dashboard URL. Scan with phone camera → dashboard opens on the phone's browser.
-- **Auto-update notification**: on startup, check GitHub Releases for a newer version. If available, show a banner in the dashboard with a direct download link. No silent installs — user replaces the app themselves.
-- **System tray / menu bar** (stretch): minimize to tray, quick-access to start/stop.
-- Reuses 100% of existing HTML/CSS/JS dashboard code.
-- Builds to a native `.app` (macOS), `.exe` (Windows) — ~15MB binary.
+- ~~Single window via Wails: close window = process dies. No orphaned processes.~~
+- ~~Persistent storage: mocks in `~/Library/Application Support/Ditto/` (macOS). Survives app updates.~~
+- ~~Launch in browser: button opens dashboard in default browser (hidden when already in browser).~~
+- ~~QR code for phone: scan to open dashboard on phone (hidden on mobile).~~
+- ~~Auto-update notification: checks GitHub Releases on startup, shows banner if newer version available.~~
+- ~~CI pipeline: macOS builds via Wails on `macos-latest`, Linux/Windows headless on `ubuntu-latest`.~~
 
 ### v1.2 — Port management
 

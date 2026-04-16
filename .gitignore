@@ -2,11 +2,14 @@
 ditto
 !ditto.icns
 
+# Wails auto-generated
+frontend/wailsjs/
+
+# Wails build output (keep build/appicon.png and build/darwin/ as source files)
+build/bin/
+
 # Generated TLS certs
 certs/
-
-# Local .app test bundles
-*.app/
 
 # OS
 .DS_Store

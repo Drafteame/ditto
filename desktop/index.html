@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Ditto</title>
+  <style>
+    * { margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0d1117; }
+    iframe { width: 100%; height: 100%; border: none; }
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #8b949e;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="loading" id="loading">Starting Ditto...</div>
+  <iframe id="dashboard" style="display:none"></iframe>
+  <script>
+    // Wait for the HTTP server to be ready, then load the dashboard
+    const port = new URLSearchParams(window.location.search).get('port') || '8888';
+    const url = `http://localhost:${port}/__ditto__/`;
+
+    function tryLoad() {
+      fetch(`http://localhost:${port}/__ditto__/api/mocks`, { mode: 'no-cors' })
+        .then(() => {
+          document.getElementById('loading').style.display = 'none';
+          const iframe = document.getElementById('dashboard');
+          iframe.style.display = 'block';
+          iframe.src = url + '?desktop=1';
+        })
+        .catch(() => {
+          setTimeout(tryLoad, 200);
+        });
+    }
+    tryLoad();
+  </script>
+</body>
+</html>

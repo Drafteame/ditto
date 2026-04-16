@@ -15,10 +15,18 @@
       <span id="connection-status" class="status disconnected">Disconnected</span>
     </div>
     <div class="header-right">
+      <button id="btn-browser" onclick="openInBrowser()" title="Open dashboard in browser">Browser</button>
+      <button id="btn-qr" onclick="showQRCode()" title="Scan to open on your phone">QR Code</button>
       <button onclick="reloadMocks()">Reload Mocks</button>
       <button onclick="clearLog()">Clear Log</button>
     </div>
   </header>
+
+  <div id="update-banner" class="update-banner hidden">
+    <span id="update-text"></span>
+    <a id="update-link" href="#" target="_blank">Download</a>
+    <button class="update-dismiss" onclick="dismissUpdate()">Dismiss</button>
+  </div>
 
   <main>
     <aside id="sidebar">
@@ -124,6 +132,21 @@
       <div class="modal-footer">
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>
         <button class="btn-primary" id="modal-save" onclick="saveMock()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- QR Code modal -->
+  <div id="qr-overlay" class="hidden" onclick="closeQR(event)">
+    <div id="qr-modal" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3>Open on your phone</h3>
+        <button class="modal-close" onclick="closeQR()">&times;</button>
+      </div>
+      <div class="qr-body">
+        <p>Scan this QR code with your phone camera to open the Ditto dashboard.</p>
+        <canvas id="qr-canvas"></canvas>
+        <p class="qr-url" id="qr-url-text"></p>
       </div>
     </div>
   </div>

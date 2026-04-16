@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Ditto",
+  "outputfilename": "ditto",
+  "frontend:install": "",
+  "frontend:build": "",
+  "author": {
+    "name": "Draftea",
+    "email": "luciano.ditomaso@gmail.com"
+  },
+  "info": {
+    "companyName": "Draftea",
+    "productName": "Ditto",
+    "productVersion": "1.1.0",
+    "copyright": "MIT License",
+    "comments": "A lightweight local API mock proxy"
+  }
+}

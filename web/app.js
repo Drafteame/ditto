@@ -480,11 +480,48 @@ function updateFooter(info) {
   }
 }
 
+// --- Browser & QR ---
+
+async function openInBrowser() {
+  try {
+    await fetch(`${API_BASE}/open-browser`, { method: 'POST' });
+  } catch (err) {
+    // Fallback: open in current browser context
+    window.open(window.location.href, '_blank');
+  }
+}
+
+async function showQRCode() {
+  try {
+    const res = await fetch(`${API_BASE}/qr`);
+    const qrURL = res.headers.get('X-Ditto-QR-URL') || '';
+    const blob = await res.blob();
+    const img = await createImageBitmap(blob);
+
+    const canvas = document.getElementById('qr-canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    document.getElementById('qr-url-text').textContent = qrURL;
+    document.getElementById('qr-overlay').classList.remove('hidden');
+  } catch (err) {
+    console.error('Failed to generate QR code:', err);
+  }
+}
+
+function closeQR(event) {
+  if (event && event.target !== document.getElementById('qr-overlay')) return;
+  document.getElementById('qr-overlay').classList.add('hidden');
+}
+
 // --- Keyboard shortcuts ---
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeModal();
+    closeQR();
   }
 });
 
@@ -508,7 +545,55 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+// --- Context detection ---
+
+function isInsideWails() {
+  return new URLSearchParams(window.location.search).get('desktop') === '1';
+}
+
+function isMobile() {
+  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+}
+
+function setupContextButtons() {
+  const browserBtn = document.getElementById('btn-browser');
+  const qrBtn = document.getElementById('btn-qr');
+
+  if (isMobile()) {
+    // On phone: hide both buttons
+    if (browserBtn) browserBtn.style.display = 'none';
+    if (qrBtn) qrBtn.style.display = 'none';
+  } else if (!isInsideWails()) {
+    // In regular browser: hide the browser button (already in one)
+    if (browserBtn) browserBtn.style.display = 'none';
+  }
+}
+
+// --- Update check ---
+
+async function checkForUpdate() {
+  try {
+    const res = await fetch(`${API_BASE}/update-check`);
+    const data = await res.json();
+    if (data.available) {
+      const banner = document.getElementById('update-banner');
+      document.getElementById('update-text').textContent =
+        `Ditto ${data.latest} is available (you have ${data.current}).`;
+      document.getElementById('update-link').href = data.download_url;
+      banner.classList.remove('hidden');
+    }
+  } catch (err) {
+    // Silently ignore update check failures
+  }
+}
+
+function dismissUpdate() {
+  document.getElementById('update-banner').classList.add('hidden');
+}
+
 // --- Init ---
 
 connectSSE();
 loadMocks();
+setupContextButtons();
+checkForUpdate();

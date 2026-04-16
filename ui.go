@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 //go:embed web
@@ -265,5 +267,65 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	})
+
+	// Update check endpoint
+	mux.HandleFunc("/__ditto__/api/update-check", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		latest, downloadURL, err := checkForUpdate()
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]any{
+				"current":   version,
+				"latest":    "",
+				"available": false,
+				"error":     err.Error(),
+			})
+			return
+		}
+		available := latest != "" && latest != version && version != "dev"
+		json.NewEncoder(w).Encode(map[string]any{
+			"current":      version,
+			"latest":       latest,
+			"available":    available,
+			"download_url": downloadURL,
+		})
+	})
+
+	// QR code endpoint — returns a PNG image
+	mux.HandleFunc("/__ditto__/api/qr", func(w http.ResponseWriter, r *http.Request) {
+		scheme := "http"
+		if info.HTTPS {
+			scheme = "https"
+		}
+		// Use the first local IP for the physical device URL
+		ip := "localhost"
+		if len(info.LocalIPs) > 0 {
+			ip = info.LocalIPs[0]
+		}
+		dashURL := fmt.Sprintf("%s://%s:%d/__ditto__/", scheme, ip, info.Port)
+
+		png, err := qrcode.Encode(dashURL, qrcode.Medium, 256)
+		if err != nil {
+			http.Error(w, "failed to generate QR code", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("X-Ditto-QR-URL", dashURL)
+		w.Write(png)
+	})
+
+	// Open in browser endpoint
+	mux.HandleFunc("/__ditto__/api/open-browser", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		scheme := "http"
+		if info.HTTPS {
+			scheme = "https"
+		}
+		dashURL := fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, info.Port)
+		openBrowser(dashURL)
+		w.WriteHeader(http.StatusOK)
 	})
 }
