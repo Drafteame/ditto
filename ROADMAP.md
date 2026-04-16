@@ -83,13 +83,22 @@ Replace the browser + Terminal setup with a standalone native application using 
 - Reuses 100% of existing HTML/CSS/JS dashboard code.
 - Builds to a native `.app` (macOS), `.exe` (Windows) — ~15MB binary.
 
-### v1.2 — UI improvements
+### v1.2 — Port management
+
+Configurable port from the UI with full error handling.
+
+- Check if port is available before binding. If taken, show an error with the process name using it.
+- Suggest alternative common ports (8888, 8080, 3001, 9000) and let the user pick.
+- App starts even if the default port is busy — dashboard loads in a "disconnected" state with the port selector visible, so the user can pick an available one.
+- Changing the port restarts the listener; connection URLs update automatically.
+
+### v1.3 — UI improvements
 
 - **Responsive layout**: dashboard adapts to phone, tablet, and desktop sizes. Sidebar collapses to a hamburger/tabs on small screens, log table becomes a card layout, modal goes full-screen on mobile.
 - **Log search/filter**: text input that filters log rows by substring match on path, method, or type. Instant client-side filtering as you type.
 - **Quick-filter buttons**: one-click buttons for MOCK / PROXY / MISS to isolate a specific type in the log.
 
-### v1.3 — Sequences
+### v1.4 — Sequences
 
 Return different responses on subsequent calls to the same endpoint. Essential for testing polling flows.
 
@@ -98,7 +107,7 @@ Return different responses on subsequent calls to the same endpoint. Essential f
 - UI: visual sequence editor showing the response chain.
 - Example: `GET /deposits/status` → call 1: `{"status": "pending"}` → call 2: `{"status": "processing"}` → call 3: `{"status": "completed"}`.
 
-### v1.4 — Scenarios
+### v1.5 — Scenarios
 
 Group mocks into named sets that activate together with a single toggle.
 
@@ -127,7 +136,7 @@ Group mocks into named sets that activate together with a single toggle.
 }
 ```
 
-### v1.5 — Mock tree view
+### v1.6 — Mock tree view
 
 Collapsible tree view for the mock list sidebar, grouping mocks by path segments.
 
@@ -136,6 +145,12 @@ Collapsible tree view for the mock list sidebar, grouping mocks by path segments
 - Expand/collapse nodes to drill into path groups
 - Bulk actions on groups: enable/disable all mocks under a path prefix
 - Applies to the mock sidebar only — the request log stays chronological
+
+### v2.0 — Stable release
+
+Bundle v1.1–v1.6 as the second major release. The milestone:
+
+> **Ditto is a native desktop product with polished UX, advanced mocking (sequences + scenarios), and a scalable mock management UI.**
 
 ---
 
