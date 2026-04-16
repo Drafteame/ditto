@@ -55,6 +55,12 @@ header {
   gap: 8px;
 }
 
+.version-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
 .status {
   font-size: 12px;
   padding: 2px 8px;
@@ -114,16 +120,19 @@ button:hover {
 
 .btn-save-mock {
   color: var(--green);
-  background: none;
-  border: none;
-  padding: 2px 6px;
+  background: rgba(63, 185, 80, 0.1);
+  border: 1px solid rgba(63, 185, 80, 0.3);
+  padding: 5px 14px;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
+  border-radius: 5px;
+  white-space: nowrap;
 }
 
 .btn-save-mock:hover {
-  background: rgba(63, 185, 80, 0.15);
-  border-radius: 4px;
+  background: rgba(63, 185, 80, 0.2);
+  border-color: rgba(63, 185, 80, 0.5);
 }
 
 /* --- Layout --- */
@@ -235,9 +244,7 @@ main {
   border-radius: 4px;
   cursor: pointer;
   user-select: all;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  word-break: break-all;
   flex: 1;
 }
 
@@ -281,6 +288,7 @@ main {
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   transition: background 0.15s;
+  flex-wrap: wrap;
 }
 
 .mock-item:hover {
@@ -315,12 +323,6 @@ main {
 .mock-item .mock-actions {
   display: flex;
   gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.mock-item:hover .mock-actions {
-  opacity: 1;
 }
 
 .mock-action-btn {
@@ -405,6 +407,31 @@ main {
   border-bottom: 1px solid var(--border);
 }
 
+.jump-btn {
+  position: absolute;
+  bottom: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.jump-btn:hover {
+  background: #4c93e6;
+}
+
+#log-panel {
+  position: relative;
+}
+
 .empty-state {
   display: flex;
   align-items: center;
@@ -449,6 +476,26 @@ main {
   white-space: nowrap;
 }
 
+#log-table td.td-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 500px;
+}
+
+#log-table td:nth-child(5),
+#log-table th:nth-child(5),
+#log-table td:nth-child(6),
+#log-table th:nth-child(6) {
+  text-align: right;
+}
+
+#log-table td:nth-child(7),
+#log-table th:nth-child(7) {
+  text-align: right;
+  padding-right: 20px;
+}
+
 .log-row {
   border-bottom: 1px solid rgba(48, 54, 61, 0.5);
   cursor: pointer;
@@ -457,6 +504,14 @@ main {
 
 .log-row:hover {
   background: rgba(88, 166, 255, 0.04);
+}
+
+.log-row.row-miss {
+  background: rgba(248, 81, 73, 0.06);
+}
+
+.log-row.row-miss:hover {
+  background: rgba(248, 81, 73, 0.1);
 }
 
 .log-row.expanded {
@@ -605,14 +660,14 @@ main {
 
 .form-row {
   display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .form-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .form-group label {
@@ -628,7 +683,7 @@ main {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-radius: 6px;
   font-size: 13px;
   font-family: 'SF Mono', 'Fira Code', monospace;
@@ -698,8 +753,9 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 4px 16px 8px 56px;
-  margin-top: -4px;
+  width: 100%;
+  padding-left: 40px;
+  padding-bottom: 2px;
 }
 
 .match-pill {

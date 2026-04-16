@@ -47,12 +47,12 @@ function addLogEntry(event) {
 
   // Main row
   const row = document.createElement('tr');
-  row.className = 'log-row';
+  row.className = 'log-row' + (typeLower === 'miss' ? ' row-miss' : '');
   row.innerHTML = `
     <td>${event.timestamp}</td>
     <td><span class="type-badge type-${typeLower}">${event.type}</span></td>
     <td class="method-${methodLower}">${event.method}</td>
-    <td title="${event.path}">${event.path}</td>
+    <td class="td-path" title="${event.path}">${event.path}</td>
     <td>${event.status || '-'}</td>
     <td>${event.duration_ms}ms</td>
     <td>${event.type === 'PROXY' ? '<button class="btn-save-mock" title="Save as mock">Save</button>' : ''}</td>
@@ -101,6 +101,8 @@ function addLogEntry(event) {
 
   if (autoScroll) {
     container.scrollTop = container.scrollHeight;
+  } else {
+    document.getElementById('btn-jump').classList.remove('hidden');
   }
 }
 
@@ -162,15 +164,15 @@ function renderMocks(mocks) {
       </div>
     `;
 
-    list.appendChild(li);
-
     const pills = matchPills(mock.match);
     if (pills.length > 0) {
       const pillsEl = document.createElement('div');
       pillsEl.className = 'match-pills';
       pillsEl.innerHTML = pills.map(p => `<span class="match-pill" title="${escapeAttr(p)}">${escapeHtml(p)}</span>`).join('');
-      list.appendChild(pillsEl);
+      li.appendChild(pillsEl);
     }
+
+    list.appendChild(li);
   });
 }
 
@@ -472,12 +474,10 @@ function copyURL(el) {
 
 function updateFooter(info) {
   if (!info) return;
-  const el = document.getElementById('footer-info');
-  let parts = [`Port: ${info.port}`];
-  if (info.target) parts.push(`Target: ${info.target}`);
-  if (info.https) parts.push('HTTPS');
-  parts.push(`Mocks dir: ${info.mocks_dir}`);
-  el.textContent = parts.join('  |  ');
+  document.getElementById('footer-info').textContent = '';
+  if (info.version) {
+    document.getElementById('version-badge').textContent = info.version;
+  }
 }
 
 // --- Keyboard shortcuts ---
@@ -486,6 +486,26 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeModal();
   }
+});
+
+// --- Scroll tracking ---
+
+function jumpToLatest() {
+  const container = document.getElementById('log-container');
+  container.scrollTop = container.scrollHeight;
+  autoScroll = true;
+  document.getElementById('btn-jump').classList.add('hidden');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const container = document.getElementById('log-container');
+  container.addEventListener('scroll', () => {
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
+    autoScroll = atBottom;
+    if (atBottom) {
+      document.getElementById('btn-jump').classList.add('hidden');
+    }
+  });
 });
 
 // --- Init ---

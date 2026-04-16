@@ -154,6 +154,7 @@ func main() {
 		HTTPS:    *https,
 		MocksDir: *mocksDir,
 		LocalIPs: ipStrings,
+		Version:  version,
 	}
 	RegisterUI(mux, store, bus, proxyMgr, info, !*headless)
 
@@ -161,6 +162,12 @@ func main() {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Skip UI paths
 		if strings.HasPrefix(r.URL.Path, "/__ditto__/") {
+			return
+		}
+
+		// Serve favicon at root (browsers request /favicon.ico automatically)
+		if r.URL.Path == "/favicon.ico" {
+			http.Redirect(w, r, "/__ditto__/favicon.png", http.StatusFound)
 			return
 		}
 

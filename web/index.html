@@ -4,12 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ditto</title>
+  <link rel="icon" type="image/png" href="/__ditto__/favicon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <div class="header-left">
       <h1>DITTO</h1>
+      <span id="version-badge" class="version-badge"></span>
       <span id="connection-status" class="status disconnected">Disconnected</span>
     </div>
     <div class="header-right">
@@ -41,6 +43,7 @@
 
     <section id="log-panel">
       <h2>Request Log</h2>
+      <button id="btn-jump" class="jump-btn hidden" onclick="jumpToLatest()">New requests below</button>
       <div id="log-empty" class="empty-state">Waiting for requests...</div>
       <div id="log-container" class="hidden">
         <table id="log-table">
@@ -126,7 +129,7 @@
   </div>
 
   <footer>
-    <span id="footer-info"></span>
+    <span id="footer-info">Ditto</span>
   </footer>
 
   <script src="app.js"></script>

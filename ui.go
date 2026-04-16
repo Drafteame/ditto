@@ -69,6 +69,7 @@ type ServerInfo struct {
 	HTTPS    bool     `json:"https"`
 	MocksDir string   `json:"mocks_dir"`
 	LocalIPs []string `json:"local_ips"`
+	Version  string   `json:"version"`
 }
 
 // RegisterUI sets up the dashboard routes on the given mux.
@@ -123,6 +124,7 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 					HTTPS:    info.HTTPS,
 					MocksDir: info.MocksDir,
 					LocalIPs: info.LocalIPs,
+					Version:  info.Version,
 				},
 			})
 
