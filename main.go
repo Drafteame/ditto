@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -95,7 +97,8 @@ func main() {
 	mocksDir := flag.String("mocks", "./mocks", "Directory containing mock JSON files")
 	https := flag.Bool("https", false, "Enable HTTPS using a self-signed certificate")
 	certDir := flag.String("certs", "./certs", "Directory to store the self-signed certificate")
-	noUI := flag.Bool("no-ui", false, "Disable the web dashboard")
+	headless := flag.Bool("headless", false, "Run without the web dashboard (API still available)")
+	logFormat := flag.String("log-format", "text", "Log format: 'text' (human-readable) or 'json' (one object per line)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -103,6 +106,17 @@ func main() {
 		fmt.Println(version)
 		return
 	}
+
+	if *logFormat != "text" && *logFormat != "json" {
+		fmt.Fprintf(os.Stderr, "invalid --log-format: %q (must be 'text' or 'json')\n", *logFormat)
+		os.Exit(2)
+	}
+
+	// Log to stderr by default so stdout stays clean for JSON consumers.
+	// In text mode, requests still go through stdout via the helper.
+	log.SetOutput(os.Stderr)
+	log.SetFlags(0)
+	jsonLogs := *logFormat == "json"
 
 	// Load mocks
 	store := NewMockStore(*mocksDir)
@@ -141,7 +155,7 @@ func main() {
 		MocksDir: *mocksDir,
 		LocalIPs: ipStrings,
 	}
-	RegisterUI(mux, store, bus, proxyMgr, info, !*noUI)
+	RegisterUI(mux, store, bus, proxyMgr, info, !*headless)
 
 	// Main proxy/mock handler
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -176,8 +190,7 @@ func main() {
 			w.WriteHeader(mock.Status)
 			w.Write(mock.RawBody)
 
-			log.Printf("MOCK   %s %s → %d (%dms)", r.Method, r.URL.Path, mock.Status, duration)
-			bus.Publish(LogEvent{
+			event := LogEvent{
 				Timestamp:    time.Now().Format("15:04:05"),
 				Type:         "MOCK",
 				Method:       r.Method,
@@ -185,7 +198,9 @@ func main() {
 				Status:       mock.Status,
 				DurationMs:   duration,
 				ResponseBody: string(mock.RawBody),
-			})
+			}
+			logRequest(jsonLogs, event)
+			bus.Publish(event)
 			return
 		}
 
@@ -195,27 +210,26 @@ func main() {
 			proxyMgr.ServeHTTP(capture, r)
 			duration := time.Since(proxyStart).Milliseconds()
 
-			status := capture.statusCode
-			log.Printf("PROXY  %s %s → %d (%dms)", r.Method, r.URL.Path, status, duration)
-			bus.Publish(LogEvent{
+			event := LogEvent{
 				Timestamp:    time.Now().Format("15:04:05"),
 				Type:         "PROXY",
 				Method:       r.Method,
 				Path:         r.URL.RequestURI(),
-				Status:       status,
+				Status:       capture.statusCode,
 				DurationMs:   duration,
 				ResponseBody: capture.body.String(),
-			})
+			}
+			logRequest(jsonLogs, event)
+			bus.Publish(event)
 			return
 		}
 
 		duration := time.Since(start).Milliseconds()
-		log.Printf("MISS   %s %s (no target configured)", r.Method, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(`{"error": "no mock found and no target configured"}`))
 
-		bus.Publish(LogEvent{
+		event := LogEvent{
 			Timestamp:    time.Now().Format("15:04:05"),
 			Type:         "MISS",
 			Method:       r.Method,
@@ -223,7 +237,9 @@ func main() {
 			Status:       502,
 			DurationMs:   duration,
 			ResponseBody: `{"error": "no mock found and no target configured"}`,
-		})
+		}
+		logRequest(jsonLogs, event)
+		bus.Publish(event)
 	})
 
 	// Startup
@@ -231,10 +247,14 @@ func main() {
 	if *https {
 		scheme = "https"
 	}
-	printStartup(store.All(), *port, *target, *mocksDir, *https, certPath, !*noUI)
+	if jsonLogs {
+		printStartupJSON(store.Count(), *port, *target, *mocksDir, *https, !*headless)
+	} else {
+		printStartup(store.All(), *port, *target, *mocksDir, *https, certPath, !*headless)
+	}
 
 	// Open browser
-	if !*noUI {
+	if !*headless {
 		go openBrowser(fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, *port))
 	}
 
@@ -244,6 +264,22 @@ func main() {
 	} else {
 		log.Fatal(http.ListenAndServe(addr, mux))
 	}
+}
+
+// logRequest writes a single request log line. In JSON mode it emits a
+// JSON object on stdout (line-delimited, suitable for log aggregators);
+// in text mode it emits a human-friendly line on stdout.
+func logRequest(jsonMode bool, e LogEvent) {
+	if jsonMode {
+		data, err := json.Marshal(e)
+		if err != nil {
+			return
+		}
+		fmt.Fprintln(os.Stdout, string(data))
+		return
+	}
+	fmt.Fprintf(os.Stdout, "%s %-6s %s %s → %d (%dms)\n",
+		e.Timestamp, e.Type, e.Method, e.Path, e.Status, e.DurationMs)
 }
 
 func openBrowser(url string) {
@@ -263,36 +299,52 @@ func printStartup(mocks []Mock, port int, target, mocksDir string, https bool, c
 	if https {
 		scheme = "https"
 	}
-	fmt.Println()
-	fmt.Println("  ┌──────────────────────────────────┐")
-	fmt.Printf("  │           DITTO %-16s│\n", version)
-	fmt.Println("  └──────────────────────────────────┘")
-	fmt.Println()
-	fmt.Printf("  URL:        %s://0.0.0.0:%d\n", scheme, port)
-	fmt.Printf("  Mocks dir:  %s\n", mocksDir)
+	w := os.Stderr
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  ┌──────────────────────────────────┐")
+	fmt.Fprintf(w, "  │           DITTO %-16s│\n", version)
+	fmt.Fprintln(w, "  └──────────────────────────────────┘")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  URL:        %s://0.0.0.0:%d\n", scheme, port)
+	fmt.Fprintf(w, "  Mocks dir:  %s\n", mocksDir)
 	if https {
-		fmt.Printf("  TLS cert:   %s\n", certPath)
+		fmt.Fprintf(w, "  TLS cert:   %s\n", certPath)
 	}
 	if target != "" {
-		fmt.Printf("  Target:     %s\n", target)
+		fmt.Fprintf(w, "  Target:     %s\n", target)
 	} else {
-		fmt.Printf("  Target:     (none — unmatched requests return 502)\n")
+		fmt.Fprintf(w, "  Target:     (none — unmatched requests return 502)\n")
 	}
-	fmt.Printf("  Mocks:      %d loaded\n", len(mocks))
+	fmt.Fprintf(w, "  Mocks:      %d loaded\n", len(mocks))
 	if ui {
-		fmt.Printf("  Dashboard:  %s://localhost:%d/__ditto__/\n", scheme, port)
+		fmt.Fprintf(w, "  Dashboard:  %s://localhost:%d/__ditto__/\n", scheme, port)
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 	if len(mocks) > 0 {
-		fmt.Println("  Registered mocks:")
+		fmt.Fprintln(w, "  Registered mocks:")
 		for _, m := range mocks {
 			delay := ""
 			if m.DelayMs > 0 {
 				delay = fmt.Sprintf(" (delay: %dms)", m.DelayMs)
 			}
-			fmt.Printf("    %-7s %s → %d%s\n", m.Method, m.Path, m.Status, delay)
+			fmt.Fprintf(w, "    %-7s %s → %d%s\n", m.Method, m.Path, m.Status, delay)
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
-	fmt.Printf("  Listening on %s://0.0.0.0:%d ...\n\n", scheme, port)
+	fmt.Fprintf(w, "  Listening on %s://0.0.0.0:%d ...\n\n", scheme, port)
+}
+
+func printStartupJSON(mockCount, port int, target, mocksDir string, https bool, ui bool) {
+	startup := map[string]any{
+		"event":     "startup",
+		"version":   version,
+		"port":      port,
+		"target":    target,
+		"https":     https,
+		"mocks_dir": mocksDir,
+		"mocks":     mockCount,
+		"ui":        ui,
+	}
+	data, _ := json.Marshal(startup)
+	fmt.Fprintln(os.Stdout, string(data))
 }

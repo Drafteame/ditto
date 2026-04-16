@@ -53,6 +53,26 @@ go build -o ditto .
 | `--mocks` | `./mocks` | Directory containing mock JSON files |
 | `--https` | `false` | Serve over HTTPS (advanced — see [docs/HTTPS.md](docs/HTTPS.md)) |
 | `--certs` | `./certs` | Directory to store the generated TLS certificate |
+| `--headless` | `false` | Run without the web dashboard (API still available) |
+| `--log-format` | `text` | Log format: `text` (human-readable) or `json` (one object per line) |
+
+### Headless mode
+
+For CI pipelines, automated testing, or terminal-only usage:
+
+```bash
+# No browser, no dashboard, but the REST API at /__ditto__/api/ stays available.
+./ditto --headless --target https://api.example.com
+
+# Pipe-friendly output: one JSON object per request, banner suppressed via stderr.
+./ditto --headless --log-format json --target https://api.example.com 2>/dev/null
+```
+
+Sample JSON log line:
+
+```json
+{"timestamp":"22:41:25","type":"MOCK","method":"GET","path":"/users","status":200,"duration_ms":0,"response_body":"..."}
+```
 
 ## Connecting your app
 

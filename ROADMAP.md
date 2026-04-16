@@ -50,11 +50,12 @@ If the answer is no, we need to fix the UX before adding new capabilities.
 - ~~De-duplication: identical mocks are auto-disabled when one is enabled, with a UI toast warning~~
 - ~~Match conditions visible in the mock list (sidebar pills) and editable in the mock editor~~
 
-## v0.7 — Headless mode
+## v0.7 — Headless mode ✅
 
-- `--headless` flag for CI pipelines, automated testing, and CLI-only users
-- JSON-formatted log output for machine parsing
-- Clean separation between UI and headless modes
+- ~~`--headless` flag (replaces `--no-ui`) for CI pipelines, automated testing, and CLI-only users~~
+- ~~`--log-format json` for machine-parseable, line-delimited JSON logs~~
+- ~~Startup banner sent to stderr; request logs to stdout, so JSON output is pipe-friendly~~
+- ~~REST API remains available in headless mode for programmatic mock management~~
 
 ## v1.0 — Stable release
 
