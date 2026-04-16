@@ -57,28 +57,93 @@ If the answer is no, we need to fix the UX before adding new capabilities.
 - ~~Startup banner sent to stderr; request logs to stdout, so JSON output is pipe-friendly~~
 - ~~REST API remains available in headless mode for programmatic mock management~~
 
-## v1.0 — Stable release
-
-Bundle v0.5–v0.7 as the first stable release. The milestone:
+## v1.0 — Stable release ✅
 
 > **A product manager can download Ditto, start it, and use it end-to-end without opening a terminal or editing a file.**
+
+- ~~macOS `.app` bundle with custom icon — double-click to launch~~
+- ~~`.zip` packaging for macOS (double-click to extract)~~
+- ~~Terminal window shows logs; Ctrl+C or closing the window stops Ditto~~
+- ~~Example mock included in release archive~~
+
+---
+
+## Post-v1.0 — Prioritized
+
+### v1.1 — Native desktop app
+
+Replace the browser + Terminal setup with a standalone native application using [Wails](https://wails.io) (Go + web frontend in a native window).
+
+- **Single window**: dashboard runs inside the app, not in a browser. Close the window = process dies. No orphaned processes, no port leaks.
+- **Persistent storage**: mocks, scenarios, and config stored in `~/Library/Application Support/Ditto/` (macOS), `~/.config/ditto/` (Linux), `%APPDATA%\Ditto\` (Windows). Data survives app updates and reinstalls.
+- **System tray / menu bar** (stretch): minimize to tray, quick-access to start/stop.
+- Reuses 100% of existing HTML/CSS/JS dashboard code.
+- Builds to a native `.app` (macOS), `.exe` (Windows) — ~15MB binary.
+
+### v1.2 — Sequences
+
+Return different responses on subsequent calls to the same endpoint. Essential for testing polling flows.
+
+- Define an ordered list of responses for a mock. Each call advances to the next response.
+- Configurable behavior when the sequence ends: loop, stay on last, or reset.
+- UI: visual sequence editor showing the response chain.
+- Example: `GET /deposits/status` → call 1: `{"status": "pending"}` → call 2: `{"status": "processing"}` → call 3: `{"status": "completed"}`.
+
+### v1.3 — Scenarios
+
+Group mocks into named sets that activate together with a single toggle.
+
+- A scenario is a named collection of mock references (+ optional sequence overrides).
+- Activating a scenario enables all its mocks and disables any conflicting mocks from other scenarios.
+- UI: scenario cards in the sidebar, one-click activation, visual indicator of active scenario.
+- Scenarios are JSON files stored alongside mocks (e.g., `scenarios/failed_deposit.json`).
+- Example scenarios: "Happy deposit flow", "Failed KYC", "Empty wallet", "Slow network".
+
+```json
+{
+  "name": "Failed deposit flow",
+  "description": "Simulates a deposit that fails at payment confirmation",
+  "mocks": [
+    { "ref": "get_wallet_low_balance.json" },
+    { "ref": "post_deposit_initiated.json" },
+    {
+      "ref": "get_deposit_status.json",
+      "sequence": [
+        { "status": 200, "body": { "status": "pending" } },
+        { "status": 200, "body": { "status": "processing" } },
+        { "status": 200, "body": { "status": "failed", "reason": "insufficient_funds" } }
+      ]
+    }
+  ]
+}
+```
 
 ---
 
 ## Backlog
 
-Features for post-v1.0. Not prioritized — will be re-evaluated after v1.0 ships.
+Features not currently prioritized. Will be re-evaluated after v1.3.
 
-- **Record mode**: bulk-capture all proxied responses as mock files automatically (automated version of "save as mock")
-- **Config file + multi-target**: YAML/JSON config, per-path routing to different backends, environment switching (dev/staging)
-- **First-run wizard**: detect connected devices, walk through app configuration with copy-paste snippets
-- **One-click cert install**: UI buttons for Android/iOS cert installation, `.mobileconfig` generation, QR codes
-- **Dynamic responses**: templates that use values from the request (echo back path params, headers, etc.)
-- **Stateful mocks**: `POST /users` creates a record, subsequent `GET /users/:id` returns it
-- **Mock chaining / sequences**: return different responses on subsequent calls to the same endpoint
-- **Latency simulation profiles**: slow 3G, flaky network, intermittent failures
-- **Failure injection**: random 500s, timeouts for resilience testing
-- **Homebrew tap**: one-line install on macOS
-- **Signed installers**: `.dmg` / `.pkg` / `.deb` for native OS installation experience
-- **Auto-update mechanism**: check for new versions and update in place
-- **HAR file import/export**: import recorded sessions from browser dev tools
+### Traffic inspection & debugging
+- **Breakpoints**: pause a request mid-flight, inspect/modify body and headers, then forward or reject. Like Charles Proxy's breakpoint feature.
+- **Request verification**: assert that the app made specific calls with specific payloads. Useful for automated testing in CI with headless mode.
+
+### Response generation
+- **Dynamic response templates**: use variables from the request in response bodies — `{{request.path.id}}`, `{{randomUUID}}`, `{{timestamp}}`. One mock for `GET /users/*` returns a user with the requested ID.
+- **Scripting hooks**: JS or Lua functions that run on each request/response for edge cases declarative mocks can't handle (e.g., "return 401 on every 5th request").
+
+### Network simulation
+- **Latency profiles**: simulate slow 3G, flaky Wi-Fi, high-latency satellite connections.
+- **Failure injection**: random 500s, timeouts, connection resets for resilience testing.
+
+### Collaboration
+- **Import/export**: import from HAR files, Postman collections, or OpenAPI specs. Export scenarios to share with teammates.
+- **Team sharing**: export/import full Ditto configs (mocks + scenarios) so the whole team runs the same setup.
+
+### Distribution & install
+- **Record mode**: bulk-capture all proxied responses as mock files automatically.
+- **Homebrew tap**: `brew install draftea/tap/ditto` for one-line install on macOS.
+- **Code signing + notarization**: Apple Developer Program signing to remove the Gatekeeper warning on first launch.
+- **Auto-update mechanism**: check for new versions and prompt to update in place.
+- **Multi-target routing**: route different path prefixes to different backends (`/users/*` → service A, `/bets/*` → service B).
+- **Config file**: YAML/JSON config as an alternative to CLI flags for complex setups.
