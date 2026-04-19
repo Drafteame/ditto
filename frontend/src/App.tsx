@@ -96,6 +96,10 @@ export default function App() {
     setModalState(createNewMockState(entry.method, entry.path, entry.status, entry.response_body))
   }, [])
 
+  const handleCreateMock = useCallback(() => {
+    setModalState(createNewMockState('GET', '', 200))
+  }, [])
+
   const handleEditMock = useCallback(async (index: number) => {
     try {
       const data = await api.fetchMocks()
@@ -131,6 +135,7 @@ export default function App() {
           onClose={() => setSidebarOpen(false)}
           onMocksChanged={loadMocks}
           onEditMock={handleEditMock}
+          onCreateMock={handleCreateMock}
           showToast={showToast}
         />
         <LogPanel entries={logEntries} onSaveAsMock={handleSaveAsMock} />

@@ -9,6 +9,7 @@ interface SidebarProps {
   onClose: () => void
   onMocksChanged: () => void
   onEditMock: (index: number) => void
+  onCreateMock: () => void
   showToast: (message: string, kind?: 'warn') => void
 }
 
@@ -19,6 +20,7 @@ export function Sidebar({
   onClose,
   onMocksChanged,
   onEditMock,
+  onCreateMock,
   showToast,
 }: SidebarProps) {
   return (
@@ -52,6 +54,7 @@ export function Sidebar({
           mocks={mocks}
           onMocksChanged={onMocksChanged}
           onEditMock={onEditMock}
+          onCreateMock={onCreateMock}
           showToast={showToast}
         />
       </aside>
@@ -246,11 +249,13 @@ function MocksPanel({
   mocks,
   onMocksChanged,
   onEditMock,
+  onCreateMock,
   showToast,
 }: {
   mocks: Mock[]
   onMocksChanged: () => void
   onEditMock: (index: number) => void
+  onCreateMock: () => void
   showToast: (message: string, kind?: 'warn') => void
 }) {
   const handleToggle = useCallback(async (index: number) => {
@@ -282,6 +287,13 @@ function MocksPanel({
         <span className="bg-dt-border text-dt-muted text-[11px] px-[7px] py-px rounded-[10px] font-semibold">
           {mocks.length}
         </span>
+        <button
+          onClick={onCreateMock}
+          title="Create new mock"
+          className="ml-auto bg-dt-border hover:bg-[#3d444d] text-dt-text border border-dt-border rounded px-2 py-0.5 text-xs cursor-pointer"
+        >
+          +
+        </button>
       </h2>
       <ul className="list-none overflow-y-auto flex-1">
         {mocks.map((mock, index) => (
