@@ -393,9 +393,16 @@ function MockItem({
   const pills = getMatchPills(mock.match)
   const isSequence = mock.response_mode === 'sequence' && mock.sequence && mock.sequence.steps.length > 0
   const seqTotal = mock.sequence?.steps.length ?? 0
-  const seqCurrent = ((mock.sequence?.current_step ?? 0) % Math.max(seqTotal, 1)) + 1
+  const rawStep = mock.sequence?.current_step ?? 0
+  // For on_end === 'reset', current_step can equal seqTotal to signal "next call
+  // returns the fallback body"; in every other case wrap into [0, seqTotal).
+  const seqFallbackNext = mock.sequence?.on_end === 'reset' && rawStep >= seqTotal && seqTotal > 0
+  const seqCurrent = seqTotal > 0 ? (rawStep % seqTotal) + 1 : 1
+  const seqLabel = seqFallbackNext ? `↺/${seqTotal}` : `${seqCurrent}/${seqTotal}`
   const seqTip = isSequence
-    ? `Sequence — ${seqTotal} steps, next returns step ${seqCurrent}`
+    ? seqFallbackNext
+      ? `Sequence — ${seqTotal} steps, next returns the fallback body`
+      : `Sequence — ${seqTotal} steps, next returns step ${seqCurrent}`
     : ''
 
   return (
@@ -416,9 +423,7 @@ function MockItem({
       {isSequence && (
         <span className="mock-seq-badge" title={seqTip}>
           <Sequence size={11} />
-          <span className="mock-seq-count">
-            {seqCurrent}/{seqTotal}
-          </span>
+          <span className="mock-seq-count">{seqLabel}</span>
         </span>
       )}
       <div className="mock-actions">

@@ -29,6 +29,8 @@ type LogEvent struct {
 	Status       int    `json:"status"`
 	DurationMs   int64  `json:"duration_ms"`
 	ResponseBody string `json:"response_body,omitempty"`
+	MockIndex    int    `json:"mock_index,omitempty"`    // 0-based index into the mocks list; only set for MOCK events
+	HasMock      bool   `json:"has_mock,omitempty"`      // disambiguates MockIndex=0 from "unset"
 	SequenceStep int    `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
 	SequenceLen  int    `json:"sequence_len,omitempty"`
 }

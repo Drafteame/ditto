@@ -54,6 +54,35 @@ export default function App() {
     useCallback((event) => {
       const entry: LogEntry = { ...event, id: String(++nextLogId) }
       setLogEntries(prev => [...prev, entry])
+
+      // Advance the local sequence counter so the sidebar badge stays in sync
+      // with the backend's in-memory cursor without a full refetch per request.
+      if (
+        event.has_mock &&
+        event.sequence_step &&
+        event.sequence_len &&
+        typeof event.mock_index === 'number'
+      ) {
+        const served = event.sequence_step // 1-based
+        const len = event.sequence_len
+        const idx = event.mock_index
+        setMocks(prev => {
+          const target = prev[idx]
+          if (!target?.sequence) return prev
+          const onEnd = target.sequence.on_end
+          let next: number
+          if (onEnd === 'stay') next = Math.min(served, len - 1)
+          else if (onEnd === 'reset') next = served // may equal len (next call serves fallback)
+          else next = served % len // loop (default)
+          if (target.sequence.current_step === next) return prev
+          const copy = prev.slice()
+          copy[idx] = {
+            ...target,
+            sequence: { ...target.sequence, current_step: next },
+          }
+          return copy
+        })
+      }
     }, []),
     useCallback(() => {
       setConnected(true)

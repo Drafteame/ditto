@@ -179,6 +179,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				Status:       resolved.Status,
 				DurationMs:   duration,
 				ResponseBody: string(resolved.Body),
+				MockIndex:    resolved.MockIndex,
+				HasMock:      true,
 			}
 			if resolved.IsSequence {
 				event.SequenceStep = resolved.SequenceStep
