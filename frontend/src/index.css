@@ -806,16 +806,35 @@ svg {
 
 .drawer-body {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   padding: 14px;
   font-family: var(--font-mono);
   font-size: 12px;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
+
+.code-block {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .drawer-body .code {
   background: var(--bg-code);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-body .code-pre {
   padding: 12px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -826,30 +845,67 @@ svg {
   tab-size: 2;
   margin: 0;
   word-break: break-word;
-  max-height: none;
+  display: block;
+  flex: 1;
+  min-height: 0;
 }
 
-.code-block {
-  position: relative;
+/* Search bar inside code block */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-3);
 }
 
-.code-block .copy-btn {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  opacity: 0;
-  transition: opacity 0.1s, color 0.1s;
-  width: 24px;
-  height: 24px;
+.search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 0 4px;
+  min-width: 0;
 }
 
-.code-block:hover .copy-btn {
-  opacity: 1;
+.search-input::placeholder {
+  color: var(--fg-3);
 }
 
-.code-block .copy-btn.copied {
-  opacity: 1;
-  color: var(--accent);
+.search-counter {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  min-width: 32px;
+  text-align: center;
+}
+
+.search-counter.no-matches {
+  color: var(--err);
+}
+
+.search-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--line);
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+
+/* Match highlights */
+.match {
+  background: color-mix(in oklch, var(--accent) 25%, transparent);
+  border-radius: 2px;
+}
+
+.match.active {
+  background: color-mix(in oklch, var(--accent) 58%, transparent);
+  color: var(--fg-0);
 }
 
 /* Match reason banner */

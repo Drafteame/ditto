@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LogEntry, ServerInfo } from '../types'
-import { Alert, Bookmark, Check, Copy, Globe, X } from './icons'
+import {
+  Alert,
+  Bookmark,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Globe,
+  Search,
+  X,
+} from './icons'
 
 export const DRAWER_MIN_WIDTH = 340
 export const DRAWER_MAX_WIDTH = 720
@@ -81,6 +91,144 @@ function MatchBanner({ entry, target }: { entry: LogEntry; target: string }) {
   )
 }
 
+function CodeBlock({ text }: { text: string }) {
+  const [query, setQuery] = useState('')
+  const [idx, setIdx] = useState(0)
+  const [copied, setCopied] = useState(false)
+  const matchRefs = useRef<(HTMLSpanElement | null)[]>([])
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    const lower = text.toLowerCase()
+    const result: number[] = []
+    let i = 0
+    while ((i = lower.indexOf(q, i)) !== -1) {
+      result.push(i)
+      i += q.length
+    }
+    return result
+  }, [query, text])
+
+  // Reset everything when the text changes (new entry or tab)
+  useEffect(() => {
+    setQuery('')
+    setIdx(0)
+    setCopied(false)
+  }, [text])
+
+  // Reset index when query changes
+  useEffect(() => {
+    setIdx(0)
+  }, [query])
+
+  // Scroll to active match
+  useEffect(() => {
+    if (matches.length > 0) {
+      matchRefs.current[idx]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [idx, matches])
+
+  const go = useCallback(
+    (dir: 1 | -1) => {
+      if (matches.length === 0) return
+      setIdx(i => (i + dir + matches.length) % matches.length)
+    },
+    [matches.length],
+  )
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied(false), 1500)
+    })
+  }, [text])
+
+  const content = useMemo(() => {
+    const q = query.trim()
+    if (!q || matches.length === 0) return text
+    const parts: React.ReactNode[] = []
+    let last = 0
+    matches.forEach((start, i) => {
+      const end = start + q.length
+      if (start > last) parts.push(text.slice(last, start))
+      parts.push(
+        <span
+          key={start}
+          ref={el => {
+            matchRefs.current[i] = el
+          }}
+          className={i === idx ? 'match active' : 'match'}
+        >
+          {text.slice(start, end)}
+        </span>,
+      )
+      last = end
+    })
+    if (last < text.length) parts.push(text.slice(last))
+    return parts
+  }, [text, query, matches, idx])
+
+  const noMatches = query.trim() !== '' && matches.length === 0
+
+  return (
+    <div className="code-block">
+      <div className="code">
+        <div className="search-bar">
+          <Search size={12} />
+          <input
+            type="text"
+            className="search-input"
+            placeholder="Find…"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') go(e.shiftKey ? -1 : 1)
+              if (e.key === 'Escape') setQuery('')
+            }}
+          />
+          <span className={`search-counter${noMatches ? ' no-matches' : ''}`}>
+            {query.trim() ? `${matches.length > 0 ? idx + 1 : 0}/${matches.length}` : ''}
+          </span>
+          <button
+            type="button"
+            className="btn ghost icon"
+            style={{ width: 22, height: 22 }}
+            disabled={matches.length === 0}
+            onClick={() => go(-1)}
+            title="Previous match (Shift+Enter)"
+          >
+            <ChevronUp size={12} />
+          </button>
+          <button
+            type="button"
+            className="btn ghost icon"
+            style={{ width: 22, height: 22 }}
+            disabled={matches.length === 0}
+            onClick={() => go(1)}
+            title="Next match (Enter)"
+          >
+            <ChevronDown size={12} />
+          </button>
+          <div className="search-sep" />
+          <button
+            type="button"
+            className="btn ghost icon"
+            style={{ width: 22, height: 22, color: copied ? 'var(--accent)' : undefined }}
+            onClick={handleCopy}
+            title="Copy JSON"
+          >
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+        </div>
+        <pre className="code-pre">{content}</pre>
+      </div>
+    </div>
+  )
+}
+
 export function Drawer({
   entry,
   serverInfo,
@@ -90,20 +238,9 @@ export function Drawer({
   onSaveAsMock,
 }: DrawerProps) {
   const [tab, setTab] = useState<Tab>('response')
-  const [copied, setCopied] = useState(false)
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const handleCopy = useCallback((text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
-      if (copyTimer.current) clearTimeout(copyTimer.current)
-      copyTimer.current = setTimeout(() => setCopied(false), 1500)
-    })
-  }, [])
 
   useEffect(() => {
     setTab('response')
-    setCopied(false)
   }, [entry.id])
 
   const handleDragStart = useCallback(
@@ -209,42 +346,21 @@ export function Drawer({
       <div className="drawer-body">
         {tab === 'response' &&
           (hasResponse ? (
-            <div className="code-block">
-              <pre className="code">{prettyJson(entry.response_body)}</pre>
-              <button
-                type="button"
-                className={`copy-btn btn ghost icon${copied ? ' copied' : ''}`}
-                onClick={() => handleCopy(prettyJson(entry.response_body))}
-                title="Copy JSON"
-              >
-                {copied ? <Check size={13} /> : <Copy size={13} />}
-              </button>
-            </div>
+            <CodeBlock text={prettyJson(entry.response_body)} />
           ) : (
             <div className="text-fg-3 font-sans text-[12px]">
               No response body captured for this request.
             </div>
           ))}
-        {tab === 'request' && (() => {
-          const requestJson = JSON.stringify(
-            { method, path: entry.path, timestamp: entry.timestamp },
-            null,
-            2,
-          )
-          return (
-            <div className="code-block">
-              <pre className="code">{requestJson}</pre>
-              <button
-                type="button"
-                className={`copy-btn btn ghost icon${copied ? ' copied' : ''}`}
-                onClick={() => handleCopy(requestJson)}
-                title="Copy JSON"
-              >
-                {copied ? <Check size={13} /> : <Copy size={13} />}
-              </button>
-            </div>
-          )
-        })()}
+        {tab === 'request' && (
+          <CodeBlock
+            text={JSON.stringify(
+              { method, path: entry.path, timestamp: entry.timestamp },
+              null,
+              2,
+            )}
+          />
+        )}
         {tab === 'headers' && (
           <div className="text-fg-3 font-sans text-[12px]">
             Request and response headers aren't captured yet. Track issue{' '}
