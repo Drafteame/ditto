@@ -1,44 +1,51 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import type { LogEntry } from '../types'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import type { LogEntry, ServerInfo } from '../types'
+import { Bookmark, Clock } from './icons'
+
+export const LOG_SEARCH_INPUT_ID = 'log-search-input'
 
 interface LogPanelProps {
   entries: LogEntry[]
+  serverInfo: ServerInfo | null
+  selectedId: string | null
+  onSelect: (id: string | null) => void
   onSaveAsMock: (entry: LogEntry) => void
 }
 
-type FilterType = 'all' | 'mock' | 'proxy' | 'miss'
+type FilterType = 'ALL' | 'MOCK' | 'PROXY' | 'MISS'
 
-const FILTER_BUTTONS: { type: FilterType; label: string }[] = [
-  { type: 'all', label: 'All' },
-  { type: 'mock', label: 'Mock' },
-  { type: 'proxy', label: 'Proxy' },
-  { type: 'miss', label: 'Miss' },
-]
+const FILTERS: FilterType[] = ['ALL', 'MOCK', 'PROXY', 'MISS']
 
-const FILTER_ACTIVE_STYLES: Record<FilterType, string> = {
-  all: '!text-dt-accent !border-dt-accent !bg-[rgba(88,166,255,0.1)]',
-  mock: '!text-dt-green !border-dt-green !bg-[rgba(63,185,80,0.1)]',
-  proxy: '!text-dt-accent !border-dt-accent !bg-[rgba(88,166,255,0.1)]',
-  miss: '!text-dt-red !border-dt-red !bg-[rgba(248,81,73,0.1)]',
-}
-
-export function LogPanel({ entries, onSaveAsMock }: LogPanelProps) {
+export function LogPanel({
+  entries,
+  serverInfo,
+  selectedId,
+  onSelect,
+  onSaveAsMock,
+}: LogPanelProps) {
   const [search, setSearch] = useState('')
-  const [activeFilter, setActiveFilter] = useState<FilterType>('all')
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [activeFilter, setActiveFilter] = useState<FilterType>('ALL')
   const [autoScroll, setAutoScroll] = useState(true)
   const [showJump, setShowJump] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
+  const counts = useMemo(() => {
+    const c = { ALL: entries.length, MOCK: 0, PROXY: 0, MISS: 0 } as Record<FilterType, number>
+    entries.forEach(e => {
+      c[e.type as FilterType] = (c[e.type as FilterType] || 0) + 1
+    })
+    return c
+  }, [entries])
+
   const filteredEntries = entries.filter(entry => {
-    const typeLower = entry.type.toLowerCase()
-    const matchesType = activeFilter === 'all' || typeLower === activeFilter
+    if (activeFilter !== 'ALL' && entry.type !== activeFilter) return false
     const searchLower = search.toLowerCase().trim()
-    const matchesSearch = !searchLower || `${entry.method} ${entry.path} ${entry.type} ${entry.status}`.toLowerCase().includes(searchLower)
-    return matchesType && matchesSearch
+    if (!searchLower) return true
+    return `${entry.method} ${entry.path} ${entry.type} ${entry.status}`
+      .toLowerCase()
+      .includes(searchLower)
   })
 
-  // Auto-scroll on new entries
   useEffect(() => {
     if (autoScroll && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight
@@ -63,193 +70,165 @@ export function LogPanel({ entries, onSaveAsMock }: LogPanelProps) {
     setShowJump(false)
   }, [])
 
-  const toggleExpand = useCallback((id: string) => {
-    setExpandedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
+  const handleRowClick = useCallback(
+    (id: string) => {
+      onSelect(selectedId === id ? null : id)
+    },
+    [onSelect, selectedId],
+  )
 
   const isEmpty = entries.length === 0
 
   return (
-    <section className="flex-1 flex flex-col overflow-hidden relative">
-      {/* Header with search and filters */}
-      <div className="px-4 py-2.5 border-b border-dt-border flex items-center gap-3 flex-wrap max-md:flex-col max-md:items-stretch">
-        <h2 className="text-[13px] uppercase tracking-wider text-dt-muted m-0 whitespace-nowrap font-semibold">
-          Request Log
-        </h2>
-        <div className="flex items-center gap-2 flex-1 max-md:flex-col max-md:gap-1.5">
-          <div className="relative flex-1 min-w-[120px] max-w-[300px] max-md:max-w-none">
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Filter by path, method..."
-              className="w-full bg-dt-bg border border-dt-border text-dt-text py-[5px] pl-2.5 pr-7 rounded-md text-xs font-mono focus:outline-none focus:border-dt-accent placeholder:text-dt-muted"
-            />
-            {search && (
-              <button
-                onClick={() => setSearch('')}
-                className="absolute right-1 top-1/2 -translate-y-1/2 bg-transparent border-none text-dt-muted text-base cursor-pointer px-1 leading-none hover:text-dt-text"
-              >
-                &times;
-              </button>
-            )}
-          </div>
-          <div className="flex gap-1">
-            {FILTER_BUTTONS.map(({ type, label }) => (
-              <button
-                key={type}
-                onClick={() => setActiveFilter(type)}
-                className={`bg-transparent border border-dt-border text-dt-muted px-2.5 py-1 rounded text-[11px] font-semibold cursor-pointer uppercase hover:text-dt-text hover:border-dt-muted ${
-                  activeFilter === type ? FILTER_ACTIVE_STYLES[type] : ''
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+    <section className="flex-1 flex flex-col min-w-0 bg-bg-0 relative overflow-hidden">
+      <div className="log-head">
+        <span className="log-title">Request log</span>
+        <div className="relative flex-1 max-w-[360px]">
+          <input
+            id={LOG_SEARCH_INPUT_ID}
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Filter by path, method…  (⌘K)"
+            className="filter-input w-full"
+            title="Filter requests (⌘K)"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 bg-transparent border-0 text-fg-3 text-sm cursor-pointer px-1 leading-none hover:text-fg-0"
+              aria-label="Clear search"
+            >
+              ×
+            </button>
+          )}
         </div>
+        <div className="seg seg-type">
+          {FILTERS.map(t => (
+            <button
+              key={t}
+              type="button"
+              className={`${activeFilter === t ? 'active' : ''} t-${t}`}
+              onClick={() => setActiveFilter(t)}
+            >
+              {t}
+              <span className="c">{counts[t] || 0}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex-1" />
       </div>
 
-      {/* Jump to latest button */}
       {showJump && (
-        <button
-          onClick={jumpToLatest}
-          className="absolute bottom-[50px] left-1/2 -translate-x-1/2 bg-dt-accent text-white border-none px-4 py-2 rounded-[20px] text-xs font-semibold cursor-pointer z-10 shadow-[0_2px_8px_rgba(0,0,0,0.3)] hover:bg-[#4c93e6]"
-        >
+        <button type="button" onClick={jumpToLatest} className="jump-btn">
           New requests below
         </button>
       )}
 
-      {/* Empty state */}
-      {isEmpty && (
-        <div className="flex items-center justify-center flex-1 text-dt-muted text-sm">
-          Waiting for requests...
+      {isEmpty ? (
+        <div className="empty">
+          <div className="glyph">
+            <Clock />
+          </div>
+          <h3>Waiting for requests…</h3>
+          <p>
+            Point your app at Ditto and requests will stream in here in real time. Requests matching
+            a mock are returned instantly; everything else is forwarded to your target.
+          </p>
+          {serverInfo?.port && (
+            <div className="hint">
+              {serverInfo.https ? 'https' : 'http'}://localhost:{serverInfo.port}
+            </div>
+          )}
         </div>
-      )}
-
-      {/* Log table */}
-      {!isEmpty && (
-        <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
-          <table className="w-full border-collapse text-[13px] font-mono">
-            <thead className="sticky top-0 z-[1]">
-              <tr>
-                <th className="log-th max-md:hidden">Time</th>
-                <th className="log-th max-md:w-[60px]">Type</th>
-                <th className="log-th max-md:hidden">Method</th>
-                <th className="log-th">Path</th>
-                <th className="log-th text-right max-md:hidden">Status</th>
-                <th className="log-th text-right max-md:hidden">Duration</th>
-                <th className="log-th text-right pr-5"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredEntries.map(entry => (
-                <LogRow
-                  key={entry.id}
-                  entry={entry}
-                  expanded={expandedIds.has(entry.id)}
-                  onToggle={() => toggleExpand(entry.id)}
-                  onSave={() => onSaveAsMock(entry)}
-                />
-              ))}
-            </tbody>
-          </table>
+      ) : (
+        <div ref={containerRef} onScroll={handleScroll} className="log-table">
+          <div className="log-row-head">
+            <span>Time</span>
+            <span>Type</span>
+            <span>Method</span>
+            <span>Path</span>
+            <span className="text-right">Status</span>
+            <span className="text-right">Duration</span>
+            <span />
+          </div>
+          {filteredEntries.map(entry => (
+            <LogRow
+              key={entry.id}
+              entry={entry}
+              selected={selectedId === entry.id}
+              onClick={() => handleRowClick(entry.id)}
+              onSave={() => onSaveAsMock(entry)}
+            />
+          ))}
+          {filteredEntries.length === 0 && (
+            <div className="px-4 py-6 text-center text-[12px] text-fg-3 font-sans">
+              No requests match the current filters.
+            </div>
+          )}
         </div>
       )}
     </section>
   )
 }
 
-const TYPE_BADGE_STYLES: Record<string, string> = {
-  mock: 'bg-[rgba(63,185,80,0.15)] text-dt-green',
-  proxy: 'bg-[rgba(88,166,255,0.15)] text-dt-accent',
-  miss: 'bg-[rgba(248,81,73,0.15)] text-dt-red',
-}
-
-const METHOD_COLORS: Record<string, string> = {
-  get: 'text-dt-green',
-  post: 'text-dt-accent',
-  put: 'text-dt-orange',
-  delete: 'text-dt-red',
-  patch: 'text-dt-orange',
+function StatusCell({ status }: { status: number }) {
+  const cls =
+    status >= 500
+      ? 'status-5'
+      : status >= 400
+        ? 'status-4'
+        : status >= 300
+          ? 'status-3'
+          : 'status-200'
+  return <span className={`st ${cls}`}>{status || '-'}</span>
 }
 
 function LogRow({
   entry,
-  expanded,
-  onToggle,
+  selected,
+  onClick,
   onSave,
 }: {
   entry: LogEntry
-  expanded: boolean
-  onToggle: () => void
+  selected: boolean
+  onClick: () => void
   onSave: () => void
 }) {
-  const typeLower = entry.type.toLowerCase()
-  const methodLower = entry.method.toLowerCase()
-  const isMiss = typeLower === 'miss'
-  const isProxy = typeLower === 'proxy'
-
-  let prettyBody = ''
-  try {
-    prettyBody = JSON.stringify(JSON.parse(entry.response_body || ''), null, 2)
-  } catch {
-    prettyBody = entry.response_body || '(no body)'
-  }
+  const methodUpper = entry.method.toUpperCase()
+  const isProxy = entry.type === 'PROXY'
 
   return (
-    <>
-      <tr
-        onClick={onToggle}
-        className={`border-b border-[rgba(48,54,61,0.5)] cursor-pointer transition-colors ${
-          isMiss ? 'bg-[rgba(248,81,73,0.06)] hover:bg-[rgba(248,81,73,0.1)]' : 'hover:bg-[rgba(88,166,255,0.04)]'
-        } ${expanded ? 'bg-[rgba(88,166,255,0.06)]' : ''}`}
-      >
-        <td className="px-3 py-1.5 whitespace-nowrap max-md:hidden">{entry.timestamp}</td>
-        <td className="px-3 py-1.5">
-          <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${TYPE_BADGE_STYLES[typeLower] || ''}`}>
-            {entry.type}
-          </span>
-        </td>
-        <td className={`px-3 py-1.5 max-md:hidden ${METHOD_COLORS[methodLower] || ''}`}>
-          {entry.method}
-        </td>
-        <td className="px-3 py-1.5 whitespace-nowrap overflow-hidden text-ellipsis max-w-[500px]" title={entry.path}>
-          {entry.path}
-        </td>
-        <td className="px-3 py-1.5 text-right whitespace-nowrap max-md:hidden">{entry.status || '-'}</td>
-        <td className="px-3 py-1.5 text-right whitespace-nowrap max-md:hidden">{entry.duration_ms}ms</td>
-        <td className="px-3 py-1.5 text-right pr-5">
-          {isProxy && (
-            <button
-              onClick={e => { e.stopPropagation(); onSave() }}
-              className="text-dt-green bg-[rgba(63,185,80,0.1)] border border-[rgba(63,185,80,0.3)] px-3.5 py-[5px] text-xs font-semibold cursor-pointer rounded whitespace-nowrap hover:bg-[rgba(63,185,80,0.2)] hover:border-[rgba(63,185,80,0.5)]"
-              title="Save as mock"
-            >
-              Save
-            </button>
-          )}
-        </td>
-      </tr>
-      {expanded && (
-        <tr>
-          <td colSpan={7} className="p-0">
-            <div className="px-4 py-3 bg-dt-bg border-b border-dt-border">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-[11px] uppercase text-dt-muted tracking-wider">Response Body</span>
-              </div>
-              <pre className="bg-dt-surface border border-dt-border rounded-md p-3 text-xs font-mono text-dt-text overflow-x-auto max-h-[300px] overflow-y-auto whitespace-pre-wrap break-words">
-                {prettyBody}
-              </pre>
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
+    <div onClick={onClick} className={`log-row ${selected ? 'selected' : ''}`}>
+      <span className="t">{entry.timestamp}</span>
+      <span>
+        <span className={`tag-type ${entry.type}`}>{entry.type}</span>
+      </span>
+      <span>
+        <span className={`method ${methodUpper}`}>{methodUpper}</span>
+      </span>
+      <span className="p" title={entry.path}>
+        {entry.path}
+      </span>
+      <StatusCell status={entry.status} />
+      <span className="dur">{entry.duration_ms}ms</span>
+      <span className="flex justify-end">
+        {isProxy && (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation()
+              onSave()
+            }}
+            className="btn ghost"
+            style={{ height: 22, padding: '0 8px', fontSize: 11 }}
+            title="Save as mock"
+          >
+            <Bookmark /> Save
+          </button>
+        )}
+      </span>
+    </div>
   )
 }

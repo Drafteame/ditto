@@ -17,7 +17,11 @@ export async function reloadMocks(): Promise<void> {
 }
 
 export async function deleteMock(index: number): Promise<void> {
-  await fetch(`${API_BASE}/mocks/${index}`, { method: 'DELETE' })
+  const res = await fetch(`${API_BASE}/mocks/${index}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
 }
 
 export async function saveMock(
