@@ -6,7 +6,7 @@ import * as api from './api'
 import { Header } from './components/Header'
 import { UpdateBanner } from './components/UpdateBanner'
 import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
-import { LogPanel } from './components/LogPanel'
+import { LogPanel, LOG_SEARCH_INPUT_ID } from './components/LogPanel'
 import { Drawer } from './components/Drawer'
 import { MockEditorModal, createNewMockState, createEditMockState } from './components/MockEditorModal'
 import type { MockEditorState } from './components/MockEditorModal'
@@ -75,6 +75,30 @@ export default function App() {
       if (e.key === 'Escape') {
         setModalState(null)
         setQrOpen(false)
+        setSelectedLogId(null)
+        return
+      }
+
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+
+      const key = e.key.toLowerCase()
+      if (key === 'k') {
+        e.preventDefault()
+        const input = document.getElementById(LOG_SEARCH_INPUT_ID) as HTMLInputElement | null
+        input?.focus()
+        input?.select()
+      } else if (key === '\\') {
+        e.preventDefault()
+        const isDesktopViewport = window.matchMedia('(min-width: 768px)').matches
+        if (isDesktopViewport) {
+          setSidebarCollapsed(c => !c)
+        } else {
+          setSidebarOpen(o => !o)
+        }
+      } else if (key === 'l') {
+        e.preventDefault()
+        setLogEntries([])
         setSelectedLogId(null)
       }
     }
@@ -148,6 +172,7 @@ export default function App() {
         />
         <LogPanel
           entries={logEntries}
+          serverInfo={serverInfo}
           selectedId={selectedLogId}
           onSelect={setSelectedLogId}
           onSaveAsMock={handleSaveAsMock}

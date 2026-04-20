@@ -160,3 +160,4 @@ export const PanelLeft = (p: IconProps) => (
     <line x1="9" y1="3" x2="9" y2="21" />
   </Svg>
 )
+

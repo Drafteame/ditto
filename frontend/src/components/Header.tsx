@@ -35,6 +35,8 @@ export function Header({
       <button
         type="button"
         onClick={onToggleSidebar}
+        data-tip="Toggle sidebar (⌘\)"
+        data-tip-side="bottom"
         aria-label="Toggle sidebar"
         className="btn ghost icon md:hidden"
       >
@@ -60,22 +62,46 @@ export function Header({
 
       <div className="flex items-center gap-1.5">
         {showBrowserBtn && (
-          <button type="button" onClick={handleOpenBrowser} title="Open dashboard in browser" className="btn ghost">
+          <button
+            type="button"
+            onClick={handleOpenBrowser}
+            data-tip="Open dashboard in your browser"
+            data-tip-side="bottom"
+            className="btn ghost"
+          >
             <Globe />
             <span className="max-md:hidden">Browser</span>
           </button>
         )}
         {showQRBtn && (
-          <button type="button" onClick={onShowQR} title="Scan to open on your phone" className="btn ghost">
+          <button
+            type="button"
+            onClick={onShowQR}
+            data-tip="Show QR code to connect your phone"
+            data-tip-side="bottom"
+            className="btn ghost"
+          >
             <QR />
             <span className="max-md:hidden">QR</span>
           </button>
         )}
-        <button type="button" onClick={onReloadMocks} className="btn ghost" title="Reload mocks">
+        <button
+          type="button"
+          onClick={onReloadMocks}
+          className="btn ghost"
+          data-tip="Reload mock files from disk"
+          data-tip-side="bottom"
+        >
           <Refresh />
           <span className="max-md:hidden">Reload</span>
         </button>
-        <button type="button" onClick={onClearLog} className="btn ghost" title="Clear log">
+        <button
+          type="button"
+          onClick={onClearLog}
+          className="btn ghost"
+          data-tip="Clear request log (⌘L)"
+          data-tip-side="bottom"
+        >
           <Trash />
           <span className="max-md:hidden">Clear</span>
         </button>

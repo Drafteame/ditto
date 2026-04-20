@@ -69,8 +69,14 @@ export function Sidebar({
 export function CollapsedSidebarRail({ onExpand }: { onExpand: () => void }) {
   return (
     <div className="sidebar-rail max-md:hidden">
-      <button type="button" onClick={onExpand} title="Expand sidebar" aria-label="Expand sidebar">
-        <ChevronRight size={14} />
+      <button
+        type="button"
+        onClick={onExpand}
+        data-tip="Expand sidebar (⌘\)"
+        data-tip-side="right"
+        aria-label="Expand sidebar"
+      >
+        <ChevronRight />
       </button>
     </div>
   )
@@ -141,7 +147,8 @@ function PortPanel({
           type="button"
           className="sb-collapse-btn max-md:hidden"
           onClick={onCollapse}
-          title="Collapse sidebar"
+          data-tip="Collapse sidebar (⌘\)"
+          data-tip-side="left"
           aria-label="Collapse sidebar"
         >
           <ChevronLeft size={14} />

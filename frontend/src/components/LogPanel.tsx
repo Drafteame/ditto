@@ -1,9 +1,12 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import type { LogEntry } from '../types'
+import type { LogEntry, ServerInfo } from '../types'
 import { Bookmark, Clock } from './icons'
+
+export const LOG_SEARCH_INPUT_ID = 'log-search-input'
 
 interface LogPanelProps {
   entries: LogEntry[]
+  serverInfo: ServerInfo | null
   selectedId: string | null
   onSelect: (id: string | null) => void
   onSaveAsMock: (entry: LogEntry) => void
@@ -13,7 +16,13 @@ type FilterType = 'ALL' | 'MOCK' | 'PROXY' | 'MISS'
 
 const FILTERS: FilterType[] = ['ALL', 'MOCK', 'PROXY', 'MISS']
 
-export function LogPanel({ entries, selectedId, onSelect, onSaveAsMock }: LogPanelProps) {
+export function LogPanel({
+  entries,
+  serverInfo,
+  selectedId,
+  onSelect,
+  onSaveAsMock,
+}: LogPanelProps) {
   const [search, setSearch] = useState('')
   const [activeFilter, setActiveFilter] = useState<FilterType>('ALL')
   const [autoScroll, setAutoScroll] = useState(true)
@@ -76,11 +85,13 @@ export function LogPanel({ entries, selectedId, onSelect, onSaveAsMock }: LogPan
         <span className="log-title">Request log</span>
         <div className="relative flex-1 max-w-[360px]">
           <input
+            id={LOG_SEARCH_INPUT_ID}
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Filter by path, method…"
+            placeholder="Filter by path, method…  (⌘K)"
             className="filter-input w-full"
+            title="Filter requests (⌘K)"
           />
           {search && (
             <button
@@ -125,6 +136,11 @@ export function LogPanel({ entries, selectedId, onSelect, onSaveAsMock }: LogPan
             Point your app at Ditto and requests will stream in here in real time. Requests matching
             a mock are returned instantly; everything else is forwarded to your target.
           </p>
+          {serverInfo?.port && (
+            <div className="hint">
+              {serverInfo.https ? 'https' : 'http'}://localhost:{serverInfo.port}
+            </div>
+          )}
         </div>
       ) : (
         <div ref={containerRef} onScroll={handleScroll} className="log-table">
