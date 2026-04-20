@@ -307,7 +307,7 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 			})
 			return
 		}
-		available := latest != "" && latest != version && version != "dev"
+		available := latest != "" && version != "dev" && isNewerVersion(latest, version)
 		json.NewEncoder(w).Encode(map[string]any{
 			"current":      version,
 			"latest":       latest,

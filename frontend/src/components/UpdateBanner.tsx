@@ -7,20 +7,15 @@ interface UpdateBannerProps {
 }
 
 export function UpdateBanner({ info, onDismiss }: UpdateBannerProps) {
-  const handleDownload = (e: React.MouseEvent) => {
-    e.preventDefault()
-    window.open(info.download_url, '_blank')
-  }
-
   return (
     <div className="update">
       <Download />
       <span className="flex-1">
         Ditto {info.latest} is available (you have {info.current}).
       </span>
-      <button type="button" onClick={handleDownload} className="link">
+      <a href={info.download_url} target="_blank" rel="noreferrer" className="link">
         Download
-      </button>
+      </a>
       <button type="button" onClick={onDismiss} className="dismiss">
         Dismiss
       </button>
