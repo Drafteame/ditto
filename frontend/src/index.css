@@ -112,6 +112,11 @@ svg {
   border-color: transparent;
   color: var(--fg-1);
 }
+.btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
 .btn.ghost:hover {
   background: var(--bg-2);
   color: var(--fg-0);
