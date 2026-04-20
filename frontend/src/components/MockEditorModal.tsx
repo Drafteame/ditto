@@ -1,7 +1,10 @@
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { Mock, ResponseMode, SequenceStep } from '../types'
 import * as api from '../api'
-import { Alert, Check, ChevronRight, Plus, Refresh, Trash, X } from './icons'
+import { useCopy } from '../hooks/useCopy'
+import { useSearch } from '../hooks/useSearch'
+import { Alert, Braces, Check, ChevronRight, Copy, Plus, Refresh, Trash, X } from './icons'
+import { SearchBar } from './SearchBar'
 import { useConfirm } from './ConfirmDialog'
 
 export interface SequenceStepDraft {
@@ -165,7 +168,91 @@ function getMatchPillCount(match: Mock['match']): number {
   return count
 }
 
+/**
+ * Scrolls the textarea and its pre mirror to show charPos at the top of the
+ * viewport. Uses line-counting (textareas have no per-character DOM nodes).
+ */
+function scrollToCharPos(
+  ta: HTMLTextAreaElement | null,
+  pre: HTMLPreElement | null,
+  charPos: number,
+) {
+  if (!ta) return
+  const linesBefore = (ta.value.slice(0, charPos).match(/\n/g) ?? []).length
+  const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 20
+  const scrollTop = linesBefore * lineHeight
+  ta.scrollTop = scrollTop
+  if (pre) pre.scrollTop = scrollTop
+}
+
 function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const preRef = useRef<HTMLPreElement>(null)
+  // Tracks whether the current idx change was triggered by an explicit go()
+  // call (Enter / arrow buttons) vs. an automatic reset from query change.
+  const explicitNavRef = useRef(false)
+
+  const search = useSearch(value)
+  const { copied, handleCopy } = useCopy(value)
+
+  // Highlighted content rendered in the pre overlay
+  const highlightedContent = useMemo(() => {
+    const q = search.query.trim()
+    if (!q || search.matches.length === 0) return value
+    const parts: React.ReactNode[] = []
+    let last = 0
+    search.matches.forEach((start, i) => {
+      const end = start + q.length
+      if (start > last) parts.push(value.slice(last, start))
+      parts.push(
+        <span key={start} className={i === search.idx ? 'match active' : 'match'}>
+          {value.slice(start, end)}
+        </span>,
+      )
+      last = end
+    })
+    if (last < value.length) parts.push(value.slice(last))
+    return parts
+  }, [value, search.query, search.matches, search.idx])
+
+  // Keep the pre scroll in sync with the textarea scroll
+  const syncScroll = useCallback(() => {
+    if (preRef.current && textareaRef.current) {
+      preRef.current.scrollTop = textareaRef.current.scrollTop
+    }
+  }, [])
+
+  // Navigate whenever idx or matches change.
+  // - Explicit nav (Enter / ↑↓): focus + select + scroll to top
+  // - Auto nav (typing → idx reset to 0): scroll only, keep focus in search input
+  useEffect(() => {
+    if (search.matches.length === 0) return
+    const start = search.matches[search.idx]
+    const end = start + search.query.trim().length
+
+    if (explicitNavRef.current) {
+      explicitNavRef.current = false
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.focus()
+        ta.setSelectionRange(start, end)
+        scrollToCharPos(ta, preRef.current, start)
+      })
+    } else {
+      scrollToCharPos(textareaRef.current, preRef.current, start)
+    }
+  }, [search.idx, search.matches, search.query])
+
+  // Wraps go() so the effect above knows it was an intentional navigation
+  const goExplicit = useCallback(
+    (dir: 1 | -1) => {
+      explicitNavRef.current = true
+      search.go(dir)
+    },
+    [search.go],
+  )
+
   const { error, lineCount } = useMemo(() => {
     const lines = value.split('\n').length
     if (!value.trim()) return { error: null as string | null, lineCount: lines }
@@ -177,9 +264,55 @@ function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) 
     }
   }, [value])
 
+  const handleFormat = useCallback(() => {
+    const text = value.trim()
+    if (!text) return
+    try {
+      onChange(JSON.stringify(JSON.parse(text), null, 2))
+      return
+    } catch {}
+    try {
+      // Strip trailing commas before } or ] and retry
+      const cleaned = text.replace(/,(\s*[}\]])/g, '$1')
+      onChange(JSON.stringify(JSON.parse(cleaned), null, 2))
+    } catch {}
+  }, [value, onChange])
+
   return (
     <div className="json-editor">
-      <textarea value={value} onChange={e => onChange(e.target.value)} spellCheck={false} />
+      <SearchBar {...search} go={goExplicit}>
+        <button
+          type="button"
+          className="btn ghost icon"
+          style={{ width: 22, height: 22 }}
+          disabled={!value.trim()}
+          onClick={handleFormat}
+          title="Format JSON"
+        >
+          <Braces size={12} />
+        </button>
+        <button
+          type="button"
+          className="btn ghost icon"
+          style={{ width: 22, height: 22, color: copied ? 'var(--accent)' : undefined }}
+          onClick={handleCopy}
+          title="Copy JSON"
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+      </SearchBar>
+      <div className="json-editor-overlay">
+        <pre ref={preRef} className="json-editor-pre" aria-hidden="true">
+          {highlightedContent}
+        </pre>
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          onScroll={syncScroll}
+          spellCheck={false}
+        />
+      </div>
       <div className={`json-status ${error ? 'err' : 'ok'}`}>
         {error ? (
           <>

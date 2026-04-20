@@ -1181,18 +1181,49 @@ svg {
   display: flex;
   flex-direction: column;
 }
+
+/* Overlay: textarea (in-flow, sets height) + pre (absolute, renders highlights) */
+.json-editor-overlay {
+  position: relative;
+}
+
 .json-editor textarea {
+  position: relative;
+  z-index: 1;
+  display: block;
   width: 100%;
   min-height: 220px;
+  max-height: 400px;
+  overflow-y: auto;
   background: transparent;
   border: 0;
-  color: var(--fg-0);
+  color: transparent;        /* text hidden — pre renders it */
+  caret-color: var(--fg-0);  /* cursor stays visible */
   padding: 12px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.65;
   outline: none;
   resize: vertical;
+  tab-size: 2;
+}
+
+/* Pre sits behind the textarea and shows colored text + match highlights */
+.json-editor-pre {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden; /* scroll is driven by the textarea */
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-0);
+  margin: 0;
   tab-size: 2;
 }
 .json-status {
