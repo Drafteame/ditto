@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import type { Mock, ServerInfo } from '../types'
 import * as api from '../api'
-import { ChevronLeft, ChevronRight, Copy, Edit, Trash, X } from './icons'
+import { ChevronLeft, ChevronRight, Copy, Edit, Sequence, Trash, X } from './icons'
 import { useConfirm } from './ConfirmDialog'
 
 interface SidebarProps {
@@ -391,6 +391,12 @@ function MockItem({
 }) {
   const methodUpper = mock.method.toUpperCase()
   const pills = getMatchPills(mock.match)
+  const isSequence = mock.response_mode === 'sequence' && mock.sequence && mock.sequence.steps.length > 0
+  const seqTotal = mock.sequence?.steps.length ?? 0
+  const seqCurrent = ((mock.sequence?.current_step ?? 0) % Math.max(seqTotal, 1)) + 1
+  const seqTip = isSequence
+    ? `Sequence — ${seqTotal} steps, next returns step ${seqCurrent}`
+    : ''
 
   return (
     <div className={`mock-row ${mock.enabled ? '' : 'disabled'}`} onClick={() => onEdit(index)}>
@@ -407,6 +413,14 @@ function MockItem({
       <span className="mock-path" title={mock.path}>
         {mock.path}
       </span>
+      {isSequence && (
+        <span className="mock-seq-badge" title={seqTip}>
+          <Sequence size={11} />
+          <span className="mock-seq-count">
+            {seqCurrent}/{seqTotal}
+          </span>
+        </span>
+      )}
       <div className="mock-actions">
         <button
           type="button"

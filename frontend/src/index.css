@@ -1369,3 +1369,176 @@ svg {
 [data-tip-side='left']:focus-visible::after {
   transform: translateY(-50%) translateX(0);
 }
+
+/* =========================================================
+   Sequences — sidebar badge + editor timeline
+   ========================================================= */
+.mock-seq-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  flex-shrink: 0;
+}
+.mock-row.disabled .mock-seq-badge {
+  opacity: 0.4;
+}
+.mock-seq-count {
+  letter-spacing: 0.02em;
+}
+
+.seq-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.seq-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.seq-editor-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  font-size: 12px;
+  color: var(--fg-1);
+}
+.seq-editor-status b {
+  color: var(--fg-0);
+  font-weight: 600;
+}
+.seq-timeline {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 10px 4px 20px;
+  overflow-x: auto;
+}
+.seq-step {
+  min-width: 220px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 12px;
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+.seq-step.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 16%, transparent);
+}
+.seq-step .n {
+  position: absolute;
+  top: -10px;
+  left: 12px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  color: var(--fg-2);
+}
+.seq-step.active .n {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 15%, var(--bg-0));
+}
+.seq-step h4 {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.seq-step .next-tag {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.seq-step .preview {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-2);
+  background: var(--bg-code);
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  max-height: 100px;
+  overflow: hidden;
+  white-space: pre;
+  margin: 0;
+  flex: 1;
+}
+.seq-step .row-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+}
+.seq-step .row-actions .btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.seq-arrow {
+  width: 32px;
+  display: grid;
+  place-items: center;
+  color: var(--fg-3);
+  flex-shrink: 0;
+}
+.seq-end {
+  min-width: 160px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-2);
+  padding: 20px 12px;
+  font-size: 12px;
+  text-align: center;
+  flex-shrink: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+.seq-end:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.seq-step-editor {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.seq-step-editor .fld {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.seq-step-editor .wide {
+  grid-column: 1 / -1;
+}

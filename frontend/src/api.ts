@@ -24,6 +24,14 @@ export async function deleteMock(index: number): Promise<void> {
   }
 }
 
+export async function resetSequence(index: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/mocks/${index}/sequence/reset`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+}
+
 export async function saveMock(
   mock: Omit<Mock, 'enabled'>,
   editingIndex: number | null

@@ -1,8 +1,14 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import type { Mock } from '../types'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
+import type { Mock, ResponseMode, SequenceStep } from '../types'
 import * as api from '../api'
-import { Alert, Check, Trash, X } from './icons'
+import { Alert, Check, Chevron, Plus, Refresh, Trash, X } from './icons'
 import { useConfirm } from './ConfirmDialog'
+
+export interface SequenceStepDraft {
+  status: number
+  body: string // JSON as editable text
+  delay: number
+}
 
 export interface MockEditorState {
   editingIndex: number | null // null = creating new
@@ -15,6 +21,38 @@ export interface MockEditorState {
   matchHeaders: string
   matchBody: string
   matchOpen: boolean
+  responseMode: ResponseMode
+  sequenceSteps: SequenceStepDraft[]
+  sequenceOnEnd: 'loop' | 'stay' | 'reset'
+  sequenceCurrentStep: number
+}
+
+function makeDefaultStep(status: number, body: string): SequenceStepDraft {
+  return { status, body, delay: 0 }
+}
+
+function sequenceStepsFromMock(mock: Mock): SequenceStepDraft[] {
+  const steps = mock.sequence?.steps ?? []
+  return steps.map(s => ({
+    status: s.status || 200,
+    body: jsonToText(s.body),
+    delay: s.delay_ms || 0,
+  }))
+}
+
+function jsonToText(v: unknown): string {
+  try {
+    return JSON.stringify(v, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function truncatePreview(text: string, maxLines = 6): string {
+  if (!text) return ''
+  const lines = text.split('\n')
+  if (lines.length <= maxLines) return text
+  return lines.slice(0, maxLines).join('\n') + '\n…'
 }
 
 interface MockEditorModalProps {
@@ -60,6 +98,10 @@ export function createNewMockState(
     matchHeaders: '',
     matchBody: '',
     matchOpen: !!queryString,
+    responseMode: 'static',
+    sequenceSteps: [],
+    sequenceOnEnd: 'loop',
+    sequenceCurrentStep: 0,
   }
 }
 
@@ -85,6 +127,10 @@ export function createEditMockState(index: number, mock: Mock): MockEditorState 
     matchHeaders: mapToLines(match.headers, ': '),
     matchBody: match.body ? JSON.stringify(match.body, null, 2) : '',
     matchOpen: pills > 0,
+    responseMode: mock.response_mode === 'sequence' ? 'sequence' : 'static',
+    sequenceSteps: sequenceStepsFromMock(mock),
+    sequenceOnEnd: mock.sequence?.on_end ?? 'loop',
+    sequenceCurrentStep: mock.sequence?.current_step ?? 0,
   }
 }
 
@@ -166,6 +212,11 @@ export function MockEditorModal({
   const [matchHeaders, setMatchHeaders] = useState(initial.matchHeaders)
   const [matchBody, setMatchBody] = useState(initial.matchBody)
   const [matchOpen, setMatchOpen] = useState(initial.matchOpen)
+  const [responseMode, setResponseMode] = useState<ResponseMode>(initial.responseMode)
+  const [sequenceSteps, setSequenceSteps] = useState<SequenceStepDraft[]>(initial.sequenceSteps)
+  const [sequenceOnEnd, setSequenceOnEnd] = useState(initial.sequenceOnEnd)
+  const [sequenceCurrentStep, setSequenceCurrentStep] = useState(initial.sequenceCurrentStep)
+  const [editingStepIndex, setEditingStepIndex] = useState<number | null>(null)
   const confirm = useConfirm()
 
   useEffect(() => {
@@ -178,7 +229,22 @@ export function MockEditorModal({
     setMatchHeaders(initial.matchHeaders)
     setMatchBody(initial.matchBody)
     setMatchOpen(initial.matchOpen)
+    setResponseMode(initial.responseMode)
+    setSequenceSteps(initial.sequenceSteps)
+    setSequenceOnEnd(initial.sequenceOnEnd)
+    setSequenceCurrentStep(initial.sequenceCurrentStep)
+    setEditingStepIndex(null)
   }, [initial])
+
+  const switchToSequence = useCallback(() => {
+    setResponseMode('sequence')
+    // Seed with a step built from the current static body so the user
+    // doesn't start from empty.
+    setSequenceSteps(prev => {
+      if (prev.length > 0) return prev
+      return [makeDefaultStep(status || 200, body || '{}')]
+    })
+  }, [body, status])
 
   const handleSave = useCallback(async () => {
     let parsedBody: unknown
@@ -213,6 +279,32 @@ export function MockEditorModal({
     }
     if (Object.keys(match).length > 0) mock.match = match
 
+    // Always persist both static body AND sequence steps when the user has
+    // defined any — response_mode decides which one the backend serves.
+    if (sequenceSteps.length > 0) {
+      const serialized: SequenceStep[] = []
+      for (let i = 0; i < sequenceSteps.length; i++) {
+        const s = sequenceSteps[i]
+        let parsedStepBody: unknown
+        try {
+          parsedStepBody = s.body.trim() ? JSON.parse(s.body) : null
+        } catch (err) {
+          showToast(
+            `Invalid JSON in step ${i + 1}: ${(err as Error).message}`,
+            'warn',
+          )
+          return
+        }
+        serialized.push({
+          status: s.status || 200,
+          body: parsedStepBody,
+          delay_ms: s.delay || 0,
+        })
+      }
+      mock.sequence = { steps: serialized, on_end: sequenceOnEnd }
+    }
+    mock.response_mode = responseMode
+
     try {
       const result = await api.saveMock(
         mock as unknown as Omit<Mock, 'enabled'>,
@@ -238,6 +330,9 @@ export function MockEditorModal({
     matchQuery,
     matchHeaders,
     matchBody,
+    responseMode,
+    sequenceSteps,
+    sequenceOnEnd,
     initial.editingIndex,
     onClose,
     onSaved,
@@ -277,7 +372,40 @@ export function MockEditorModal({
     [onClose],
   )
 
+  const handleResetCounter = useCallback(async () => {
+    if (initial.editingIndex === null) return
+    try {
+      await api.resetSequence(initial.editingIndex)
+      setSequenceCurrentStep(0)
+      showToast('Sequence counter reset')
+    } catch (err) {
+      showToast(`Failed to reset counter: ${(err as Error).message}`, 'warn')
+    }
+  }, [initial.editingIndex, showToast])
+
+  const addStep = useCallback(() => {
+    setSequenceSteps(prev => {
+      const base = prev.length > 0 ? prev[prev.length - 1] : { status: status || 200, body: '{}', delay: 0 }
+      const next = [...prev, { status: base.status || 200, body: base.body || '{}', delay: 0 }]
+      setEditingStepIndex(next.length - 1)
+      return next
+    })
+  }, [status])
+
+  const updateStep = useCallback((index: number, patch: Partial<SequenceStepDraft>) => {
+    setSequenceSteps(prev => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)))
+  }, [])
+
+  const removeStep = useCallback((index: number) => {
+    setSequenceSteps(prev => prev.filter((_, i) => i !== index))
+    setEditingStepIndex(prev => (prev === index ? null : prev !== null && prev > index ? prev - 1 : prev))
+  }, [])
+
   const isEditing = initial.editingIndex !== null
+  const nextStepForDisplay =
+    sequenceSteps.length > 0
+      ? ((sequenceCurrentStep % sequenceSteps.length) + sequenceSteps.length) % sequenceSteps.length
+      : 0
 
   return (
     <div onMouseDown={handleOverlayMouseDown} className="modal-scrim">
@@ -333,9 +461,173 @@ export function MockEditorModal({
           </div>
 
           <div className="fld">
-            <label>Response body (JSON)</label>
-            <JsonEditor value={body} onChange={setBody} />
+            <label>Response mode</label>
+            <div className="seg" role="tablist" aria-label="Response mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={responseMode === 'static'}
+                className={responseMode === 'static' ? 'active' : ''}
+                onClick={() => setResponseMode('static')}
+              >
+                Static
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={responseMode === 'sequence'}
+                className={responseMode === 'sequence' ? 'active' : ''}
+                onClick={switchToSequence}
+              >
+                Sequence
+              </button>
+            </div>
           </div>
+
+          {responseMode === 'static' ? (
+            <div className="fld">
+              <label>Response body (JSON)</label>
+              <JsonEditor value={body} onChange={setBody} />
+            </div>
+          ) : (
+            <div className="seq-editor">
+              <div className="seq-editor-head">
+                <div className="seg">
+                  <button
+                    type="button"
+                    className={sequenceOnEnd === 'loop' ? 'active' : ''}
+                    onClick={() => setSequenceOnEnd('loop')}
+                  >
+                    Loop
+                  </button>
+                  <button
+                    type="button"
+                    className={sequenceOnEnd === 'stay' ? 'active' : ''}
+                    onClick={() => setSequenceOnEnd('stay')}
+                  >
+                    Stay on last
+                  </button>
+                  <button
+                    type="button"
+                    className={sequenceOnEnd === 'reset' ? 'active' : ''}
+                    onClick={() => setSequenceOnEnd('reset')}
+                  >
+                    Reset
+                  </button>
+                </div>
+                <div className="flex-1" />
+                {isEditing && (
+                  <button type="button" className="btn ghost" onClick={handleResetCounter}>
+                    <Refresh size={14} /> Reset counter
+                  </button>
+                )}
+              </div>
+
+              {sequenceSteps.length > 0 && (
+                <div className="seq-editor-status">
+                  <span>
+                    Next call returns <b>step {nextStepForDisplay + 1}</b> of {sequenceSteps.length}.
+                  </span>
+                </div>
+              )}
+
+              <div className="seq-timeline">
+                {sequenceSteps.map((step, i) => {
+                  const active = i === nextStepForDisplay
+                  return (
+                    <Fragment key={i}>
+                      <div className={`seq-step ${active ? 'active' : ''}`}>
+                        <span className="n">step {i + 1}</span>
+                        <h4>
+                          <span className="tag-type MOCK">{step.status}</span>
+                          {active && <span className="next-tag">NEXT</span>}
+                        </h4>
+                        <pre className="preview">{truncatePreview(step.body)}</pre>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="btn ghost"
+                            style={{ flex: 1 }}
+                            onClick={() => setEditingStepIndex(i)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn ghost"
+                            aria-label={`Delete step ${i + 1}`}
+                            onClick={() => removeStep(i)}
+                          >
+                            <Trash size={12} />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="seq-arrow">
+                        <Chevron size={18} />
+                      </div>
+                    </Fragment>
+                  )
+                })}
+                <button type="button" className="seq-end" onClick={addStep}>
+                  <Plus size={18} />
+                  <div style={{ marginTop: 6 }}>Add step</div>
+                </button>
+              </div>
+
+              {editingStepIndex !== null && sequenceSteps[editingStepIndex] && (
+                <div className="seq-step-editor">
+                  <div className="fld">
+                    <label>Status</label>
+                    <input
+                      className="input"
+                      type="number"
+                      value={sequenceSteps[editingStepIndex].status}
+                      onChange={e =>
+                        updateStep(editingStepIndex, { status: parseInt(e.target.value) || 200 })
+                      }
+                    />
+                  </div>
+                  <div className="fld">
+                    <label>Delay (ms)</label>
+                    <input
+                      className="input"
+                      type="number"
+                      value={sequenceSteps[editingStepIndex].delay}
+                      onChange={e =>
+                        updateStep(editingStepIndex, { delay: parseInt(e.target.value) || 0 })
+                      }
+                    />
+                  </div>
+                  <div className="fld wide">
+                    <label>Body (JSON) — step {editingStepIndex + 1}</label>
+                    <JsonEditor
+                      value={sequenceSteps[editingStepIndex].body}
+                      onChange={v => updateStep(editingStepIndex, { body: v })}
+                    />
+                  </div>
+                  <div className="wide" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => setEditingStepIndex(null)}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <details className="details-row" open>
+                <summary onClick={e => e.preventDefault()}>
+                  Fallback static body
+                  <span className="hint">
+                    used when on-end is “reset” (served between cycles); also saved for when you switch back to Static mode
+                  </span>
+                </summary>
+                <JsonEditor value={body} onChange={setBody} />
+              </details>
+            </div>
+          )}
 
           <details className="details-row" open={matchOpen}>
             <summary onClick={e => {
