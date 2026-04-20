@@ -155,30 +155,35 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			r.Body = io.NopCloser(bytes.NewReader(reqBody))
 		}
 
-		mock := store.Find(r, reqBody)
-		if mock != nil {
-			if mock.DelayMs > 0 {
-				time.Sleep(time.Duration(mock.DelayMs) * time.Millisecond)
+		resolved := store.MatchAndResolve(r, reqBody)
+		if resolved != nil {
+			if resolved.DelayMs > 0 {
+				time.Sleep(time.Duration(resolved.DelayMs) * time.Millisecond)
 			}
 			duration := time.Since(start).Milliseconds()
 
-			for k, v := range mock.Headers {
+			for k, v := range resolved.Headers {
 				w.Header().Set(k, v)
 			}
 			if w.Header().Get("Content-Type") == "" {
 				w.Header().Set("Content-Type", "application/json")
 			}
-			w.WriteHeader(mock.Status)
-			w.Write(mock.RawBody)
+			w.WriteHeader(resolved.Status)
+			w.Write(resolved.Body)
 
 			event := LogEvent{
 				Timestamp:    time.Now().Format("15:04:05"),
 				Type:         "MOCK",
 				Method:       r.Method,
 				Path:         r.URL.RequestURI(),
-				Status:       mock.Status,
+				Status:       resolved.Status,
 				DurationMs:   duration,
-				ResponseBody: string(mock.RawBody),
+				ResponseBody: string(resolved.Body),
+				MockIndex:    resolved.MockIndex,
+			}
+			if resolved.IsSequence {
+				event.SequenceStep = resolved.SequenceStep
+				event.SequenceLen = resolved.SequenceLen
 			}
 			logRequest(jsonLogs, event)
 			bus.Publish(event)

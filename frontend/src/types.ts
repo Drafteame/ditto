@@ -6,6 +6,9 @@ export interface LogEvent {
   status: number
   duration_ms: number
   response_body?: string
+  mock_index?: number
+  sequence_step?: number
+  sequence_len?: number
 }
 
 export interface LogEntry extends LogEvent {
@@ -18,14 +21,32 @@ export interface MockMatch {
   body?: Record<string, unknown>
 }
 
+export type ResponseMode = 'static' | 'sequence'
+
+export interface SequenceStep {
+  status: number
+  headers?: Record<string, string>
+  body: unknown
+  delay_ms?: number
+}
+
+export interface Sequence {
+  steps: SequenceStep[]
+  on_end: 'loop' | 'stay' | 'reset'
+  current_step?: number
+}
+
 export interface Mock {
   method: string
   path: string
   status: number
   body: unknown
+  headers?: Record<string, string>
   delay_ms?: number
   enabled: boolean
   match?: MockMatch
+  response_mode?: ResponseMode
+  sequence?: Sequence
 }
 
 export interface ServerInfo {

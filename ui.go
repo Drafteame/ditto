@@ -29,6 +29,9 @@ type LogEvent struct {
 	Status       int    `json:"status"`
 	DurationMs   int64  `json:"duration_ms"`
 	ResponseBody string `json:"response_body,omitempty"`
+	MockIndex    int    `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
+	SequenceStep int    `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
+	SequenceLen  int    `json:"sequence_len,omitempty"`
 }
 
 // EventBus broadcasts log events to connected SSE clients.
@@ -205,6 +208,16 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]any{"disabled_duplicates": disabled})
+			return
+		}
+
+		// POST /__ditto__/api/mocks/{index}/sequence/reset
+		if r.Method == http.MethodPost && len(parts) == 3 && parts[1] == "sequence" && parts[2] == "reset" {
+			if ok := store.ResetSequence(index); !ok {
+				http.Error(w, "mock not found or not a sequence", http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 

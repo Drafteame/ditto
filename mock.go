@@ -47,16 +47,40 @@ func (m Match) Equals(other Match) bool {
 }
 
 type Mock struct {
-	Method  string            `json:"method"`
-	Path    string            `json:"path"`
+	Method       string            `json:"method"`
+	Path         string            `json:"path"`
+	Status       int               `json:"status"`
+	Headers      map[string]string `json:"headers,omitempty"`
+	Body         json.RawMessage   `json:"body"`
+	RawBody      []byte            `json:"-"`
+	DelayMs      int               `json:"delay_ms,omitempty"`
+	Match        Match             `json:"match,omitempty"`
+	Enabled      bool              `json:"enabled"`
+	Source       string            `json:"source"`
+	ResponseMode string            `json:"response_mode,omitempty"` // "static" (default) | "sequence"
+	Sequence     *Sequence         `json:"sequence,omitempty"`
+}
+
+// Sequence lets a single mock return different responses on subsequent calls.
+// CurrentStep is in-memory only (not persisted to disk); it resets when the
+// server restarts. It is exposed over the wire so the UI can render the
+// current position, but writeMockFile uses its own struct that excludes it.
+type Sequence struct {
+	Steps       []SequenceStep `json:"steps"`
+	OnEnd       string         `json:"on_end"` // "loop" | "stay" | "reset"
+	CurrentStep int            `json:"current_step,omitempty"`
+}
+
+type SequenceStep struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body"`
-	RawBody []byte            `json:"-"`
 	DelayMs int               `json:"delay_ms,omitempty"`
-	Match   Match             `json:"match,omitempty"`
-	Enabled bool              `json:"enabled"`
-	Source  string            `json:"source"`
+}
+
+// IsSequence reports whether this mock should serve a sequence response.
+func (m *Mock) IsSequence() bool {
+	return m.ResponseMode == "sequence" && m.Sequence != nil && len(m.Sequence.Steps) > 0
 }
 
 type MockStore struct {
@@ -87,9 +111,18 @@ func (s *MockStore) Find(r *http.Request, reqBody []byte) *Mock {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var best *Mock
-	bestScore := -1
+	idx := s.findBestLocked(r, reqBody)
+	if idx < 0 {
+		return nil
+	}
+	return &s.mocks[idx]
+}
 
+// findBestLocked returns the index of the best matching enabled mock, or -1.
+// Caller must hold s.mu (read or write).
+func (s *MockStore) findBestLocked(r *http.Request, reqBody []byte) int {
+	bestIdx := -1
+	bestScore := -1
 	for i := range s.mocks {
 		m := &s.mocks[i]
 		if !m.Enabled {
@@ -103,11 +136,129 @@ func (s *MockStore) Find(r *http.Request, reqBody []byte) *Mock {
 		}
 		score := m.Match.Specificity()
 		if score > bestScore {
-			best = m
+			bestIdx = i
 			bestScore = score
 		}
 	}
-	return best
+	return bestIdx
+}
+
+// ResolvedResponse is a snapshot of what to send for one matched request.
+type ResolvedResponse struct {
+	Status    int
+	Headers   map[string]string
+	Body      []byte
+	DelayMs   int
+	MockIndex int
+	// Sequence-only fields; zero-valued when not a sequence response.
+	IsSequence   bool
+	SequenceStep int // 1-based step that was served; 0 for reset-fallback
+	SequenceLen  int
+}
+
+// MatchAndResolve finds the best matching mock and returns a response snapshot.
+// For sequence mocks, it advances the in-memory counter atomically.
+// Returns nil if no mock matches.
+func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedResponse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx := s.findBestLocked(r, reqBody)
+	if idx < 0 {
+		return nil
+	}
+	m := &s.mocks[idx]
+
+	if !m.IsSequence() {
+		return &ResolvedResponse{
+			Status:    m.Status,
+			Headers:   m.Headers,
+			Body:      m.RawBody,
+			DelayMs:   m.DelayMs,
+			MockIndex: idx,
+		}
+	}
+
+	seq := m.Sequence
+	n := len(seq.Steps)
+	cur := seq.CurrentStep
+
+	// On reset mode, once we've exhausted all steps, serve the static body
+	// once and then start over from step 0.
+	if seq.OnEnd == "reset" && cur >= n {
+		seq.CurrentStep = 0
+		return &ResolvedResponse{
+			Status:       m.Status,
+			Headers:      m.Headers,
+			Body:         m.RawBody,
+			DelayMs:      m.DelayMs,
+			MockIndex:    idx,
+			IsSequence:   true,
+			SequenceStep: 0, // fall-back call between cycles
+			SequenceLen:  n,
+		}
+	}
+
+	// Clamp in case state is out of range (e.g., steps shrank since last call).
+	if cur < 0 || cur >= n {
+		cur = 0
+		seq.CurrentStep = 0
+	}
+
+	step := seq.Steps[cur]
+	served := cur + 1 // 1-based for logging
+
+	next := cur + 1
+	switch seq.OnEnd {
+	case "stay":
+		if next >= n {
+			next = n - 1
+		}
+	case "reset":
+		// Let next reach n; the following call serves the static body and resets.
+	default: // "loop" and unknown modes
+		if next >= n {
+			next = 0
+		}
+	}
+	seq.CurrentStep = next
+
+	body := step.Body
+	if len(body) == 0 {
+		body = []byte("null")
+	}
+	status := step.Status
+	if status == 0 {
+		status = m.Status
+	}
+
+	return &ResolvedResponse{
+		Status:       status,
+		Headers:      step.Headers,
+		Body:         body,
+		DelayMs:      step.DelayMs,
+		MockIndex:    idx,
+		IsSequence:   true,
+		SequenceStep: served,
+		SequenceLen:  n,
+	}
+}
+
+// ResetSequence resets the in-memory counter of the sequence at the given index.
+// Returns false if the index is invalid or the mock is not a sequence.
+func (s *MockStore) ResetSequence(index int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if index < 0 || index >= len(s.mocks) {
+		return false
+	}
+	m := &s.mocks[index]
+	if m.Sequence == nil {
+		return false
+	}
+	m.Sequence.CurrentStep = 0
+	return true
 }
 
 func (s *MockStore) All() []Mock {
@@ -185,6 +336,13 @@ func (s *MockStore) Update(index int, mock Mock) ([]int, error) {
 	}
 	mock.RawBody = []byte(mock.Body)
 	mock.Enabled = s.mocks[index].Enabled
+
+	// Preserve in-memory sequence cursor across edits so callers aren't
+	// surprised by a reset mid-flow. If the step count shrank below the
+	// saved cursor, MatchAndResolve clamps it on the next call.
+	if mock.Sequence != nil && s.mocks[index].Sequence != nil {
+		mock.Sequence.CurrentStep = s.mocks[index].Sequence.CurrentStep
+	}
 
 	oldSource := s.mocks[index].Source
 	if mock.Source == "" {
@@ -281,20 +439,28 @@ func writeMockFile(dir string, mock Mock) error {
 	}
 
 	fileData := struct {
-		Method  string            `json:"method"`
-		Path    string            `json:"path"`
-		Status  int               `json:"status"`
-		Headers map[string]string `json:"headers,omitempty"`
-		Body    json.RawMessage   `json:"body"`
-		DelayMs int               `json:"delay_ms,omitempty"`
-		Match   *Match            `json:"match,omitempty"`
+		Method       string            `json:"method"`
+		Path         string            `json:"path"`
+		Status       int               `json:"status"`
+		Headers      map[string]string `json:"headers,omitempty"`
+		Body         json.RawMessage   `json:"body"`
+		DelayMs      int               `json:"delay_ms,omitempty"`
+		Match        *Match            `json:"match,omitempty"`
+		ResponseMode string            `json:"response_mode,omitempty"`
+		Sequence     *Sequence         `json:"sequence,omitempty"`
 	}{
-		Method:  mock.Method,
-		Path:    mock.Path,
-		Status:  mock.Status,
-		Headers: mock.Headers,
-		Body:    mock.Body,
-		DelayMs: mock.DelayMs,
+		Method:       mock.Method,
+		Path:         mock.Path,
+		Status:       mock.Status,
+		Headers:      mock.Headers,
+		Body:         mock.Body,
+		DelayMs:      mock.DelayMs,
+		ResponseMode: mock.ResponseMode,
+	}
+	if mock.Sequence != nil {
+		seqCopy := *mock.Sequence
+		seqCopy.CurrentStep = 0 // never persist in-memory cursor to disk
+		fileData.Sequence = &seqCopy
 	}
 	if !mock.Match.IsEmpty() {
 		fileData.Match = &mock.Match

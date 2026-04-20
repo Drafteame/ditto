@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type { LogEntry, Mock, ServerInfo, UpdateInfo } from './types'
+import { nextCursor } from './sequence'
 import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
 import * as api from './api'
@@ -54,6 +55,31 @@ export default function App() {
     useCallback((event) => {
       const entry: LogEntry = { ...event, id: String(++nextLogId) }
       setLogEntries(prev => [...prev, entry])
+
+      // Advance the local sequence counter so the sidebar badge stays in sync
+      // with the backend's in-memory cursor without a full refetch per request.
+      if (
+        event.type === 'MOCK' &&
+        event.sequence_step &&
+        event.sequence_len &&
+        typeof event.mock_index === 'number'
+      ) {
+        const idx = event.mock_index
+        const served = event.sequence_step
+        const len = event.sequence_len
+        setMocks(prev => {
+          const target = prev[idx]
+          if (!target?.sequence) return prev
+          const next = nextCursor(served, len, target.sequence.on_end)
+          if (target.sequence.current_step === next) return prev
+          const copy = prev.slice()
+          copy[idx] = {
+            ...target,
+            sequence: { ...target.sequence, current_step: next },
+          }
+          return copy
+        })
+      }
     }, []),
     useCallback(() => {
       setConnected(true)
