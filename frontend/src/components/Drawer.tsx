@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LogEntry, ServerInfo } from '../types'
-import { Alert, Bookmark, Check, Globe, X } from './icons'
+import { Alert, Bookmark, Check, Copy, Globe, X } from './icons'
 
 export const DRAWER_MIN_WIDTH = 340
 export const DRAWER_MAX_WIDTH = 720
@@ -90,9 +90,20 @@ export function Drawer({
   onSaveAsMock,
 }: DrawerProps) {
   const [tab, setTab] = useState<Tab>('response')
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleCopy = useCallback((text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied(false), 1500)
+    })
+  }, [])
 
   useEffect(() => {
     setTab('response')
+    setCopied(false)
   }, [entry.id])
 
   const handleDragStart = useCallback(
@@ -198,25 +209,42 @@ export function Drawer({
       <div className="drawer-body">
         {tab === 'response' &&
           (hasResponse ? (
-            <pre className="code">{prettyJson(entry.response_body)}</pre>
+            <div className="code-block">
+              <pre className="code">{prettyJson(entry.response_body)}</pre>
+              <button
+                type="button"
+                className={`copy-btn btn ghost icon${copied ? ' copied' : ''}`}
+                onClick={() => handleCopy(prettyJson(entry.response_body))}
+                title="Copy JSON"
+              >
+                {copied ? <Check size={13} /> : <Copy size={13} />}
+              </button>
+            </div>
           ) : (
             <div className="text-fg-3 font-sans text-[12px]">
               No response body captured for this request.
             </div>
           ))}
-        {tab === 'request' && (
-          <pre className="code">
-            {JSON.stringify(
-              {
-                method,
-                path: entry.path,
-                timestamp: entry.timestamp,
-              },
-              null,
-              2,
-            )}
-          </pre>
-        )}
+        {tab === 'request' && (() => {
+          const requestJson = JSON.stringify(
+            { method, path: entry.path, timestamp: entry.timestamp },
+            null,
+            2,
+          )
+          return (
+            <div className="code-block">
+              <pre className="code">{requestJson}</pre>
+              <button
+                type="button"
+                className={`copy-btn btn ghost icon${copied ? ' copied' : ''}`}
+                onClick={() => handleCopy(requestJson)}
+                title="Copy JSON"
+              >
+                {copied ? <Check size={13} /> : <Copy size={13} />}
+              </button>
+            </div>
+          )
+        })()}
         {tab === 'headers' && (
           <div className="text-fg-3 font-sans text-[12px]">
             Request and response headers aren't captured yet. Track issue{' '}

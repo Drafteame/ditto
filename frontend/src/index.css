@@ -829,6 +829,29 @@ svg {
   max-height: none;
 }
 
+.code-block {
+  position: relative;
+}
+
+.code-block .copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  width: 24px;
+  height: 24px;
+}
+
+.code-block:hover .copy-btn {
+  opacity: 1;
+}
+
+.code-block .copy-btn.copied {
+  opacity: 1;
+  color: var(--accent);
+}
+
 /* Match reason banner */
 .match-banner {
   display: flex;
