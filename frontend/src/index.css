@@ -1441,6 +1441,16 @@ svg {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 16%, transparent);
 }
+.seq-step.editing {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--warn) 18%, transparent);
+}
+.seq-step.active.editing {
+  border-color: var(--warn);
+  box-shadow:
+    0 0 0 3px color-mix(in oklch, var(--warn) 18%, transparent),
+    inset 0 0 0 1px var(--accent);
+}
 .seq-step .n {
   position: absolute;
   top: -10px;
@@ -1531,8 +1541,9 @@ svg {
   gap: 10px;
   padding: 12px;
   background: var(--bg-1);
-  border: 1px solid var(--line);
+  border: 1px solid var(--warn);
   border-radius: var(--r-md);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--warn) 14%, transparent);
 }
 .seq-step-editor .fld {
   display: flex;

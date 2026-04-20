@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { Mock, ResponseMode, SequenceStep } from '../types'
 import * as api from '../api'
 import { Alert, Check, Chevron, Plus, Refresh, Trash, X } from './icons'
@@ -217,7 +217,14 @@ export function MockEditorModal({
   const [sequenceOnEnd, setSequenceOnEnd] = useState(initial.sequenceOnEnd)
   const [sequenceCurrentStep, setSequenceCurrentStep] = useState(initial.sequenceCurrentStep)
   const [editingStepIndex, setEditingStepIndex] = useState<number | null>(null)
+  const stepEditorRef = useRef<HTMLDivElement | null>(null)
   const confirm = useConfirm()
+
+  useEffect(() => {
+    if (editingStepIndex !== null) {
+      stepEditorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [editingStepIndex])
 
   useEffect(() => {
     setMethod(initial.method)
@@ -534,9 +541,12 @@ export function MockEditorModal({
               <div className="seq-timeline">
                 {sequenceSteps.map((step, i) => {
                   const active = i === nextStepForDisplay
+                  const editing = i === editingStepIndex
                   return (
                     <Fragment key={i}>
-                      <div className={`seq-step ${active ? 'active' : ''}`}>
+                      <div
+                        className={`seq-step ${active ? 'active' : ''} ${editing ? 'editing' : ''}`}
+                      >
                         <span className="n">step {i + 1}</span>
                         <h4>
                           <span className="tag-type MOCK">{step.status}</span>
@@ -546,11 +556,11 @@ export function MockEditorModal({
                         <div className="row-actions">
                           <button
                             type="button"
-                            className="btn ghost"
+                            className={`btn ghost ${editing ? 'active' : ''}`}
                             style={{ flex: 1 }}
-                            onClick={() => setEditingStepIndex(i)}
+                            onClick={() => setEditingStepIndex(prev => (prev === i ? null : i))}
                           >
-                            Edit
+                            {editing ? 'Editing…' : 'Edit'}
                           </button>
                           <button
                             type="button"
@@ -575,7 +585,7 @@ export function MockEditorModal({
               </div>
 
               {editingStepIndex !== null && sequenceSteps[editingStepIndex] && (
-                <div className="seq-step-editor">
+                <div className="seq-step-editor" ref={stepEditorRef}>
                   <div className="fld">
                     <label>Status</label>
                     <input
