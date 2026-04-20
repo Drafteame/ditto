@@ -1,16 +1,16 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type { LogEntry, Mock, ServerInfo, UpdateInfo } from './types'
 import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
 import * as api from './api'
 import { Header } from './components/Header'
 import { UpdateBanner } from './components/UpdateBanner'
-import { Sidebar } from './components/Sidebar'
+import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
 import { LogPanel } from './components/LogPanel'
+import { Drawer } from './components/Drawer'
 import { MockEditorModal, createNewMockState, createEditMockState } from './components/MockEditorModal'
 import type { MockEditorState } from './components/MockEditorModal'
 import { QRModal } from './components/QRModal'
-import { Footer } from './components/Footer'
 import { ToastContainer } from './components/ToastContainer'
 
 let nextLogId = 0
@@ -29,6 +29,9 @@ export default function App() {
   const [logEntries, setLogEntries] = useState<LogEntry[]>([])
   const [connected, setConnected] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [drawerWidth, setDrawerWidth] = useState(480)
+  const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [modalState, setModalState] = useState<MockEditorState | null>(null)
   const [qrOpen, setQrOpen] = useState(false)
@@ -37,7 +40,6 @@ export default function App() {
   const isDesktop = useRef(isInsideWails()).current
   const isMobile = useRef(isMobileDevice()).current
 
-  // Load mocks and server info
   const loadMocks = useCallback(async () => {
     try {
       const data = await api.fetchMocks()
@@ -48,7 +50,6 @@ export default function App() {
     }
   }, [])
 
-  // SSE connection
   useSSE(
     useCallback((event) => {
       const entry: LogEntry = { ...event, id: String(++nextLogId) }
@@ -62,7 +63,6 @@ export default function App() {
     useCallback(() => loadMocks(), [loadMocks]),
   )
 
-  // Initial load
   useEffect(() => {
     loadMocks()
     api.fetchUpdateCheck().then(data => {
@@ -70,19 +70,18 @@ export default function App() {
     }).catch(() => {})
   }, [loadMocks])
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setModalState(null)
         setQrOpen(false)
+        setSelectedLogId(null)
       }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [])
 
-  // Actions
   const handleReloadMocks = useCallback(async () => {
     await api.reloadMocks()
     await loadMocks()
@@ -90,6 +89,7 @@ export default function App() {
 
   const handleClearLog = useCallback(() => {
     setLogEntries([])
+    setSelectedLogId(null)
   }, [])
 
   const handleSaveAsMock = useCallback((entry: LogEntry) => {
@@ -110,6 +110,11 @@ export default function App() {
     }
   }, [])
 
+  const selectedEntry = useMemo(
+    () => (selectedLogId ? logEntries.find(e => e.id === selectedLogId) ?? null : null),
+    [selectedLogId, logEntries],
+  )
+
   return (
     <>
       <Header
@@ -127,23 +132,38 @@ export default function App() {
         <UpdateBanner info={updateInfo} onDismiss={() => setUpdateInfo(null)} />
       )}
 
-      <main className="flex flex-1 overflow-hidden">
+      <main className="flex flex-1 overflow-hidden min-h-0">
+        {sidebarCollapsed && <CollapsedSidebarRail onExpand={() => setSidebarCollapsed(false)} />}
         <Sidebar
           open={sidebarOpen}
+          collapsed={sidebarCollapsed}
           mocks={mocks}
           serverInfo={serverInfo}
           onClose={() => setSidebarOpen(false)}
+          onCollapse={() => setSidebarCollapsed(true)}
           onMocksChanged={loadMocks}
           onEditMock={handleEditMock}
           onCreateMock={handleCreateMock}
           showToast={showToast}
         />
-        <LogPanel entries={logEntries} onSaveAsMock={handleSaveAsMock} />
+        <LogPanel
+          entries={logEntries}
+          selectedId={selectedLogId}
+          onSelect={setSelectedLogId}
+          onSaveAsMock={handleSaveAsMock}
+        />
+        {selectedEntry && (
+          <Drawer
+            entry={selectedEntry}
+            serverInfo={serverInfo}
+            width={drawerWidth}
+            onResize={setDrawerWidth}
+            onClose={() => setSelectedLogId(null)}
+            onSaveAsMock={handleSaveAsMock}
+          />
+        )}
       </main>
 
-      <Footer />
-
-      {/* Modals */}
       {modalState && (
         <MockEditorModal
           state={modalState}
