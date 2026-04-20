@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import type { Mock, ResponseMode, SequenceStep } from '../types'
 import * as api from '../api'
-import { Alert, Check, Chevron, Plus, Refresh, Trash, X } from './icons'
+import { Alert, Check, ChevronRight, Plus, Refresh, Trash, X } from './icons'
 import { useConfirm } from './ConfirmDialog'
 
 export interface SequenceStepDraft {
@@ -573,7 +573,7 @@ export function MockEditorModal({
                         </div>
                       </div>
                       <div className="seq-arrow">
-                        <Chevron size={18} />
+                        <ChevronRight size={18} />
                       </div>
                     </Fragment>
                   )

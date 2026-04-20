@@ -152,9 +152,8 @@ type ResolvedResponse struct {
 	MockIndex int
 	// Sequence-only fields; zero-valued when not a sequence response.
 	IsSequence   bool
-	SequenceStep int // 1-based step that was served
+	SequenceStep int // 1-based step that was served; 0 for reset-fallback
 	SequenceLen  int
-	SequenceEnd  string // "loop" | "stay" | "reset"
 }
 
 // MatchAndResolve finds the best matching mock and returns a response snapshot.
@@ -195,9 +194,8 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 			DelayMs:      m.DelayMs,
 			MockIndex:    idx,
 			IsSequence:   true,
-			SequenceStep: 0, // indicates the fall-back call
+			SequenceStep: 0, // fall-back call between cycles
 			SequenceLen:  n,
-			SequenceEnd:  seq.OnEnd,
 		}
 	}
 
@@ -208,23 +206,17 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 	}
 
 	step := seq.Steps[cur]
-	served := cur + 1 // 1-based
+	served := cur + 1 // 1-based for logging
 
-	// Advance counter for next call.
 	next := cur + 1
 	switch seq.OnEnd {
-	case "loop":
-		if next >= n {
-			next = 0
-		}
 	case "stay":
 		if next >= n {
 			next = n - 1
 		}
 	case "reset":
-		// Let it go to n; the next call will serve the static body and reset.
-	default:
-		// Unknown mode — default to loop behavior.
+		// Let next reach n; the following call serves the static body and resets.
+	default: // "loop" and unknown modes
 		if next >= n {
 			next = 0
 		}
@@ -249,7 +241,6 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 		IsSequence:   true,
 		SequenceStep: served,
 		SequenceLen:  n,
-		SequenceEnd:  seq.OnEnd,
 	}
 }
 

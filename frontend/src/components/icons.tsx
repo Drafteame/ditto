@@ -106,12 +106,6 @@ export const Sequence = (p: IconProps) => (
   </Svg>
 )
 
-export const Chevron = (p: IconProps) => (
-  <Svg {...p} strokeWidth="2">
-    <polyline points="9 6 15 12 9 18" />
-  </Svg>
-)
-
 export const QR = (p: IconProps) => (
   <Svg {...p}>
     <rect x="3" y="3" width="7" height="7" rx="1" />

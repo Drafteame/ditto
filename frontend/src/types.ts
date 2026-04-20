@@ -7,7 +7,6 @@ export interface LogEvent {
   duration_ms: number
   response_body?: string
   mock_index?: number
-  has_mock?: boolean
   sequence_step?: number
   sequence_len?: number
 }

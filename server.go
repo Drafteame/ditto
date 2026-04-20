@@ -180,7 +180,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				DurationMs:   duration,
 				ResponseBody: string(resolved.Body),
 				MockIndex:    resolved.MockIndex,
-				HasMock:      true,
 			}
 			if resolved.IsSequence {
 				event.SequenceStep = resolved.SequenceStep
