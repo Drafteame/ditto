@@ -100,6 +100,18 @@ export async function openInBrowser(): Promise<void> {
   }
 }
 
+export async function openUrl(url: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/open-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
+  } catch {
+    window.open(url, '_blank')
+  }
+}
+
 export async function waitForPort(port: number, maxAttempts = 30): Promise<void> {
   for (let i = 0; i < maxAttempts; i++) {
     try {

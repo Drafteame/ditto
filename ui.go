@@ -307,7 +307,7 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 			})
 			return
 		}
-		available := latest != "" && latest != version && version != "dev"
+		available := latest != "" && version != "dev" && isNewerVersion(latest, version)
 		json.NewEncoder(w).Encode(map[string]any{
 			"current":      version,
 			"latest":       latest,
@@ -351,6 +351,30 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 		}
 		dashURL := fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, info.Port)
 		openBrowser(dashURL)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Open an arbitrary URL in the system browser (used by the desktop app
+	// where target="_blank" doesn't escape the Wails webview).
+	mux.HandleFunc("/__ditto__/api/open-url", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			URL string `json:"url"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &req); err != nil || req.URL == "" {
+			http.Error(w, "url is required", http.StatusBadRequest)
+			return
+		}
+		// Only allow https URLs for safety
+		if !strings.HasPrefix(req.URL, "https://") && !strings.HasPrefix(req.URL, "http://") {
+			http.Error(w, "url must start with http:// or https://", http.StatusBadRequest)
+			return
+		}
+		openBrowser(req.URL)
 		w.WriteHeader(http.StatusOK)
 	})
 }
