@@ -23,9 +23,16 @@ export function useSearch(text: string) {
     return result
   }, [query, text])
 
+  // Reset to first match when the query changes, but NOT when text changes
+  // (editing the textarea while searching shouldn't reset or trigger navigation)
   useEffect(() => {
     setIdx(0)
-  }, [query, text])
+  }, [query])
+
+  // Clamp idx so it stays valid when matches shrink (e.g. text was edited)
+  useEffect(() => {
+    setIdx(prev => (prev < matches.length ? prev : Math.max(0, matches.length - 1)))
+  }, [matches.length])
 
   const go = useCallback(
     (dir: 1 | -1) => {

@@ -169,8 +169,9 @@ function getMatchPillCount(match: Mock['match']): number {
 }
 
 /**
- * Scrolls the textarea and its pre mirror to show charPos at the top of the
- * viewport. Uses line-counting (textareas have no per-character DOM nodes).
+ * Scrolls the textarea and its pre mirror to place charPos at ~1/3 from the
+ * top of the viewport. Derives line height from scrollHeight so CSS relative
+ * values (e.g. "normal") don't produce an inaccurate fallback.
  */
 function scrollToCharPos(
   ta: HTMLTextAreaElement | null,
@@ -179,8 +180,16 @@ function scrollToCharPos(
 ) {
   if (!ta) return
   const linesBefore = (ta.value.slice(0, charPos).match(/\n/g) ?? []).length
-  const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 20
-  const scrollTop = linesBefore * lineHeight
+  const totalLines = (ta.value.match(/\n/g) ?? []).length + 1
+  const style = getComputedStyle(ta)
+  const paddingTop = parseFloat(style.paddingTop) || 0
+  const paddingBottom = parseFloat(style.paddingBottom) || 0
+  // Measure actual pixel height per line from scrollHeight instead of relying on
+  // CSS lineHeight, which may be "normal" or a relative value that parseFloat misreads.
+  const contentHeight = ta.scrollHeight - paddingTop - paddingBottom
+  const lineHeight = totalLines > 1 ? contentHeight / totalLines : parseFloat(style.lineHeight) || 20
+  // Place the match at ~1/3 from the top so there's context above it.
+  const scrollTop = Math.max(0, paddingTop + linesBefore * lineHeight - ta.clientHeight / 3)
   ta.scrollTop = scrollTop
   if (pre) pre.scrollTop = scrollTop
 }
@@ -191,6 +200,9 @@ function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) 
   // Tracks whether the current idx change was triggered by an explicit go()
   // call (Enter / arrow buttons) vs. an automatic reset from query change.
   const explicitNavRef = useRef(false)
+  // Tracks the last query we scrolled to, so we can ignore match recalculations
+  // caused by the textarea value changing (not by the user typing a new query).
+  const lastScrolledQueryRef = useRef('')
 
   const search = useSearch(value)
   const { copied, handleCopy } = useCopy(value)
@@ -222,27 +234,34 @@ function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) 
     }
   }, [])
 
-  // Navigate whenever idx or matches change.
-  // - Explicit nav (Enter / ↑↓): focus + select + scroll to top
-  // - Auto nav (typing → idx reset to 0): scroll only, keep focus in search input
+  // Explicit navigation (Enter / ↑↓ buttons): focus + select + scroll.
+  // Only acts when goExplicit() set the flag — ignores changes caused by editing.
   useEffect(() => {
-    if (search.matches.length === 0) return
+    if (!explicitNavRef.current || search.matches.length === 0) return
+    explicitNavRef.current = false
     const start = search.matches[search.idx]
     const end = start + search.query.trim().length
-
-    if (explicitNavRef.current) {
-      explicitNavRef.current = false
-      requestAnimationFrame(() => {
-        const ta = textareaRef.current
-        if (!ta) return
-        ta.focus()
-        ta.setSelectionRange(start, end)
-        scrollToCharPos(ta, preRef.current, start)
-      })
-    } else {
-      scrollToCharPos(textareaRef.current, preRef.current, start)
-    }
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      // focus + setSelectionRange first (browser may scroll), then scrollToCharPos
+      // last so our position always wins — reversing this order lets setSelectionRange
+      // override our scroll.
+      ta.focus({ preventScroll: true })
+      ta.setSelectionRange(start, end)
+      scrollToCharPos(ta, preRef.current, start)
+    })
   }, [search.idx, search.matches, search.query])
+
+  // Query-change navigation: scroll to the first match only when the search
+  // query itself changes. We guard with a ref so that match recalculations
+  // caused by typing in the textarea (same query, different text) are ignored.
+  useEffect(() => {
+    if (lastScrolledQueryRef.current === search.query) return
+    lastScrolledQueryRef.current = search.query
+    if (!search.query.trim() || search.matches.length === 0) return
+    scrollToCharPos(textareaRef.current, preRef.current, search.matches[0])
+  }, [search.query, search.matches])
 
   // Wraps go() so the effect above knows it was an intentional navigation
   const goExplicit = useCallback(
@@ -267,14 +286,23 @@ function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) 
   const handleFormat = useCallback(() => {
     const text = value.trim()
     if (!text) return
+    // Save scroll before onChange so the viewport doesn't jump after reformatting.
+    const savedScroll = textareaRef.current?.scrollTop ?? 0
+    const restoreScroll = () =>
+      requestAnimationFrame(() => {
+        if (textareaRef.current) textareaRef.current.scrollTop = savedScroll
+        if (preRef.current) preRef.current.scrollTop = savedScroll
+      })
     try {
       onChange(JSON.stringify(JSON.parse(text), null, 2))
+      restoreScroll()
       return
     } catch {}
     try {
       // Strip trailing commas before } or ] and retry
       const cleaned = text.replace(/,(\s*[}\]])/g, '$1')
       onChange(JSON.stringify(JSON.parse(cleaned), null, 2))
+      restoreScroll()
     } catch {}
   }, [value, onChange])
 
