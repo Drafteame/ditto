@@ -163,10 +163,29 @@ export const ChevronRight = (p: IconProps) => (
   </Svg>
 )
 
+export const ChevronUp = (p: IconProps) => (
+  <Svg {...p} strokeWidth="2.5">
+    <polyline points="18 15 12 9 6 15" />
+  </Svg>
+)
+
+export const ChevronDown = (p: IconProps) => (
+  <Svg {...p} strokeWidth="2.5">
+    <polyline points="6 9 12 15 18 9" />
+  </Svg>
+)
+
 export const PanelLeft = (p: IconProps) => (
   <Svg {...p}>
     <rect x="3" y="3" width="18" height="18" rx="2" />
     <line x1="9" y1="3" x2="9" y2="21" />
+  </Svg>
+)
+
+export const Braces = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1" />
+    <path d="M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" />
   </Svg>
 )
 

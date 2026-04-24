@@ -112,6 +112,11 @@ svg {
   border-color: transparent;
   color: var(--fg-1);
 }
+.btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
 .btn.ghost:hover {
   background: var(--bg-2);
   color: var(--fg-0);
@@ -806,16 +811,35 @@ svg {
 
 .drawer-body {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   padding: 14px;
   font-family: var(--font-mono);
   font-size: 12px;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
+
+.code-block {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .drawer-body .code {
   background: var(--bg-code);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-body .code-pre {
   padding: 12px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -826,7 +850,67 @@ svg {
   tab-size: 2;
   margin: 0;
   word-break: break-word;
-  max-height: none;
+  display: block;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Search bar inside code block */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-3);
+}
+
+.search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 0 4px;
+  min-width: 0;
+}
+
+.search-input::placeholder {
+  color: var(--fg-3);
+}
+
+.search-counter {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  min-width: 32px;
+  text-align: center;
+}
+
+.search-counter.no-matches {
+  color: var(--err);
+}
+
+.search-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--line);
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+
+/* Match highlights */
+.match {
+  background: color-mix(in oklch, var(--accent) 25%, transparent);
+  border-radius: 2px;
+}
+
+.match.active {
+  background: color-mix(in oklch, var(--accent) 58%, transparent);
+  color: var(--fg-0);
 }
 
 /* Match reason banner */
@@ -1097,18 +1181,49 @@ svg {
   display: flex;
   flex-direction: column;
 }
+
+/* Overlay: textarea (in-flow, sets height) + pre (absolute, renders highlights) */
+.json-editor-overlay {
+  position: relative;
+}
+
 .json-editor textarea {
+  position: relative;
+  z-index: 1;
+  display: block;
   width: 100%;
   min-height: 220px;
+  max-height: 400px;
+  overflow-y: auto;
   background: transparent;
   border: 0;
-  color: var(--fg-0);
+  color: transparent;        /* text hidden — pre renders it */
+  caret-color: var(--fg-0);  /* cursor stays visible */
   padding: 12px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.65;
   outline: none;
   resize: vertical;
+  tab-size: 2;
+}
+
+/* Pre sits behind the textarea and shows colored text + match highlights */
+.json-editor-pre {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden; /* scroll is driven by the textarea */
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-0);
+  margin: 0;
   tab-size: 2;
 }
 .json-status {

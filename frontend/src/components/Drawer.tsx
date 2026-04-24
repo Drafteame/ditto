@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { LogEntry, ServerInfo } from '../types'
+import { CodeBlock } from './CodeBlock'
 import { Alert, Bookmark, Check, Globe, X } from './icons'
 
 export const DRAWER_MIN_WIDTH = 340
@@ -198,24 +199,20 @@ export function Drawer({
       <div className="drawer-body">
         {tab === 'response' &&
           (hasResponse ? (
-            <pre className="code">{prettyJson(entry.response_body)}</pre>
+            <CodeBlock text={prettyJson(entry.response_body)} />
           ) : (
             <div className="text-fg-3 font-sans text-[12px]">
               No response body captured for this request.
             </div>
           ))}
         {tab === 'request' && (
-          <pre className="code">
-            {JSON.stringify(
-              {
-                method,
-                path: entry.path,
-                timestamp: entry.timestamp,
-              },
+          <CodeBlock
+            text={JSON.stringify(
+              { method, path: entry.path, timestamp: entry.timestamp },
               null,
               2,
             )}
-          </pre>
+          />
         )}
         {tab === 'headers' && (
           <div className="text-fg-3 font-sans text-[12px]">
