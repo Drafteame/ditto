@@ -22,16 +22,17 @@ var webFS embed.FS
 
 // LogEvent represents a single request passing through Ditto.
 type LogEvent struct {
-	Timestamp    string `json:"timestamp"`
-	Type         string `json:"type"` // MOCK, PROXY, MISS
-	Method       string `json:"method"`
-	Path         string `json:"path"`
-	Status       int    `json:"status"`
-	DurationMs   int64  `json:"duration_ms"`
-	ResponseBody string `json:"response_body,omitempty"`
-	MockIndex    int    `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
-	SequenceStep int    `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
-	SequenceLen  int    `json:"sequence_len,omitempty"`
+	Timestamp      string              `json:"timestamp"`
+	Type           string              `json:"type"` // MOCK, PROXY, MISS
+	Method         string              `json:"method"`
+	Path           string              `json:"path"`
+	Status         int                 `json:"status"`
+	DurationMs     int64               `json:"duration_ms"`
+	ResponseBody   string              `json:"response_body,omitempty"`
+	RequestHeaders map[string][]string `json:"request_headers,omitempty"`
+	MockIndex      int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
+	SequenceStep   int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
+	SequenceLen    int                 `json:"sequence_len,omitempty"`
 }
 
 // EventBus broadcasts log events to connected SSE clients.

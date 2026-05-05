@@ -6,6 +6,7 @@ export interface LogEvent {
   status: number
   duration_ms: number
   response_body?: string
+  request_headers?: Record<string, string[]>
   mock_index?: number
   sequence_step?: number
   sequence_len?: number

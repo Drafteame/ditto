@@ -155,6 +155,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			r.Body = io.NopCloser(bytes.NewReader(reqBody))
 		}
 
+		// Snapshot client headers before proxying — ReverseProxy mutates
+		// r.Header (e.g. adds X-Forwarded-For), so we copy first to log
+		// the headers exactly as the client sent them.
+		reqHeaders := r.Header.Clone()
+
 		resolved := store.MatchAndResolve(r, reqBody)
 		if resolved != nil {
 			if resolved.DelayMs > 0 {
@@ -172,14 +177,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			w.Write(resolved.Body)
 
 			event := LogEvent{
-				Timestamp:    time.Now().Format("15:04:05"),
-				Type:         "MOCK",
-				Method:       r.Method,
-				Path:         r.URL.RequestURI(),
-				Status:       resolved.Status,
-				DurationMs:   duration,
-				ResponseBody: string(resolved.Body),
-				MockIndex:    resolved.MockIndex,
+				Timestamp:      time.Now().Format("15:04:05"),
+				Type:           "MOCK",
+				Method:         r.Method,
+				Path:           r.URL.RequestURI(),
+				Status:         resolved.Status,
+				DurationMs:     duration,
+				ResponseBody:   string(resolved.Body),
+				RequestHeaders: reqHeaders,
+				MockIndex:      resolved.MockIndex,
 			}
 			if resolved.IsSequence {
 				event.SequenceStep = resolved.SequenceStep
@@ -197,13 +203,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			duration := time.Since(proxyStart).Milliseconds()
 
 			event := LogEvent{
-				Timestamp:    time.Now().Format("15:04:05"),
-				Type:         "PROXY",
-				Method:       r.Method,
-				Path:         r.URL.RequestURI(),
-				Status:       capture.statusCode,
-				DurationMs:   duration,
-				ResponseBody: capture.body.String(),
+				Timestamp:      time.Now().Format("15:04:05"),
+				Type:           "PROXY",
+				Method:         r.Method,
+				Path:           r.URL.RequestURI(),
+				Status:         capture.statusCode,
+				DurationMs:     duration,
+				ResponseBody:   capture.body.String(),
+				RequestHeaders: reqHeaders,
 			}
 			logRequest(jsonLogs, event)
 			bus.Publish(event)
@@ -216,13 +223,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		w.Write([]byte(`{"error": "no mock found and no target configured"}`))
 
 		event := LogEvent{
-			Timestamp:    time.Now().Format("15:04:05"),
-			Type:         "MISS",
-			Method:       r.Method,
-			Path:         r.URL.RequestURI(),
-			Status:       502,
-			DurationMs:   duration,
-			ResponseBody: `{"error": "no mock found and no target configured"}`,
+			Timestamp:      time.Now().Format("15:04:05"),
+			Type:           "MISS",
+			Method:         r.Method,
+			Path:           r.URL.RequestURI(),
+			Status:         502,
+			DurationMs:     duration,
+			ResponseBody:   `{"error": "no mock found and no target configured"}`,
+			RequestHeaders: reqHeaders,
 		}
 		logRequest(jsonLogs, event)
 		bus.Publish(event)

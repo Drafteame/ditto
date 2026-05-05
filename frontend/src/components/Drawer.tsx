@@ -38,6 +38,18 @@ function prettyJson(raw: string | undefined): string {
   }
 }
 
+function formatHeaders(headers: Record<string, string[]> | undefined): string {
+  if (!headers) return ''
+  const names = Object.keys(headers).sort((a, b) => a.localeCompare(b))
+  const lines: string[] = []
+  for (const name of names) {
+    for (const value of headers[name]) {
+      lines.push(`${name}: ${value}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 function MatchBanner({ entry, target }: { entry: LogEntry; target: string }) {
   if (entry.type === 'MOCK') {
     return (
@@ -125,6 +137,7 @@ export function Drawer({
   const method = entry.method.toUpperCase()
   const hasResponse = !!entry.response_body?.trim()
   const target = serverInfo?.target ?? ''
+  const headersText = formatHeaders(entry.request_headers)
 
   return (
     <aside className="drawer" style={{ width }}>
@@ -214,15 +227,14 @@ export function Drawer({
             )}
           />
         )}
-        {tab === 'headers' && (
-          <div className="text-fg-3 font-sans text-[12px]">
-            Request and response headers aren't captured yet. Track issue{' '}
-            <code className="font-mono text-fg-1 bg-bg-code px-1 rounded-xs">
-              ditto/headers
-            </code>{' '}
-            for updates.
-          </div>
-        )}
+        {tab === 'headers' &&
+          (headersText ? (
+            <CodeBlock text={headersText} />
+          ) : (
+            <div className="text-fg-3 font-sans text-[12px]">
+              No request headers captured for this request.
+            </div>
+          ))}
       </div>
     </aside>
   )
