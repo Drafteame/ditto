@@ -535,39 +535,39 @@ type schemaPackMeta struct {
 	Version string
 }
 
-func schemaPackMetadataFromManifest(root string) (schemaPackManifest, error) {
+func schemaPackMetadataFromManifest(root string) (schemaPackManifest, []byte, error) {
 	path := filepath.Join(root, "manifest.json")
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return schemaPackManifest{}, nil
+		return schemaPackManifest{}, nil, nil
 	}
 	if err != nil {
-		return schemaPackManifest{}, err
+		return schemaPackManifest{}, nil, err
 	}
 	defer file.Close()
 	data, err := readLimited(file, maxManifestBytes, "manifest.json")
 	if err != nil {
-		return schemaPackManifest{}, err
+		return schemaPackManifest{}, nil, err
 	}
 	var manifest schemaPackManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return schemaPackManifest{}, fmt.Errorf("invalid manifest.json: %w", err)
+		return schemaPackManifest{}, nil, fmt.Errorf("invalid manifest.json: %w", err)
 	}
 	if manifest.ManifestVersion == 0 {
-		return schemaPackManifest{}, fmt.Errorf("manifest.json requires manifest_version: 1")
+		return schemaPackManifest{}, nil, fmt.Errorf("manifest.json requires manifest_version: 1")
 	}
 	if manifest.ManifestVersion != 1 {
-		return schemaPackManifest{}, fmt.Errorf("unsupported manifest_version %d (expected 1)", manifest.ManifestVersion)
+		return schemaPackManifest{}, nil, fmt.Errorf("unsupported manifest_version %d (expected 1)", manifest.ManifestVersion)
 	}
-	return manifest, nil
+	return manifest, data, nil
 }
 
 func schemaPackMetadata(root, fallbackName string) (schemaPackMeta, error) {
-	manifest, err := schemaPackMetadataFromManifest(root)
+	manifest, manifestData, err := schemaPackMetadataFromManifest(root)
 	if err != nil {
 		return schemaPackMeta{}, err
 	}
-	contentID, err := contentHashPackID(root)
+	contentID, err := contentHashPackID(root, manifestData)
 	if err != nil {
 		return schemaPackMeta{}, err
 	}
@@ -588,7 +588,7 @@ func schemaPackMetadata(root, fallbackName string) (schemaPackMeta, error) {
 	return schemaPackMeta{ID: id, Name: name, Version: manifest.Version}, nil
 }
 
-func contentHashPackID(root string) (string, error) {
+func contentHashPackID(root string, manifestData []byte) (string, error) {
 	protos, err := protoFiles(root)
 	if err != nil {
 		return "", err
@@ -597,13 +597,11 @@ func contentHashPackID(root string) (string, error) {
 		return "", fmt.Errorf("no .proto files found")
 	}
 	hash := sha256.New()
-	if manifest, err := readOptionalManifest(root); err == nil && len(manifest) > 0 {
+	if len(manifestData) > 0 {
 		hash.Write([]byte("manifest.json"))
 		hash.Write([]byte{0})
-		hash.Write(manifest)
+		hash.Write(manifestData)
 		hash.Write([]byte{0})
-	} else if err != nil && !os.IsNotExist(err) {
-		return "", err
 	}
 	for _, rel := range protos {
 		hash.Write([]byte(rel))
@@ -616,15 +614,6 @@ func contentHashPackID(root string) (string, error) {
 		hash.Write([]byte{0})
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-func readOptionalManifest(root string) ([]byte, error) {
-	file, err := os.Open(filepath.Join(root, "manifest.json"))
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	return readLimited(file, maxManifestBytes, "manifest.json")
 }
 
 func copyFiles(src, dest *protoregistry.Files) error {
