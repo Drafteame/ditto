@@ -84,14 +84,15 @@ type ServerConfig struct {
 
 // Server holds the running server state.
 type Server struct {
-	Mux      *http.ServeMux
-	Store    *MockStore
-	Bus      *EventBus
-	ProxyMgr *ProxyManager
-	Info     ServerInfo
-	Config   ServerConfig
-	CertPath string
-	KeyPath  string
+	Mux       *http.ServeMux
+	Store     *MockStore
+	Bus       *EventBus
+	ProxyMgr  *ProxyManager
+	SocketHub *SocketHub
+	Info      ServerInfo
+	Config    ServerConfig
+	CertPath  string
+	KeyPath   string
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -106,6 +107,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	bus := NewEventBus()
 	proxyMgr := NewProxyManager(cfg.Target)
+	jsonLogs := cfg.JSONLogs
+	socketHub := NewSocketHub(bus, jsonLogs)
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
@@ -132,12 +135,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	RegisterUI(mux, store, bus, proxyMgr, info, cfg.ServeUI)
-
-	jsonLogs := cfg.JSONLogs
+	RegisterSocketRoutes(mux, socketHub)
 
 	// Main proxy/mock handler
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/__ditto__/") {
+			return
+		}
+		if IsWebSocketRequest(r) {
+			socketHub.ServeHTTP(w, r)
 			return
 		}
 
@@ -237,14 +243,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	})
 
 	return &Server{
-		Mux:      mux,
-		Store:    store,
-		Bus:      bus,
-		ProxyMgr: proxyMgr,
-		Info:     info,
-		Config:   cfg,
-		CertPath: certPath,
-		KeyPath:  keyPath,
+		Mux:       mux,
+		Store:     store,
+		Bus:       bus,
+		ProxyMgr:  proxyMgr,
+		SocketHub: socketHub,
+		Info:      info,
+		Config:    cfg,
+		CertPath:  certPath,
+		KeyPath:   keyPath,
 	}, nil
 }
 

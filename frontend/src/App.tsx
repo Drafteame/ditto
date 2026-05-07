@@ -7,10 +7,12 @@ import * as api from './api'
 import { useAppUiStore } from './stores/useAppUiStore'
 import { useLogStore } from './stores/useLogStore'
 import { useMockStore } from './stores/useMockStore'
+import { useSocketStore } from './stores/useSocketStore'
 import { Header } from './components/Header'
 import { UpdateBanner } from './components/UpdateBanner'
 import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
 import { LogPanel, LOG_SEARCH_INPUT_ID } from './components/LogPanel'
+import { SocketPanel } from './components/SocketPanel'
 import { Drawer } from './components/Drawer'
 import { MockEditorModal, createNewMockState, createEditMockState } from './components/MockEditorModal'
 import { QRModal } from './components/QRModal'
@@ -53,6 +55,7 @@ export default function App() {
   const {
     sidebarOpen,
     sidebarCollapsed,
+    activeView,
     drawerWidth,
     updateInfo,
     modalState,
@@ -65,9 +68,11 @@ export default function App() {
     setUpdateInfo,
     setModalState,
     setQrOpen,
+    setActiveView,
   } = useAppUiStore(useShallow(state => ({
     sidebarOpen: state.sidebarOpen,
     sidebarCollapsed: state.sidebarCollapsed,
+    activeView: state.activeView,
     drawerWidth: state.drawerWidth,
     updateInfo: state.updateInfo,
     modalState: state.modalState,
@@ -80,6 +85,18 @@ export default function App() {
     setUpdateInfo: state.setUpdateInfo,
     setModalState: state.setModalState,
     setQrOpen: state.setQrOpen,
+    setActiveView: state.setActiveView,
+  })))
+  const {
+    connectedClients,
+    socketClientsLoading,
+    socketClientsError,
+    loadSocketClients,
+  } = useSocketStore(useShallow(state => ({
+    connectedClients: state.connectedClients,
+    socketClientsLoading: state.loading,
+    socketClientsError: state.error,
+    loadSocketClients: state.loadClients,
   })))
   const { toasts, showToast } = useToast()
 
@@ -90,21 +107,29 @@ export default function App() {
     useCallback((event) => {
       appendLogEvent(event)
       advanceSequenceCursor(event)
-    }, [advanceSequenceCursor, appendLogEvent]),
+      if (event.type === 'SOCKET') {
+        loadSocketClients()
+      }
+    }, [advanceSequenceCursor, appendLogEvent, loadSocketClients]),
     useCallback(() => {
       setConnected(true)
       loadMocks()
-    }, [loadMocks, setConnected]),
+      loadSocketClients()
+    }, [loadMocks, loadSocketClients, setConnected]),
     useCallback(() => setConnected(false), [setConnected]),
-    useCallback(() => loadMocks(), [loadMocks]),
+    useCallback(() => {
+      loadMocks()
+      loadSocketClients()
+    }, [loadMocks, loadSocketClients]),
   )
 
   useEffect(() => {
     loadMocks()
+    loadSocketClients()
     api.fetchUpdateCheck().then(data => {
       if (data.available) setUpdateInfo(data)
     }).catch(() => {})
-  }, [loadMocks, setUpdateInfo])
+  }, [loadMocks, loadSocketClients, setUpdateInfo])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -210,13 +235,44 @@ export default function App() {
           onCreateMock={handleCreateMock}
           showToast={showToast}
         />
-        <LogPanel
-          entries={logEntries}
-          serverInfo={serverInfo}
-          selectedId={selectedLogId}
-          onSelect={selectLog}
-          onSaveAsMock={handleSaveAsMock}
-        />
+        <section className="flex-1 flex flex-col min-w-0 min-h-0">
+          <div className="main-tabs">
+            <button
+              type="button"
+              className={activeView === 'requests' ? 'active' : ''}
+              onClick={() => setActiveView('requests')}
+            >
+              Requests
+            </button>
+            <button
+              type="button"
+              className={activeView === 'sockets' ? 'active' : ''}
+              onClick={() => setActiveView('sockets')}
+            >
+              Sockets
+              <span className="c">{connectedClients.length}</span>
+            </button>
+          </div>
+          {activeView === 'requests' ? (
+            <LogPanel
+              entries={logEntries}
+              serverInfo={serverInfo}
+              selectedId={selectedLogId}
+              onSelect={selectLog}
+              onSaveAsMock={handleSaveAsMock}
+            />
+          ) : (
+            <SocketPanel
+              clients={connectedClients}
+              entries={logEntries}
+              serverInfo={serverInfo}
+              loading={socketClientsLoading}
+              error={socketClientsError}
+              onRefresh={loadSocketClients}
+              showToast={showToast}
+            />
+          )}
+        </section>
         {selectedEntry && (
           <Drawer
             entry={selectedEntry}

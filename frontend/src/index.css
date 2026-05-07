@@ -491,6 +491,53 @@ svg {
   border-bottom: 1px solid var(--line);
   background: var(--bg-1);
 }
+
+.main-tabs {
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.main-tabs button {
+  height: 26px;
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 12px;
+}
+.main-tabs button:hover {
+  color: var(--fg-0);
+  background: var(--bg-2);
+}
+.main-tabs button.active {
+  color: var(--fg-0);
+  background: var(--bg-3);
+}
+.main-tabs .c {
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+}
 .log-title {
   font-size: 12px;
   font-weight: 600;
@@ -584,6 +631,21 @@ svg {
   background: color-mix(in oklch, var(--miss) 18%, var(--bg-4));
   color: var(--miss);
   box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--miss) 35%, transparent);
+}
+.seg-type button.t-SOCKET {
+  color: var(--accent);
+}
+.seg-type button.t-SOCKET .c {
+  color: var(--accent);
+  opacity: 0.7;
+}
+.seg-type button.t-SOCKET:hover {
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+.seg-type button.t-SOCKET.active {
+  background: color-mix(in oklch, var(--accent) 18%, var(--bg-4));
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 35%, transparent);
 }
 
 .filter-input {
@@ -690,6 +752,20 @@ svg {
   color: var(--miss);
   background: color-mix(in oklch, var(--miss) 14%, transparent);
 }
+.tag-type.SOCKET {
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+}
+
+.method.CONNECT,
+.method.DISCONNECT,
+.method.SUBSCRIBE,
+.method.UNSUBSCRIBE,
+.method.DISPATCH,
+.method.ERROR {
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+}
 
 .status-200,
 .status-201,
@@ -704,6 +780,264 @@ svg {
 }
 .status-5 {
   color: var(--err);
+}
+
+/* =========================================================
+   Socket panel
+   ========================================================= */
+.socket-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-0);
+}
+.socket-head {
+  height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.socket-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-0);
+  font-weight: 700;
+}
+.socket-count {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+}
+.socket-url {
+  min-width: 0;
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.socket-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(360px, 1.4fr);
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.socket-clients,
+.socket-dispatcher,
+.socket-events {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.socket-clients,
+.socket-dispatcher {
+  padding: 12px;
+}
+.panel-label {
+  margin-bottom: 10px;
+  color: var(--fg-3);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.socket-empty {
+  padding: 18px 10px;
+  color: var(--fg-3);
+  text-align: center;
+  font-size: 12px;
+}
+.socket-empty.compact {
+  padding: 28px 10px;
+}
+.socket-error {
+  margin-bottom: 8px;
+  color: var(--err);
+  font-size: 12px;
+}
+.socket-client-row {
+  padding: 9px 0;
+  border-top: 1px solid color-mix(in oklch, var(--line) 65%, transparent);
+}
+.socket-client-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.client-id {
+  color: var(--fg-0);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.client-adapter {
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.client-remote {
+  margin-top: 3px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.client-subs {
+  margin-top: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.sub {
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  color: var(--fg-1);
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.empty-sub {
+  color: var(--fg-3);
+}
+.socket-form-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 150px;
+  gap: 10px;
+}
+.socket-form-row label,
+.socket-json-label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+.socket-form-row label span,
+.socket-json-label span {
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+.socket-form-row .input,
+.socket-form-row .select {
+  width: 100%;
+}
+.socket-json-label {
+  margin-top: 10px;
+}
+.socket-json {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--bg-code);
+  color: var(--fg-0);
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.socket-json:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 20%, transparent);
+}
+.socket-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+.socket-events {
+  margin: 12px;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px;
+}
+.socket-event-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid color-mix(in oklch, var(--line) 65%, transparent);
+  font-family: var(--font-mono);
+}
+.socket-event-row {
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: 76px 108px minmax(120px, 1fr) 56px minmax(160px, 1fr);
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid color-mix(in oklch, var(--line) 55%, transparent);
+  color: var(--fg-1);
+  font-size: 11.5px;
+}
+.socket-event-row .time,
+.socket-event-row .status {
+  color: var(--fg-3);
+}
+.socket-event-row .method {
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  color: var(--accent);
+  background: transparent;
+}
+.socket-event-row .path,
+.socket-event-row .payload {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.socket-event-row .payload {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--fg-2);
+}
+
+@media (max-width: 900px) {
+  .socket-grid {
+    grid-template-columns: 1fr;
+  }
+  .socket-form-row {
+    grid-template-columns: 1fr;
+  }
+  .socket-event-row {
+    grid-template-columns: 70px 96px minmax(120px, 1fr) 44px;
+  }
+  .socket-event-row .payload {
+    display: none;
+  }
 }
 
 /* =========================================================

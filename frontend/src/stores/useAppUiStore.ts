@@ -2,13 +2,17 @@ import { create } from 'zustand'
 import type { MockEditorState } from '../components/MockEditorModal'
 import type { UpdateInfo } from '../types'
 
+type MainView = 'requests' | 'sockets'
+
 interface AppUiStore {
+  activeView: MainView
   sidebarOpen: boolean
   sidebarCollapsed: boolean
   drawerWidth: number
   updateInfo: UpdateInfo | null
   modalState: MockEditorState | null
   qrOpen: boolean
+  setActiveView: (view: MainView) => void
   setSidebarOpen: (open: boolean) => void
   toggleSidebarOpen: () => void
   setSidebarCollapsed: (collapsed: boolean) => void
@@ -20,6 +24,7 @@ interface AppUiStore {
 }
 
 export const useAppUiStore = create<AppUiStore>((set) => ({
+  activeView: 'requests',
   sidebarOpen: false,
   sidebarCollapsed: false,
   drawerWidth: 480,
@@ -27,6 +32,7 @@ export const useAppUiStore = create<AppUiStore>((set) => ({
   modalState: null,
   qrOpen: false,
 
+  setActiveView: (activeView) => set({ activeView }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   toggleSidebarOpen: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),

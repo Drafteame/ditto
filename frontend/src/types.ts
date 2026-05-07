@@ -1,6 +1,6 @@
 export interface LogEvent {
   timestamp: string
-  type: 'MOCK' | 'PROXY' | 'MISS'
+  type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET'
   method: string
   path: string
   status: number
@@ -75,4 +75,22 @@ export interface Toast {
   id: string
   message: string
   kind?: 'warn'
+}
+
+export interface SocketClient {
+  id: string
+  adapter: 'raw' | 'appsync' | string
+  remote_addr: string
+  connected_at: string
+  subscriptions: string[]
+}
+
+export interface SocketClientsResponse {
+  clients: SocketClient[]
+}
+
+export interface SocketDispatchRequest {
+  channel: string
+  payload: unknown
+  adapter?: 'raw' | 'appsync' | ''
 }
