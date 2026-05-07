@@ -154,20 +154,46 @@ Collapsible tree view for the mock list sidebar, grouping mocks by path segments
 - Bulk actions on groups: enable/disable all mocks under a path prefix
 - Applies to the mock sidebar only — the request log stays chronological
 
+### v1.8–v1.x — WebSocket mocking
+
+Full-blown WebSocket mocking layer: send arbitrary events to a connected app, record real backend traffic, replay it (modified or not), and bundle everything into scenarios.
+
+Designed to keep Ditto **agnostic to any specific business or domain** — Protobuf schemas, recordings, and scenarios all live as user-loadable artifacts (schema packs, collections), never hardcoded.
+
+Capabilities, in incremental order:
+
+- **Generic WS server + protocol adapter**: pluggable adapters (AppSync, Socket.IO, raw JSON) so any app's WS protocol can be supported.
+- **Manual event dispatch**: send arbitrary events from the UI to specific channels.
+- **Schema packs**: load `.proto` files at runtime (dynamic descriptors, no codegen). UI shows type dropdown + JSON editor with schema-aware autocomplete; Ditto serializes to Protobuf at dispatch.
+- **Event templates**: save reusable parameterized events (`{{ticketId}}`, `{{userId}}`, etc.).
+- **Event sequences**: timed event timelines with transport controls (play/pause/scrub/speed).
+- **Per-channel modes**: each channel can be `mock`, `live` (passthrough to real backend), `record`, or `mixed`.
+- **Recordings**: capture real WS sessions to disk, then edit, splice, and replay.
+- **Scenarios** (extends v1.6): combine HTTP mocks + sequences + channel modes + HTTP→Socket triggers into one atomic activation. Lets you simulate complete flows (e.g. a full sports match, a casino session) by composition, with no domain-specific code.
+
+See [docs/WEBSOCKET_MOCKING_PLAN.md](WEBSOCKET_MOCKING_PLAN.md) for the full milestone-by-milestone plan.
+
+### v1.9 — Ditto Collections (`.dittopack`)
+
+Shareable, versioned bundles of Ditto configuration. Like Postman Collections, but for everything Ditto manages.
+
+- Bundle format: zip with `manifest.json` (with `schemaVersion`) + structured folders (`mocks/`, `scenarios/`, `sequences/`, `descriptors/`, `recordings/`).
+- Export granularity: full config, individual scenario (with all referenced dependencies), schema pack alone, or single mock / sequence.
+- Import with conflict resolution: per-item `git`-style diff with skip / overwrite / rename / merge options.
+- Designed in tandem with the WebSocket plan — every artifact produced from v1.6 onwards is bundle-compatible by construction.
+- Replaces the older "Import/export" and "Team sharing" backlog items, which are unified under this single mechanism.
+
 ### v2.0 — Stable release
 
-Bundle v1.1–v1.7 as the second major release. The milestone:
+Bundle v1.1–v1.9 as the second major release. The milestone:
 
-> **Ditto is a native desktop product with polished UX, advanced mocking (sequences + scenarios), and a scalable mock management UI.**
+> **Ditto is a native desktop product with polished UX, advanced mocking (HTTP + WebSocket, with sequences, scenarios, and recordings), and a portable Collections format for sharing setups across teams.**
 
 ---
 
 ## Backlog
 
 Features not currently prioritized. Will be re-evaluated after v1.3.
-
-### WebSocket support
-- **WebSocket logging & inspection**: capture WebSocket connections and frame-level messages. Needs careful UX planning — dedicated tab, filtering, and throttling to handle high-volume WS traffic without flooding the UI. Definition pending.
 
 ### Traffic inspection & debugging
 - **Breakpoints**: pause a request mid-flight, inspect/modify body and headers, then forward or reject. Like Charles Proxy's breakpoint feature.
@@ -182,11 +208,10 @@ Features not currently prioritized. Will be re-evaluated after v1.3.
 - **Failure injection**: random 500s, timeouts, connection resets for resilience testing.
 
 ### Collaboration
-- **Import/export**: import from HAR files, Postman collections, or OpenAPI specs. Export scenarios to share with teammates.
-- **Team sharing**: export/import full Ditto configs (mocks + scenarios) so the whole team runs the same setup.
+- **External format imports**: import from HAR files, Postman collections, or OpenAPI specs into Ditto's native artifacts. (Export and team sharing are covered by v1.9 — Ditto Collections.)
 
 ### Distribution & install
-- **Record mode**: bulk-capture all proxied responses as mock files automatically.
+- **Record mode** (HTTP): bulk-capture all proxied HTTP responses as mock files automatically. (WS recording is covered by v1.8.)
 - **Homebrew tap**: `brew install draftea/tap/ditto` for one-line install on macOS.
 - **Code signing + notarization**: Apple Developer Program signing to remove the Gatekeeper warning on first launch.
 - **Auto-update mechanism**: check for new versions and prompt to update in place.
