@@ -118,6 +118,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Layout.SequencesDir == "" {
 		return nil, fmt.Errorf("server config layout with sequences dir is required")
 	}
+	if cfg.Layout.AdapterProfilesDir == "" {
+		return nil, fmt.Errorf("server config layout with adapter profiles dir is required")
+	}
 
 	store := NewMockStore(cfg.MocksDir)
 	if err := store.Load(); err != nil {
@@ -140,6 +143,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
+	}
+	if err := LoadAdapterProfiles(cfg.Layout.AdapterProfilesDir); err != nil {
+		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
 	}
 	playerBroadcaster := NewPlayerBroadcaster()
 	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster, nil)

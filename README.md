@@ -57,6 +57,8 @@ Ditto can also stand in for your app's WebSocket backend. The minimum to start m
 3. **Pick a protocol adapter.** Choose a built-in (`raw` for plain JSON, `appsync` for AWS AppSync Events) or any **adapter profile** loaded from `adapter_profiles/` (e.g. `appsync-draftea` ships as a default for AppSync backends with a Draftea-style custom envelope). Profiles are JSON config files that customise envelope shape and type aliases per backend with no Go code — see the [Adapter profiles section](WEBSOCKET_MOCKING_PLAN.md#adapter-profiles) of the plan. A visual editor for profiles is planned (M9 in the roadmap).
 4. **Dispatch an event.** Select a channel the client is subscribed to, write the JSON payload, and click **Dispatch**. The client receives it immediately.
 
+Default adapter profiles are seeded once and then treated as user-owned files. To regenerate the bundled default after removing or renaming it, move custom profile JSON files aside, delete `adapter_profiles/.seeded`, and restart Ditto.
+
 That's enough to send arbitrary events to a connected app. The features below are optional layers on top:
 
 - **Protobuf payloads** — upload a `.proto` schema pack from the Sockets tab. Pick a type from the dropdown and edit JSON with schema-aware autocomplete; Ditto serializes to Protobuf at dispatch time. No codegen.

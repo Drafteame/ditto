@@ -277,7 +277,7 @@ func TestAppSyncWrapsBinaryPayloadAsBase64(t *testing.T) {
 		ContentType: "application/x-protobuf",
 		TypeName:    "ditto.test.ScoreEvent",
 	}
-	msg, err := AppSyncAdapter{}.WrapData(payload, "sub-1")
+	msg, err := AppSyncAdapter{}.WrapData(payload, "sub-1", "/test")
 	if err != nil {
 		t.Fatalf("WrapData() error = %v", err)
 	}

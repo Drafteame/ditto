@@ -223,6 +223,8 @@ Implementation notes:
 - Per-channel modes (config persisted): `mock` (default), `live`, `record`, `mixed` (live + permits additional injection).
 - `Recorder`: when a channel is in `record` mode, persist each incoming event with relative timestamp to `recordings/{name}/{channel}.jsonl`.
 - Decode to JSON using schema registry if a descriptor exists; otherwise store raw bytes + base64.
+- Adapter-profile recordings use a profile-aware envelope decoder. Store the raw frame plus the decoded inner payload; replay re-wraps through the current adapter profile so edited events still flow through `WrapData`. Before implementation, write an ADR for the recording decoder strategy (heuristic per base adapter vs explicit inverse templates vs raw-frame-first hybrid).
+- Live upstream URL is server-level config (`--target` / saved target), not part of adapter profiles. If a backend later needs custom upgrade headers, add profile-level `upgrade_headers` separately.
 - **Throttling for high-volume traffic.** Until M4 the user was the rate limiter (manual dispatch, sequences). Live mode and recording introduce uncontrolled upstream rates, so this milestone owns the throttling story:
   - **UI log coalescing.** SOCKET frames in the live event log coalesce per channel when they exceed a threshold (default 20/sec) into a single `LogEvent` summarising the burst (e.g. `"42 frames in 1s"`). Individual frames remain inspectable on demand from the recording or a per-channel detail view.
   - **Visible downstream backpressure.** When a connected client's `send` queue overflows in `enqueue` (`socket.go`), drops surface in the Sockets tab as a per-client counter instead of being silently discarded.
@@ -272,6 +274,7 @@ Implementation notes:
   }
   ```
 
+- Scenarios declare profile dependencies up front, e.g. `requires: { "adapter_profiles": ["appsync-draftea"] }`, so activation can fail clearly before dispatching if a profile is missing.
 - Activation: disables conflicting mocks/channels, enables the scenario's, arms triggers.
 - HTTP→Socket triggers: when an HTTP request matches, Ditto fires a sequence. This solves the common pattern "the backend emits a socket event when it receives request X".
 - ADR: [Fire And Forget For HTTP Triggers](docs/adr/0002-fire-and-forget-for-http-triggers.md).
@@ -294,6 +297,8 @@ This milestone delivers **"simulate a full session"** without any session-specif
   - Schema pack alone
   - Individual mock / sequence
 - Import with conflict resolution UI: per conflicting item, show a `git`-style diff + skip / overwrite / rename / merge options.
+- Adapter profile conflicts key by `name + manifest_version`. Same name/version applies cleanly; different versions require explicit user diff/choice.
+- Adapter profile seed markers are runtime state and must not be exported. Revisit moving the marker out of `adapter_profiles/` when bundle import/export defines which state files are packaged.
 - Persist manifest format with `schemaVersion` for future compatibility.
 - ADR: [Bundle ID Stability Policy](docs/adr/0003-bundle-id-stability-policy.md).
 
@@ -309,6 +314,7 @@ This milestone delivers **"simulate a full session"** without any session-specif
 - **Live preview pane**: pick a sample subscription ID, type, and payload — see exactly what frame will be sent on the wire as you edit.
 - **Validation**: known variables are recognised, missing/typo'd vars flagged, the rendered output is JSON-validated, dry-run dispatch against a connected client is available.
 - **CRUD via REST**: `POST/PUT/DELETE /__ditto__/api/socket/adapter-profiles`. New or edited profiles persist to `adapter_profiles/` and re-register at runtime without a restart.
+- **Runtime reload**: profile writes validate first, then atomically update the adapter registry for new connections/dispatches.
 - **Reference profiles**: ship a small library (vanilla AppSync, Pusher-style, Socket.IO-style) so first-time users have a starting point.
 
 **Done when:** a non-technical user opens the dashboard, picks a starting reference profile, edits envelope and aliases visually, sees a live preview that matches their backend's actual frame, saves, and dispatches successfully without ever opening a JSON file.
@@ -342,7 +348,11 @@ Example: `adapter_profiles/appsync-draftea.json` (shipped as a seeded default).
     "appsync.statsinfo.StatsRealtimePayloadDto": "statsInfo",
     "appsync.livestatsinfo.LiveStatEventDto": "liveStatsInfo",
     "appsync.livestatsinfo.LiveStatsEventDto": "liveStatsInfoBatch",
-    "appsync.earlycashoutinfo.EarlyCashoutEventDto": "ticketCashoutInfo"
+    "appsync.earlycashoutinfo.EarlyCashoutEventDto": "ticketCashoutInfo",
+    "appsync.ticketinfo.TicketEventDto": "ticketInfo",
+    "appsync.ticketbetinfo.TicketBetEventDto": "ticketBetInfo",
+    "appsync.livetableupdate.LiveTableUpdate": "liveTableUpdate",
+    "appsync.livetableupdate.LiveTableUpdates": "liveTableUpdates"
   }
 }
 ```
@@ -351,19 +361,21 @@ Fields:
 
 - `manifest_version` (required, int): starts at `1`.
 - `name` (required): unique adapter name. Becomes the value of `?adapter=<name>` and the `adapter` field in REST/template/sequence requests.
-- `base_adapter` (required): one of the built-in adapters (`raw`, `appsync`). The profile inherits its control plane (`connection_init`, `subscribe`, `pong`, …) and overrides `Subprotocols()` and the data envelope wrapping.
+- `base_adapter` (required): one of the built-in adapters (`raw`, `appsync`). The profile inherits its control plane (`connection_init`, `subscribe`, `pong`, …) and overrides `Subprotocols()` and the data envelope wrapping. `raw` means the profile fully owns the data envelope and there is no built-in AppSync-style subscribe/ack handshake.
 - `subprotocols` (optional): WebSocket subprotocols negotiated during handshake.
 - `envelope` (required): templates rendered at dispatch time.
-  - `outer`: top-level WS frame. Variables: `${sub_id}`, `${inner_string}`.
-  - `inner_binary`: payload wrapper for protobuf-encoded binary payloads. Variables: `${alias}`, `${type_name}`, `${base64}`.
-  - `inner_json`: payload wrapper for raw JSON payloads. Variables: `${alias}`, `${type_name}`, `${json}`.
+  - `outer`: top-level WS frame. Variables: `${sub_id}`, `${channel}`, `${inner_object}`, `${inner_string}`. `${inner_object}` inserts the rendered inner envelope as a raw JSON object/array/value, e.g. `"event":${inner_object}`. `${inner_string}` is a raw JSON string literal containing the rendered inner envelope, so `"event":${inner_string}` yields a string field like `"event":"{\"t\":\"recovery\",\"e\":\"...\"}"`.
+  - `inner_binary`: payload wrapper for protobuf-encoded binary payloads. Variables: `${alias}`, `${type_name}`, `${channel}`, `${base64}`.
+  - `inner_json`: payload wrapper for raw JSON payloads. Variables: `${alias}`, `${type_name}`, `${channel}`, `${json}`.
 - `type_aliases` (optional): map from proto FQN to short alias used as `${alias}`. If the dispatched type has no alias entry, `${alias}` falls back to `${type_name}` (the FQN).
 
 ### Loader and registration
 
-At startup Ditto scans `adapter_profiles/`, parses each `.json`, validates it, and registers it as a protocol adapter under its `name`. Bundled defaults (currently `appsync-draftea.json`) are seeded into the directory on first run so out-of-the-box `?adapter=appsync-draftea` works without manual setup. Existing files are not overwritten — user edits persist across upgrades.
+At startup Ditto scans `adapter_profiles/`, parses each `.json`, validates it, and registers it as a protocol adapter under its `name`. Profile files are capped at 1 MB. Bundled defaults (currently `appsync-draftea.json`) are seeded into the directory on first run so out-of-the-box `?adapter=appsync-draftea` works without manual setup. Existing files are not overwritten, and a `.seeded` marker prevents the default from being recreated if the user renames or removes it.
 
 REST: `GET /__ditto__/api/socket/adapter-profiles` lists available profiles (read-only). Create/update via UI is M9.
+
+Until M9, validation checks profile shape only. Template typos and malformed rendered JSON surface on dispatch, so profile authors should test at least one dispatch before relying on a hand-written profile.
 
 ### Why a separate artifact
 

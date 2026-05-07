@@ -49,7 +49,7 @@ type EncodedPayload struct {
 type ProtocolAdapter interface {
 	ParseClientMessage(b []byte) (ClientMsg, error)
 	EncodePayload(payload json.RawMessage) (EncodedPayload, error)
-	WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error)
+	WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error)
 	EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error)
 	Heartbeat() (EncodedServerMessage, time.Duration)
 	Subprotocols() []string
@@ -203,6 +203,18 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*Sch
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"clients": hub.Snapshot()})
+	})
+	mux.HandleFunc("/__ditto__/api/socket/adapter-profiles", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !isAllowedSocketAPIRequest(r) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(AdapterProfileSummaries())
 	})
 	mux.HandleFunc("/__ditto__/api/socket/dispatch", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -464,7 +476,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", client.id, cached.err))
 			continue
 		}
-		data, err := client.protocol.WrapData(cached.payload, subID)
+		data, err := client.protocol.WrapData(cached.payload, subID, channel)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", client.id, err))
 			continue
@@ -823,6 +835,17 @@ func appSyncErrorPayload(raw json.RawMessage) any {
 }
 
 func NewProtocolAdapter(name string) (ProtocolAdapter, error) {
+	adapterName := normalizeAdapter(name)
+	if adapterName == "" {
+		adapterName = "raw"
+	}
+	if profile, ok := adapterProfile(adapterName); ok {
+		return NewProfileAdapter(profile)
+	}
+	return newBuiltinProtocolAdapter(adapterName)
+}
+
+func newBuiltinProtocolAdapter(name string) (ProtocolAdapter, error) {
 	switch normalizeAdapter(name) {
 	case "", "raw":
 		return RawAdapter{}, nil
@@ -875,7 +898,7 @@ func (RawAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, erro
 		if err != nil {
 			return EncodedServerMessage{}, err
 		}
-		return RawAdapter{}.WrapData(payload, msg.ID)
+		return RawAdapter{}.WrapData(payload, msg.ID, msg.Channel)
 	case "connection_ack":
 		return marshalTextMessage(map[string]any{"type": "connection_ack"})
 	case "subscribe_ack":
@@ -899,7 +922,7 @@ func (RawAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error)
 	}, nil
 }
 
-func (RawAdapter) WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error) {
+func (RawAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
 	return EncodedServerMessage{Data: payload.Data, Kind: payload.Kind}, nil
 }
 
@@ -961,7 +984,7 @@ func (AppSyncAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, 
 		if err != nil {
 			return EncodedServerMessage{}, err
 		}
-		return AppSyncAdapter{}.WrapData(payload, msg.ID)
+		return AppSyncAdapter{}.WrapData(payload, msg.ID, msg.Channel)
 	default:
 		return marshalTextMessage(map[string]any{"type": msg.Type, "id": msg.ID})
 	}
@@ -977,7 +1000,7 @@ func (AppSyncAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, er
 	return EncodedPayload{Value: value, Kind: websocket.MessageText}, nil
 }
 
-func (AppSyncAdapter) WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error) {
+func (AppSyncAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
 	value := payload.Value
 	if payload.Kind == websocket.MessageBinary {
 		value = map[string]any{

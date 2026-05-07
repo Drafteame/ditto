@@ -1,0 +1,25 @@
+{
+  "manifest_version": 1,
+  "name": "appsync-draftea",
+  "base_adapter": "appsync",
+  "subprotocols": ["aws-appsync-event-ws"],
+  "envelope": {
+    "outer": "{\"id\":\"${sub_id}\",\"type\":\"data\",\"event\":${inner_string}}",
+    "inner_binary": "{\"t\":\"${alias}\",\"e\":\"${base64}\"}",
+    "inner_json": "{\"t\":\"${alias}\",\"e\":${json}}"
+  },
+  "type_aliases": {
+    "appsync.betinfo.BetEventDto": "betInfo",
+    "appsync.betinfo.BetsInfoDto": "betsInfo",
+    "appsync.earlycashoutinfo.EarlyCashoutEventDto": "ticketCashoutInfo",
+    "appsync.gameinfo.GameEventDto": "gameInfo",
+    "appsync.livestatsinfo.LiveStatEventDto": "liveStatsInfo",
+    "appsync.livestatsinfo.LiveStatsEventDto": "liveStatsInfoBatch",
+    "appsync.livetableupdate.LiveTableUpdate": "liveTableUpdate",
+    "appsync.livetableupdate.LiveTableUpdates": "liveTableUpdates",
+    "appsync.recovery.Recovery": "recovery",
+    "appsync.statsinfo.StatsRealtimePayloadDto": "statsInfo",
+    "appsync.ticketbetinfo.TicketBetEventDto": "ticketBetInfo",
+    "appsync.ticketinfo.TicketEventDto": "ticketInfo"
+  }
+}
