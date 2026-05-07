@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { MockEditorState } from '../components/MockEditorModal'
 import type { UpdateInfo } from '../types'
 
-type MainView = 'requests' | 'sockets'
+type MainView = 'requests' | 'sockets' | 'templates'
 
 interface AppUiStore {
   activeView: MainView

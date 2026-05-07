@@ -163,6 +163,15 @@ type SocketDispatchResult struct {
 	Errors    []string `json:"errors,omitempty"`
 }
 
+type RenderedDispatch struct {
+	Channel        string          `json:"channel"`
+	Adapter        string          `json:"adapter,omitempty"`
+	TypeName       string          `json:"type_name,omitempty"`
+	Payload        json.RawMessage `json:"payload"`
+	EncodedPayload *EncodedPayload `json:"-"`
+	Missing        []string        `json:"missing,omitempty"`
+}
+
 func NewSocketHub(bus *EventBus, jsonLogs bool) *SocketHub {
 	return &SocketHub{
 		registry: NewSubscriptionRegistry(),
@@ -209,27 +218,19 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*Sch
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if strings.TrimSpace(req.Channel) == "" {
-			http.Error(w, "channel is required", http.StatusBadRequest)
-			return
-		}
 		if len(req.Payload) == 0 {
 			req.Payload = json.RawMessage(`{}`)
 		}
-		var result SocketDispatchResult
-		if strings.TrimSpace(req.TypeName) != "" {
-			if schemas == nil {
-				http.Error(w, "schema registry is not available", http.StatusBadRequest)
-				return
-			}
-			encoded, err := schemas.Encode(req.TypeName, req.Payload)
-			if err != nil {
-				http.Error(w, "protobuf encode failed: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			result = hub.DispatchEncoded(req.Channel, encoded, req.Adapter)
-		} else {
-			result = hub.Dispatch(req.Channel, req.Payload, req.Adapter)
+		rendered := RenderedDispatch{
+			Channel:  req.Channel,
+			Adapter:  req.Adapter,
+			TypeName: req.TypeName,
+			Payload:  req.Payload,
+		}
+		result, err := dispatchRendered(hub, schemas, rendered, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
@@ -249,6 +250,57 @@ func shouldProxyWebSocket(r *http.Request) bool {
 func hasJSONContentType(r *http.Request) bool {
 	contentType := strings.ToLower(r.Header.Get("Content-Type"))
 	return contentType == "application/json" || strings.HasPrefix(contentType, "application/json;")
+}
+
+type dispatchOverrides struct {
+	Channel string
+	Adapter string
+}
+
+func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered RenderedDispatch, overrides *dispatchOverrides) (SocketDispatchResult, error) {
+	if hub == nil {
+		return SocketDispatchResult{}, fmt.Errorf("socket hub is not available")
+	}
+	channel := strings.TrimSpace(rendered.Channel)
+	adapter := rendered.Adapter
+	if overrides != nil {
+		if strings.TrimSpace(overrides.Channel) != "" {
+			channel = strings.TrimSpace(overrides.Channel)
+		}
+		if strings.TrimSpace(overrides.Adapter) != "" {
+			adapter = overrides.Adapter
+		}
+	}
+	if channel == "" {
+		return SocketDispatchResult{}, fmt.Errorf("channel is required")
+	}
+	if strings.ContainsAny(channel, "\r\n") {
+		return SocketDispatchResult{}, fmt.Errorf("channel cannot contain newlines")
+	}
+	adapter = normalizeAdapter(adapter)
+	if _, err := NewProtocolAdapter(adapter); err != nil {
+		return SocketDispatchResult{}, err
+	}
+	typeName := strings.TrimSpace(rendered.TypeName)
+	if typeName != "" {
+		if schemas == nil {
+			return SocketDispatchResult{}, fmt.Errorf("schema registry is not available")
+		}
+		encoded := rendered.EncodedPayload
+		if encoded == nil {
+			next, err := schemas.Encode(typeName, rendered.Payload)
+			if err != nil {
+				return SocketDispatchResult{}, fmt.Errorf("protobuf encode failed: %w", err)
+			}
+			encoded = &next
+		}
+		return hub.DispatchEncoded(channel, *encoded, adapter), nil
+	}
+	payload := rendered.Payload
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+	return hub.Dispatch(channel, payload, adapter), nil
 }
 
 func isAllowedSocketAPIRequest(r *http.Request) bool {

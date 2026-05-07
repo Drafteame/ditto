@@ -162,13 +162,19 @@ Rules:
 
 **Goal:** save composed events as reusable templates with variable substitution.
 
-- `EventTemplate` model: `{name, description, type, channel, payload (JSON with {{vars}}), defaults}`.
-- Variable resolver at dispatch time: `{{ticketId}}`, `{{userId}}`, `{{now}}`, `{{uuid}}`, plus user-defined.
-- REST API: CRUD on `/__ditto__/api/event-templates`.
-- Persist as JSON files in `event_templates/`.
-- Frontend:
+- ✅ `EventTemplate` model: `{id, name, description, channel, adapter, type_name, payload, variables, created_at, updated_at}`.
+- ✅ Variable resolver at dispatch time: `{{ticketId}}`, `{{userId}}`, `{{now}}`, `{{now_unix}}`, `{{now_unix_ms}}`, `{{uuid}}`, plus user-defined values/defaults.
+- ✅ REST API: CRUD on `/__ditto__/api/event-templates`, plus `/__ditto__/api/event-templates/{id}/dispatch`.
+- ✅ Persist as one JSON file per template in `event_templates/`, compatible with `.dittopack` artifact layout.
+- ✅ Frontend:
   - "Event Templates" view (CRUD)
   - Side palette in the dispatcher: list of templates, click to load, quick form for variables.
+
+M3 resolver note: template variables are resolved only in JSON values, not object
+keys. Whole-string placeholders such as `"{{count}}"` become typed JSON when the
+provided/default value parses as JSON; interpolated strings such as
+`"ticket {{id}}"` always remain strings. This keeps payloads safe for Protobuf
+encoding while avoiding raw text mutation.
 
 **Done when:** save a parameterized template, fire it five times in a row with different variable values without rewriting the JSON.
 

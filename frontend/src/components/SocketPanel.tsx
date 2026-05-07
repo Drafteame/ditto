@@ -1,8 +1,17 @@
 import { useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import type { LogEntry, SchemaPack, SchemaTypeDescriptor, ServerInfo, SocketClient } from '../types'
+import type {
+  EventTemplate,
+  EventTemplateDispatchResult,
+  LogEntry,
+  SchemaPack,
+  SchemaTypeDescriptor,
+  ServerInfo,
+  SocketClient,
+} from '../types'
 import * as api from '../api'
 import { Braces, Download, Radio, Refresh, Send, X } from './icons'
+import { detectTemplateVariables, isBuiltinVariable } from './EventTemplatesPanel'
 
 interface SocketPanelProps {
   clients: SocketClient[]
@@ -12,12 +21,17 @@ interface SocketPanelProps {
   schemaTypes: SchemaTypeDescriptor[]
   schemasLoading: boolean
   schemasError: string
+  templates: EventTemplate[]
+  templatesLoading: boolean
+  templatesError: string
   loading: boolean
   error: string
   onRefresh: () => void
   onRefreshSchemas: () => void
+  onRefreshTemplates: () => void
   onUploadSchemaPack: (file: File) => Promise<void>
   onDeleteSchemaPack: (id: string) => Promise<void>
+  onDispatchTemplate: (id: string, variables: Record<string, string>) => Promise<EventTemplateDispatchResult>
   showToast: (message: string, kind?: 'warn') => void
 }
 
@@ -36,12 +50,17 @@ export function SocketPanel({
   schemaTypes,
   schemasLoading,
   schemasError,
+  templates,
+  templatesLoading,
+  templatesError,
   loading,
   error,
   onRefresh,
   onRefreshSchemas,
+  onRefreshTemplates,
   onUploadSchemaPack,
   onDeleteSchemaPack,
+  onDispatchTemplate,
   showToast,
 }: SocketPanelProps) {
   const channels = useMemo(() => {
@@ -57,6 +76,9 @@ export function SocketPanel({
   const [dispatching, setDispatching] = useState(false)
   const [jsonError, setJsonError] = useState('')
   const [schemaModalOpen, setSchemaModalOpen] = useState(false)
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({})
+  const [templateDispatching, setTemplateDispatching] = useState(false)
 
   const selectedType = useMemo(
     () => schemaTypes.find(type => type.full_name === typeName) ?? null,
@@ -67,6 +89,21 @@ export function SocketPanel({
     () => entries.filter(entry => entry.type === 'SOCKET').slice(-200).reverse(),
     [entries],
   )
+  const selectedTemplate = useMemo(
+    () => templates.find(template => template.id === selectedTemplateId) ?? null,
+    [templates, selectedTemplateId],
+  )
+  const selectedTemplateVars = useMemo(() => {
+    if (!selectedTemplate) return []
+    const names = new Set<string>()
+    selectedTemplate.variables?.forEach(variable => {
+      if (variable.name && !isBuiltinVariable(variable.name)) names.add(variable.name)
+    })
+    detectTemplateVariables(JSON.stringify(selectedTemplate.payload)).forEach(name => {
+      if (!isBuiltinVariable(name)) names.add(name)
+    })
+    return [...names].sort((a, b) => a.localeCompare(b))
+  }, [selectedTemplate])
   const scheme = serverInfo?.https ? 'wss' : 'ws'
   const wsUrl = serverInfo ? `${scheme}://localhost:${serverInfo.port}` : ''
 
@@ -112,6 +149,50 @@ export function SocketPanel({
     if (nextType?.example_json) {
       setPayload(JSON.stringify(nextType.example_json, null, 2))
       setJsonError('')
+    }
+  }
+
+  function selectTemplate(template: EventTemplate) {
+    setSelectedTemplateId(template.id)
+    setChannel(template.channel)
+    setAdapter((template.adapter || '') as SocketAdapter)
+    setTypeName(template.type_name || '')
+    setPayload(JSON.stringify(template.payload, null, 2))
+    setJsonError('')
+    setTemplateVars(current => {
+      const next = { ...current }
+      template.variables?.forEach(variable => {
+        if (!isBuiltinVariable(variable.name) && next[variable.name] === undefined) {
+          next[variable.name] = variable.default ?? ''
+        }
+      })
+      detectTemplateVariables(JSON.stringify(template.payload)).forEach(name => {
+        if (!isBuiltinVariable(name) && next[name] === undefined) {
+          next[name] = ''
+        }
+      })
+      return next
+    })
+  }
+
+  async function handleTemplateDispatch() {
+    if (!selectedTemplate) return
+    setTemplateDispatching(true)
+    try {
+      const vars: Record<string, string> = {}
+      selectedTemplateVars.forEach(name => {
+        const value = templateVars[name] ?? ''
+        if (value !== '') vars[name] = value
+      })
+      const result = await onDispatchTemplate(selectedTemplate.id, vars)
+      const dropped = result.dropped?.length ?? 0
+      const errors = result.errors?.length ?? 0
+      const suffix = dropped || errors ? `, ${dropped} dropped, ${errors} errors` : ''
+      showToast(`Template dispatched to ${result.delivered} client${result.delivered === 1 ? '' : 's'}${suffix}`)
+    } catch (err) {
+      showToast(`Template dispatch failed: ${(err as Error).message}`, 'warn')
+    } finally {
+      setTemplateDispatching(false)
     }
   }
 
@@ -233,6 +314,55 @@ export function SocketPanel({
               <Send /> Dispatch
             </button>
           </div>
+        </section>
+
+        <section className="socket-templates">
+          <div className="socket-templates-head">
+            <div className="panel-label">Templates</div>
+            <button type="button" className="btn icon ghost" onClick={onRefreshTemplates} disabled={templatesLoading} aria-label="Refresh templates">
+              <Refresh size={14} />
+            </button>
+          </div>
+          {templatesError && <div className="socket-error">{templatesError}</div>}
+          {templates.length === 0 ? (
+            <div className="socket-empty compact">Saved templates will appear here.</div>
+          ) : (
+            <div className="quick-template-list">
+              {templates.map(template => (
+                <button
+                  key={template.id}
+                  type="button"
+                  className={selectedTemplateId === template.id ? 'quick-template active' : 'quick-template'}
+                  onClick={() => selectTemplate(template)}
+                >
+                  <span>{template.name}</span>
+                  <small title={template.channel}>{template.channel}</small>
+                </button>
+              ))}
+            </div>
+          )}
+          {selectedTemplate && (
+            <div className="quick-template-form">
+              <div className="quick-template-title">{selectedTemplate.name}</div>
+              {selectedTemplateVars.length === 0 ? (
+                <div className="template-detected">Only built-ins or no variables.</div>
+              ) : (
+                selectedTemplateVars.map(name => (
+                  <label key={name}>
+                    <span>{name}</span>
+                    <input
+                      className="input"
+                      value={templateVars[name] ?? ''}
+                      onChange={e => setTemplateVars(current => ({ ...current, [name]: e.target.value }))}
+                    />
+                  </label>
+                ))
+              )}
+              <button type="button" className="btn primary" onClick={handleTemplateDispatch} disabled={templateDispatching}>
+                <Send /> Dispatch
+              </button>
+            </div>
+          )}
         </section>
       </div>
 

@@ -835,13 +835,14 @@ svg {
 }
 .socket-grid {
   display: grid;
-  grid-template-columns: minmax(260px, 0.9fr) minmax(360px, 1.4fr);
+  grid-template-columns: minmax(220px, 0.75fr) minmax(360px, 1.25fr) minmax(240px, 0.75fr);
   gap: 12px;
   padding: 12px;
   border-bottom: 1px solid var(--line);
 }
 .socket-clients,
 .socket-dispatcher,
+.socket-templates,
 .socket-events {
   min-width: 0;
   border: 1px solid var(--line);
@@ -849,7 +850,8 @@ svg {
   background: var(--bg-1);
 }
 .socket-clients,
-.socket-dispatcher {
+.socket-dispatcher,
+.socket-templates {
   padding: 12px;
 }
 .panel-label {
@@ -1005,6 +1007,82 @@ svg {
   display: flex;
   justify-content: flex-end;
 }
+.socket-templates-head,
+.template-vars-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.socket-templates-head .panel-label,
+.template-vars-head .panel-label {
+  margin-bottom: 0;
+  margin-right: auto;
+}
+.quick-template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.quick-template {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-0);
+  color: var(--fg-1);
+  text-align: left;
+  cursor: pointer;
+}
+.quick-template:hover,
+.quick-template.active {
+  border-color: color-mix(in oklch, var(--accent) 45%, var(--line));
+  background: color-mix(in oklch, var(--accent) 8%, var(--bg-0));
+}
+.quick-template span,
+.quick-template small,
+.quick-template-title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quick-template span,
+.quick-template-title {
+  color: var(--fg-0);
+  font-size: 12px;
+  font-weight: 700;
+}
+.quick-template small {
+  margin-top: 3px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.quick-template-form {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in oklch, var(--line) 65%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.quick-template-form label,
+.template-form-grid label,
+.template-description {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+.quick-template-form label span,
+.template-form-grid label span,
+.template-description span {
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 600;
+}
 .socket-events {
   margin: 12px;
   min-height: 0;
@@ -1149,8 +1227,110 @@ svg {
   max-height: 48vh;
   overflow: auto;
 }
+.template-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.template-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 0.8fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.template-row + .template-row {
+  margin-top: 8px;
+}
+.template-main,
+.template-meta {
+  min-width: 0;
+}
+.template-name {
+  color: var(--fg-0);
+  font-weight: 700;
+}
+.template-id,
+.template-desc,
+.template-meta span,
+.template-detected {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.template-id {
+  margin-top: 3px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.template-desc,
+.template-detected {
+  margin-top: 4px;
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+.template-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.template-meta span {
+  max-width: 220px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.template-actions {
+  display: flex;
+  gap: 4px;
+}
+.template-modal {
+  width: min(920px, calc(100vw - 28px));
+}
+.template-editor {
+  max-height: min(72vh, 760px);
+}
+.template-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+}
+.template-description,
+.template-json,
+.template-vars-head,
+.template-variable-list {
+  margin-top: 10px;
+}
+.template-json {
+  min-height: 220px;
+}
+.template-variable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.template-variable-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.8fr) minmax(100px, 0.8fr) minmax(140px, 1.2fr) auto;
+  gap: 8px;
+  align-items: center;
+}
 @media (max-width: 760px) {
   .schema-modal-grid {
+    grid-template-columns: 1fr;
+  }
+  .template-row,
+  .template-form-grid,
+  .template-variable-row {
     grid-template-columns: 1fr;
   }
 }

@@ -7,6 +7,7 @@ import * as api from './api'
 import { useAppUiStore } from './stores/useAppUiStore'
 import { useLogStore } from './stores/useLogStore'
 import { useMockStore } from './stores/useMockStore'
+import { useEventTemplateStore } from './stores/useEventTemplateStore'
 import { useSchemaStore } from './stores/useSchemaStore'
 import { useSocketStore } from './stores/useSocketStore'
 import { Header } from './components/Header'
@@ -14,6 +15,7 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
 import { LogPanel, LOG_SEARCH_INPUT_ID } from './components/LogPanel'
 import { SocketPanel } from './components/SocketPanel'
+import { EventTemplatesPanel } from './components/EventTemplatesPanel'
 import { Drawer } from './components/Drawer'
 import { MockEditorModal, createNewMockState, createEditMockState } from './components/MockEditorModal'
 import { QRModal } from './components/QRModal'
@@ -116,6 +118,23 @@ export default function App() {
     uploadSchemaPack: state.uploadPack,
     deleteSchemaPack: state.deletePack,
   })))
+  const {
+    eventTemplates,
+    eventTemplatesLoading,
+    eventTemplatesError,
+    loadEventTemplates,
+    saveEventTemplate,
+    deleteEventTemplate,
+    dispatchEventTemplate,
+  } = useEventTemplateStore(useShallow(state => ({
+    eventTemplates: state.templates,
+    eventTemplatesLoading: state.loading,
+    eventTemplatesError: state.error,
+    loadEventTemplates: state.loadTemplates,
+    saveEventTemplate: state.saveTemplate,
+    deleteEventTemplate: state.deleteTemplate,
+    dispatchEventTemplate: state.dispatchTemplate,
+  })))
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
@@ -145,23 +164,26 @@ export default function App() {
       loadMocks()
       loadSocketClients()
       loadSchemas()
-    }, [loadMocks, loadSchemas, loadSocketClients, setConnected]),
+      loadEventTemplates()
+    }, [loadEventTemplates, loadMocks, loadSchemas, loadSocketClients, setConnected]),
     useCallback(() => setConnected(false), [setConnected]),
     useCallback(() => {
       loadMocks()
       loadSocketClients()
       loadSchemas()
-    }, [loadMocks, loadSchemas, loadSocketClients]),
+      loadEventTemplates()
+    }, [loadEventTemplates, loadMocks, loadSchemas, loadSocketClients]),
   )
 
   useEffect(() => {
     loadMocks()
     loadSocketClients()
     loadSchemas()
+    loadEventTemplates()
     api.fetchUpdateCheck().then(data => {
       if (data.available) setUpdateInfo(data)
     }).catch(() => {})
-  }, [loadMocks, loadSchemas, loadSocketClients, setUpdateInfo])
+  }, [loadEventTemplates, loadMocks, loadSchemas, loadSocketClients, setUpdateInfo])
 
   useEffect(() => {
     return () => {
@@ -292,6 +314,14 @@ export default function App() {
               Sockets
               <span className="c">{connectedClients.length}</span>
             </button>
+            <button
+              type="button"
+              className={activeView === 'templates' ? 'active' : ''}
+              onClick={() => setActiveView('templates')}
+            >
+              Event Templates
+              <span className="c">{eventTemplates.length}</span>
+            </button>
           </div>
           {activeView === 'requests' ? (
             <LogPanel
@@ -301,7 +331,7 @@ export default function App() {
               onSelect={selectLog}
               onSaveAsMock={handleSaveAsMock}
             />
-          ) : (
+          ) : activeView === 'sockets' ? (
             <SocketPanel
               clients={connectedClients}
               entries={logEntries}
@@ -310,12 +340,28 @@ export default function App() {
               schemaTypes={schemaTypes}
               schemasLoading={schemasLoading}
               schemasError={schemasError}
+              templates={eventTemplates}
+              templatesLoading={eventTemplatesLoading}
+              templatesError={eventTemplatesError}
               loading={socketClientsLoading}
               error={socketClientsError}
               onRefresh={loadSocketClients}
               onRefreshSchemas={loadSchemas}
+              onRefreshTemplates={loadEventTemplates}
               onUploadSchemaPack={uploadSchemaPack}
               onDeleteSchemaPack={deleteSchemaPack}
+              onDispatchTemplate={(id, variables) => dispatchEventTemplate(id, variables)}
+              showToast={showToast}
+            />
+          ) : (
+            <EventTemplatesPanel
+              templates={eventTemplates}
+              schemaTypes={schemaTypes}
+              loading={eventTemplatesLoading}
+              error={eventTemplatesError}
+              onRefresh={loadEventTemplates}
+              onSave={saveEventTemplate}
+              onDelete={deleteEventTemplate}
               showToast={showToast}
             />
           )}

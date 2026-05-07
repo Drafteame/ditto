@@ -165,7 +165,7 @@ Capabilities, in incremental order:
 - **Generic WS server + protocol adapter**: pluggable adapters (AppSync, Socket.IO, raw JSON) so any app's WS protocol can be supported.
 - **Manual event dispatch**: send arbitrary events from the UI to specific channels.
 - **Schema packs**: load `.proto` files at runtime (dynamic descriptors, no codegen). UI shows type dropdown + JSON editor with schema-aware autocomplete; Ditto serializes to Protobuf at dispatch.
-- **Event templates**: save reusable parameterized events (`{{ticketId}}`, `{{userId}}`, etc.).
+- **Event templates** ✅: save reusable parameterized events (`{{ticketId}}`, `{{userId}}`, etc.) and quick-fire them from the socket dispatcher.
 - **Event sequences**: timed event timelines with transport controls (play/pause/scrub/speed).
 - **Per-channel modes**: each channel can be `mock`, `live` (passthrough to real backend), `record`, or `mixed`.
 - **Recordings**: capture real WS sessions to disk, then edit, splice, and replay.

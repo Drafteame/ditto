@@ -102,6 +102,40 @@ export interface SocketDispatchResult {
   errors?: string[]
 }
 
+export interface EventTemplateVariable {
+  name: string
+  description?: string
+  default?: string
+}
+
+export interface EventTemplate {
+  id: string
+  name: string
+  description?: string
+  channel: string
+  adapter?: 'raw' | 'appsync' | ''
+  type_name?: string
+  payload: unknown
+  variables?: EventTemplateVariable[]
+  created_at: string
+  updated_at: string
+}
+
+export interface EventTemplatesResponse {
+  templates: EventTemplate[]
+}
+
+export interface EventTemplateDispatchRequest {
+  variables?: Record<string, string>
+  channel_override?: string
+  adapter_override?: 'raw' | 'appsync' | ''
+}
+
+export interface EventTemplateDispatchResult extends SocketDispatchResult {
+  resolved_payload: unknown
+  missing_variables?: string[]
+}
+
 export interface SchemaField {
   name: string
   json_name: string
