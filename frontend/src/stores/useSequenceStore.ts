@@ -28,6 +28,14 @@ function mergeState(states: Record<string, PlayerState>, state: PlayerState) {
   return { ...states, [state.sequence_id]: state }
 }
 
+function sequenceErrorMessage(err: unknown) {
+  const message = (err as Error).message
+  if (message.toLowerCase().includes('active player')) {
+    return 'Stop the player first.'
+  }
+  return message
+}
+
 export const useSequenceStore = create<SequenceStore>((set) => ({
   sequences: [],
   playerStates: {},
@@ -75,7 +83,7 @@ export const useSequenceStore = create<SequenceStore>((set) => ({
     try {
       await api.deleteSequence(id)
     } catch (err) {
-      set({ sequences: previous, error: (err as Error).message })
+      set({ sequences: previous, error: sequenceErrorMessage(err) })
       throw err
     }
   },
@@ -108,4 +116,3 @@ export const useSequenceStore = create<SequenceStore>((set) => ({
     set(current => ({ playerStates: mergeState(current.playerStates, event.state) }))
   },
 }))
-

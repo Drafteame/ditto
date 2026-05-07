@@ -78,10 +78,14 @@ func (b *PlayerBroadcaster) Subscribe() chan PlayerEvent {
 	return ch
 }
 
+// Unsubscribe stops broadcasting to ch.
+//
+// The channel is intentionally not closed: Publish snapshots subscribers under
+// the lock and sends without the lock held, so a concurrent close could panic.
+// Owning goroutines should exit on their own signal, usually r.Context().Done().
 func (b *PlayerBroadcaster) Unsubscribe(ch chan PlayerEvent) {
 	b.mu.Lock()
 	delete(b.clients, ch)
-	close(ch)
 	b.mu.Unlock()
 }
 
@@ -130,10 +134,7 @@ func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case <-heartbeat.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
-		case event, ok := <-ch:
-			if !ok {
-				return
-			}
+		case event := <-ch:
 			data, _ := json.Marshal(event)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()

@@ -121,7 +121,7 @@ export function SequencesPanel({
     } catch (err) {
       const message = (err as Error).message
       if (message.toLowerCase().includes('active player')) {
-        showToast('Delete failed: stop the sequence player first.', 'warn')
+        showToast('Delete failed: Stop the player first.', 'warn')
       } else {
         showToast(`Delete failed: ${message}`, 'warn')
       }

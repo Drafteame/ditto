@@ -33,6 +33,8 @@ export function SequencePlayerView({
   const current = state?.current_step ?? 0
   const speed = state?.speed ?? 1
   const maxDelay = Math.max(...sequence.steps.map(step => step.delay_ms || 0), 1)
+  const canPause = status === 'playing'
+  const canStop = status === 'playing' || status === 'paused'
 
   return (
     <section className="sequence-player">
@@ -71,10 +73,10 @@ export function SequencePlayerView({
         <button type="button" className="btn primary" onClick={onPlay}>
           <Play /> Play
         </button>
-        <button type="button" className="btn ghost" onClick={onPause}>
+        <button type="button" className="btn ghost" onClick={onPause} disabled={!canPause}>
           <Pause /> Pause
         </button>
-        <button type="button" className="btn ghost" onClick={onStop}>
+        <button type="button" className="btn ghost" onClick={onStop} disabled={!canStop}>
           <Stop /> Stop
         </button>
         <select className="select speed-select" value={speed} onChange={e => onSpeed(Number(e.target.value))}>
