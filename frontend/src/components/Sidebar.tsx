@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import type { Mock, ServerInfo } from '../types'
 import * as api from '../api'
 import { describeSequence } from '../sequence'
+import { statusClass } from '../status'
 import { ChevronLeft, ChevronRight, Copy, Edit, Sequence, Trash, X } from './icons'
 import { useConfirm } from './ConfirmDialog'
 
@@ -392,7 +393,10 @@ function MockItem({
 }) {
   const methodUpper = mock.method.toUpperCase()
   const pills = getMatchPills(mock.match)
-  const seqDisplay = mock.response_mode === 'sequence' ? describeSequence(mock.sequence) : null
+  const isSequence = mock.response_mode === 'sequence'
+  const seqDisplay = isSequence ? describeSequence(mock.sequence) : null
+  const seqWorstStatus = isSequence ? worstSequenceStatus(mock) : null
+  const displayStatus = seqWorstStatus ?? mock.status
 
   return (
     <div className={`mock-row ${mock.enabled ? '' : 'disabled'}`} onClick={() => onEdit(index)}>
@@ -406,6 +410,16 @@ function MockItem({
         aria-label={mock.enabled ? 'Disable mock' : 'Enable mock'}
       />
       <span className={`method ${methodUpper}`}>{methodUpper}</span>
+      <span
+        className={`mock-status ${statusClass(displayStatus)}`}
+        title={
+          seqWorstStatus !== null
+            ? `Sequence — highest status across steps: ${displayStatus}`
+            : `Status ${displayStatus}`
+        }
+      >
+        {displayStatus}
+      </span>
       <span className="mock-path" title={mock.path}>
         {mock.path}
       </span>
@@ -452,6 +466,19 @@ function MockItem({
       )}
     </div>
   )
+}
+
+// For sequence mocks, return the most severe status across steps + fallback,
+// so a row with `[200, 200, 500]` flags red in the sidebar. Returns null when
+// the sequence has no usable steps.
+function worstSequenceStatus(mock: Mock): number | null {
+  const steps = mock.sequence?.steps
+  if (!steps || steps.length === 0) return null
+  let worst = mock.status || 0
+  for (const step of steps) {
+    if ((step.status || 0) > worst) worst = step.status || 0
+  }
+  return worst || null
 }
 
 function getMatchPills(match?: Mock['match']): string[] {
