@@ -166,6 +166,10 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !isAllowedSocketAPIRequest(r) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"clients": hub.Snapshot()})
 	})
@@ -174,7 +178,7 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !isAllowedAPIRequest(r) {
+		if !isAllowedSocketAPIRequest(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -215,28 +219,55 @@ func hasJSONContentType(r *http.Request) bool {
 	return contentType == "application/json" || strings.HasPrefix(contentType, "application/json;")
 }
 
-func isAllowedAPIRequest(r *http.Request) bool {
+func isAllowedSocketAPIRequest(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		origin = r.Header.Get("Referer")
 	}
 	if origin == "" {
-		return true
+		return isLoopbackRemote(r.RemoteAddr)
 	}
-	return isAllowedOriginForHost(origin, r.Host)
+	return isAllowedOriginForRequest(origin, r.Host, r.RemoteAddr)
 }
 
-func isAllowedOriginForHost(raw, requestHost string) bool {
+func isAllowedOriginForRequest(raw, requestHost, remoteAddr string) bool {
+	if isLoopbackRemote(remoteAddr) && isLocalDevOrigin(raw) {
+		return true
+	}
+	return isSameOrigin(raw, requestHost)
+}
+
+func isLocalDevOrigin(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	reqHost := strings.ToLower(requestHost)
-	if h, _, err := net.SplitHostPort(reqHost); err == nil {
-		reqHost = h
+	return host == "localhost" ||
+		host == "127.0.0.1" ||
+		host == "::1" ||
+		host == "wails.localhost" ||
+		strings.HasSuffix(host, ".localhost")
+}
+
+func isSameOrigin(raw, requestHost string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
 	}
-	return host == reqHost || host == "localhost" || host == "127.0.0.1" || host == "::1"
+	return strings.EqualFold(u.Host, requestHost)
+}
+
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost")
 }
 
 func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -249,9 +280,14 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !isAllowedSocketAPIRequest(r) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		CompressionMode: websocket.CompressionDisabled,
+		InsecureSkipVerify: true,
+		CompressionMode:    websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return
@@ -310,6 +346,10 @@ func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFil
 		})
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", client.id, err))
+			continue
+		}
+		if data.Kind == 0 {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: adapter returned empty websocket message type", client.id))
 			continue
 		}
 		if client.enqueue(data, 0) {
@@ -432,13 +472,8 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
 		defer heartbeatTicker.Stop()
 	}
 
-	var pingC <-chan time.Time
-	var pingTicker *time.Ticker
-	if len(heartbeat.Data) == 0 {
-		pingTicker = time.NewTicker(30 * time.Second)
-		pingC = pingTicker.C
-		defer pingTicker.Stop()
-	}
+	pingTicker := time.NewTicker(75 * time.Second)
+	defer pingTicker.Stop()
 
 	for {
 		select {
@@ -460,7 +495,7 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
 			if err != nil {
 				return
 			}
-		case <-pingC:
+		case <-pingTicker.C:
 			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			err := client.conn.Ping(pingCtx)
 			cancel()
@@ -475,6 +510,10 @@ func (h *SocketHub) enqueueControl(client *SocketClient, msg ServerMsg) {
 	data, err := client.protocol.EncodeServerMessage(msg)
 	if err != nil {
 		h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, err.Error(), 0)
+		return
+	}
+	if data.Kind == 0 {
+		h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, "adapter returned empty websocket message type", 0)
 		return
 	}
 	if !client.enqueue(data, 2*time.Second) {
@@ -556,7 +595,12 @@ func (c *SocketClient) close() {
 
 func (c *SocketClient) enqueue(msg EncodedServerMessage, timeout time.Duration) bool {
 	if msg.Kind == 0 {
-		msg.Kind = websocket.MessageText
+		return false
+	}
+	select {
+	case <-c.done:
+		return false
+	default:
 	}
 	if timeout <= 0 {
 		select {
@@ -602,6 +646,25 @@ func rawPayload(raw json.RawMessage) any {
 		return string(raw)
 	}
 	return value
+}
+
+func appSyncErrorPayload(raw json.RawMessage) any {
+	message := "socket error"
+	if len(raw) > 0 {
+		var obj map[string]any
+		if err := json.Unmarshal(raw, &obj); err == nil {
+			if value, ok := obj["error"].(string); ok && value != "" {
+				message = value
+			} else if value, ok := obj["message"].(string); ok && value != "" {
+				message = value
+			}
+		} else {
+			message = string(raw)
+		}
+	}
+	return map[string]any{
+		"errors": []map[string]string{{"message": message}},
+	}
 }
 
 func NewProtocolAdapter(name string) (ProtocolAdapter, error) {
@@ -718,7 +781,7 @@ func (AppSyncAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, 
 	case "pong":
 		return marshalTextMessage(map[string]any{"type": "pong"})
 	case "error":
-		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "payload": rawPayload(msg.Payload)})
+		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "payload": appSyncErrorPayload(msg.Payload)})
 	case "data", "":
 		var payload any = map[string]any{}
 		if len(msg.Payload) > 0 {

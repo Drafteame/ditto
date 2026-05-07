@@ -72,7 +72,8 @@ export function SocketPanel({
       const dropped = result.dropped?.length ?? 0
       const errors = result.errors?.length ?? 0
       const suffix = dropped || errors ? `, ${dropped} dropped, ${errors} errors` : ''
-      showToast(`Dispatched to ${result.delivered} client${result.delivered === 1 ? '' : 's'}${suffix}`)
+      const detail = result.errors?.[0] ? `: ${result.errors[0]}` : result.dropped?.[0] ? `: dropped ${result.dropped[0]}` : ''
+      showToast(`Dispatched to ${result.delivered} client${result.delivered === 1 ? '' : 's'}${suffix}${detail}`)
     } catch (err) {
       showToast(`Dispatch failed: ${(err as Error).message}`, 'warn')
     } finally {
