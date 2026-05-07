@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { LogEntry, ServerInfo } from '../types'
+import { statusClass } from '../status'
 import { Bookmark, Clock } from './icons'
 
 export const LOG_SEARCH_INPUT_ID = 'log-search-input'
@@ -174,15 +175,7 @@ export function LogPanel({
 }
 
 function StatusCell({ status }: { status: number }) {
-  const cls =
-    status >= 500
-      ? 'status-5'
-      : status >= 400
-        ? 'status-4'
-        : status >= 300
-          ? 'status-3'
-          : 'status-200'
-  return <span className={`st ${cls}`}>{status || '-'}</span>
+  return <span className={`st ${statusClass(status)}`}>{status || '-'}</span>
 }
 
 function LogRow({

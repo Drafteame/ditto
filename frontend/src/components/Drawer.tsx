@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { LogEntry, ServerInfo } from '../types'
+import { statusClass } from '../status'
 import { CodeBlock } from './CodeBlock'
 import { Alert, Bookmark, Check, Globe, X } from './icons'
 
@@ -18,15 +19,7 @@ interface DrawerProps {
 type Tab = 'response' | 'request' | 'headers'
 
 function StatusCell({ status }: { status: number }) {
-  const cls =
-    status >= 500
-      ? 'status-5'
-      : status >= 400
-        ? 'status-4'
-        : status >= 300
-          ? 'status-3'
-          : 'status-200'
-  return <span className={`st ${cls} font-mono text-[12px]`}>{status || '-'}</span>
+  return <span className={`st ${statusClass(status)} font-mono text-[12px]`}>{status || '-'}</span>
 }
 
 function prettyJson(raw: string | undefined): string {

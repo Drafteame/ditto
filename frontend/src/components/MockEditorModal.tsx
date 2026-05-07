@@ -1,8 +1,10 @@
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import type { ReactNode } from 'react'
 import type { Mock, ResponseMode, SequenceStep } from '../types'
 import * as api from '../api'
 import { useCopy } from '../hooks/useCopy'
 import { useSearch } from '../hooks/useSearch'
+import { statusClass } from '../status'
 import { Alert, Braces, Check, ChevronRight, Copy, Plus, Refresh, Trash, X } from './icons'
 import { SearchBar } from './SearchBar'
 import { useConfirm } from './ConfirmDialog'
@@ -168,35 +170,35 @@ function getMatchPillCount(match: Mock['match']): number {
   return count
 }
 
-/**
- * Scrolls the textarea and its pre mirror to place charPos at ~1/3 from the
- * top of the viewport. Derives line height from scrollHeight so CSS relative
- * values (e.g. "normal") don't produce an inaccurate fallback.
- */
-function scrollToCharPos(
-  ta: HTMLTextAreaElement | null,
-  pre: HTMLPreElement | null,
-  charPos: number,
+function syncOverlayScroll(
+  textarea: HTMLTextAreaElement | null,
+  mirror: HTMLPreElement | null,
 ) {
-  if (!ta) return
-  const linesBefore = (ta.value.slice(0, charPos).match(/\n/g) ?? []).length
-  const totalLines = (ta.value.match(/\n/g) ?? []).length + 1
-  const style = getComputedStyle(ta)
-  const paddingTop = parseFloat(style.paddingTop) || 0
-  const paddingBottom = parseFloat(style.paddingBottom) || 0
-  // Measure actual pixel height per line from scrollHeight instead of relying on
-  // CSS lineHeight, which may be "normal" or a relative value that parseFloat misreads.
-  const contentHeight = ta.scrollHeight - paddingTop - paddingBottom
-  const lineHeight = totalLines > 1 ? contentHeight / totalLines : parseFloat(style.lineHeight) || 20
-  // Place the match at ~1/3 from the top so there's context above it.
-  const scrollTop = Math.max(0, paddingTop + linesBefore * lineHeight - ta.clientHeight / 3)
-  ta.scrollTop = scrollTop
-  if (pre) pre.scrollTop = scrollTop
+  if (!textarea || !mirror) return
+  mirror.scrollTop = textarea.scrollTop
+  mirror.scrollLeft = textarea.scrollLeft
+}
+
+function scrollMatchInEditableOverlay(
+  textarea: HTMLTextAreaElement | null,
+  mirror: HTMLPreElement | null,
+  match: HTMLElement | null,
+) {
+  if (!textarea || !mirror || !match) return
+
+  const targetTop = Math.max(0, match.offsetTop - textarea.clientHeight / 3)
+  const targetLeft = Math.max(0, match.offsetLeft - textarea.clientWidth / 3)
+
+  textarea.scrollTop = targetTop
+  textarea.scrollLeft = targetLeft
+  mirror.scrollTop = targetTop
+  mirror.scrollLeft = targetLeft
 }
 
 function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const preRef = useRef<HTMLPreElement>(null)
+  const matchRefs = useRef<Array<HTMLSpanElement | null>>([])
   // Tracks whether the current idx change was triggered by an explicit go()
   // call (Enter / arrow buttons) vs. an automatic reset from query change.
   const explicitNavRef = useRef(false)
@@ -211,13 +213,19 @@ function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) 
   const highlightedContent = useMemo(() => {
     const q = search.query.trim()
     if (!q || search.matches.length === 0) return value
-    const parts: React.ReactNode[] = []
+    const parts: ReactNode[] = []
     let last = 0
     search.matches.forEach((start, i) => {
       const end = start + q.length
       if (start > last) parts.push(value.slice(last, start))
       parts.push(
-        <span key={start} className={i === search.idx ? 'match active' : 'match'}>
+        <span
+          key={`${start}-${i}`}
+          ref={el => {
+            matchRefs.current[i] = el
+          }}
+          className={i === search.idx ? 'match active' : 'match'}
+        >
           {value.slice(start, end)}
         </span>,
       )
@@ -229,9 +237,7 @@ function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) 
 
   // Keep the pre scroll in sync with the textarea scroll
   const syncScroll = useCallback(() => {
-    if (preRef.current && textareaRef.current) {
-      preRef.current.scrollTop = textareaRef.current.scrollTop
-    }
+    syncOverlayScroll(textareaRef.current, preRef.current)
   }, [])
 
   // Explicit navigation (Enter / ↑↓ buttons): focus + select + scroll.
@@ -243,13 +249,11 @@ function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) 
     const end = start + search.query.trim().length
     requestAnimationFrame(() => {
       const ta = textareaRef.current
+      const activeMatch = matchRefs.current[search.idx]
       if (!ta) return
-      // focus + setSelectionRange first (browser may scroll), then scrollToCharPos
-      // last so our position always wins — reversing this order lets setSelectionRange
-      // override our scroll.
       ta.focus({ preventScroll: true })
       ta.setSelectionRange(start, end)
-      scrollToCharPos(ta, preRef.current, start)
+      scrollMatchInEditableOverlay(ta, preRef.current, activeMatch)
     })
   }, [search.idx, search.matches, search.query])
 
@@ -260,7 +264,9 @@ function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) 
     if (lastScrolledQueryRef.current === search.query) return
     lastScrolledQueryRef.current = search.query
     if (!search.query.trim() || search.matches.length === 0) return
-    scrollToCharPos(textareaRef.current, preRef.current, search.matches[0])
+    requestAnimationFrame(() => {
+      scrollMatchInEditableOverlay(textareaRef.current, preRef.current, matchRefs.current[0])
+    })
   }, [search.query, search.matches])
 
   // Wraps go() so the effect above knows it was an intentional navigation
@@ -611,7 +617,7 @@ export function MockEditorModal({
             <div className="fld">
               <label>Status</label>
               <input
-                className="input"
+                className={`input ${statusClass(status)}`}
                 type="number"
                 value={status}
                 onChange={e => setStatus(parseInt(e.target.value) || 200)}
@@ -710,7 +716,9 @@ export function MockEditorModal({
                       >
                         <span className="n">step {i + 1}</span>
                         <h4>
-                          <span className="tag-type MOCK">{step.status}</span>
+                          <span className={`tag-type ${statusClass(step.status)}`}>
+                            {step.status}
+                          </span>
                           {active && <span className="next-tag">NEXT</span>}
                         </h4>
                         <pre className="preview">{truncatePreview(step.body)}</pre>
@@ -750,7 +758,7 @@ export function MockEditorModal({
                   <div className="fld">
                     <label>Status</label>
                     <input
-                      className="input"
+                      className={`input ${statusClass(sequenceSteps[editingStepIndex].status)}`}
                       type="number"
                       value={sequenceSteps[editingStepIndex].status}
                       onChange={e =>
