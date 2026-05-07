@@ -12,7 +12,7 @@ export function CodeBlock({ text }: { text: string }) {
   // Scroll to active match whenever idx or matches change
   useEffect(() => {
     if (search.matches.length > 0) {
-      matchRefs.current[search.idx]?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      matchRefs.current[search.idx]?.scrollIntoView({ block: 'center', inline: 'nearest' })
     }
   }, [search.idx, search.matches])
 
