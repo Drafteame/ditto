@@ -142,7 +142,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
 	}
 	playerBroadcaster := NewPlayerBroadcaster()
-	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster)
+	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster, nil)
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
