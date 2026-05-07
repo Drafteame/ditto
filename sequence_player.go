@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 )
+
+var ErrSequencePlayerActive = errors.New("sequence has an active player")
 
 type PlayerStatus string
 
@@ -263,6 +266,33 @@ func (p *SequencePlayer) Shutdown(ctx context.Context) error {
 	}
 }
 
+func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error {
+	if !isSafeEventTemplateID(id) {
+		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+	}
+	p.mu.Lock()
+	runner := p.runners[id]
+	if runner != nil {
+		state := runner.State()
+		if isActivePlayerStatus(state.Status) {
+			p.mu.Unlock()
+			return ErrSequencePlayerActive
+		}
+	}
+	if err := deleteFn(); err != nil {
+		p.mu.Unlock()
+		return err
+	}
+	if runner != nil {
+		delete(p.runners, id)
+	}
+	p.mu.Unlock()
+	if runner != nil {
+		runner.shutdown()
+	}
+	return nil
+}
+
 func (p *SequencePlayer) runner(id string) (*sequenceRunner, error) {
 	if !isSafeEventTemplateID(id) {
 		return nil, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
@@ -398,7 +428,19 @@ func (r *sequenceRunner) loop() {
 			}
 			delay := r.effectiveDelay(r.seq.Steps[state.CurrentStep].DelayMs, state.Speed)
 			if delay <= 0 {
-				r.dispatchCurrentStep()
+				select {
+				case cmd := <-r.commands:
+					nextWaiting, nextRemaining, exit := r.handleCommand(cmd, timer, false, time.Time{}, remaining)
+					waiting, remaining = nextWaiting, nextRemaining
+					if waiting {
+						waitUntil = time.Now().Add(remaining)
+					}
+					if exit {
+						return
+					}
+				default:
+					r.dispatchCurrentStep()
+				}
 				continue
 			}
 			waiting = true
@@ -504,7 +546,8 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 			reply(r.State(), fmt.Errorf("speed must be >= 0"))
 			return waiting, remaining, false
 		}
-		oldSpeed := r.State().Speed
+		currentState := r.State()
+		oldSpeed := currentState.Speed
 		var nextRemaining time.Duration
 		if waiting {
 			nextRemaining = time.Until(waitUntil)
@@ -516,6 +559,10 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 			if nextRemaining > 0 {
 				resetTimer(timer, nextRemaining)
 			}
+		} else if currentState.Status == PlayerPaused && remaining > 0 {
+			nextRemaining = rescaleRemaining(remaining, oldSpeed, cmd.speed)
+		} else {
+			nextRemaining = remaining
 		}
 		state := r.setState(func(s *PlayerState) {
 			s.Speed = cmd.speed

@@ -261,17 +261,21 @@ function SequenceEditorModal({
       setError('At least one step is required')
       return
     }
-    let vars: Record<string, string>
+    let vars: Record<string, unknown>
     try {
       vars = JSON.parse(state.vars || '{}')
     } catch (err) {
       setError(`Invalid sequence vars JSON: ${(err as Error).message}`)
       return
     }
+    if (!isPlainObject(vars)) {
+      setError('Sequence vars must be a JSON object')
+      return
+    }
     const steps: EventSequenceStep[] = []
     for (const [index, step] of state.steps.entries()) {
       let payload: unknown | undefined
-      let varsOverride: Record<string, string>
+      let varsOverride: Record<string, unknown>
       try {
         payload = step.payload.trim() ? JSON.parse(step.payload) : undefined
       } catch (err) {
@@ -282,6 +286,10 @@ function SequenceEditorModal({
         varsOverride = JSON.parse(step.vars_override || '{}')
       } catch (err) {
         setError(`Step ${index + 1} vars JSON: ${(err as Error).message}`)
+        return
+      }
+      if (!isPlainObject(varsOverride)) {
+        setError(`Step ${index + 1} vars must be a JSON object`)
         return
       }
       if (!step.template_ref && (!step.channel.trim() || payload === undefined)) {
@@ -385,4 +393,8 @@ function SequenceEditorModal({
       </div>
     </div>
   )
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
 }

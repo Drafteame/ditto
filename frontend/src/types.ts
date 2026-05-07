@@ -150,7 +150,7 @@ export interface EventSequenceStep {
   adapter?: 'raw' | 'appsync' | ''
   type_name?: string
   payload?: unknown
-  vars_override?: Record<string, string>
+  vars_override?: Record<string, unknown>
 }
 
 export interface EventSequence {
@@ -159,7 +159,7 @@ export interface EventSequence {
   name: string
   description?: string
   steps: EventSequenceStep[]
-  vars?: Record<string, string>
+  vars?: Record<string, unknown>
   on_end: SequenceOnEnd
   created_at: string
   updated_at: string

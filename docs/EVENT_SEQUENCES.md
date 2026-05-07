@@ -64,6 +64,10 @@ Delays must be non-negative and are capped at 24 hours.
 
 ## Variables
 
+Sequence and step variables are JSON values on disk, so strings, numbers,
+booleans, objects, arrays, and null are accepted. They are converted through the
+same rules as template dispatch variables before rendering.
+
 Variables resolve with this precedence, from strongest to weakest:
 
 - runtime vars sent to `/play`
@@ -101,6 +105,9 @@ transport commands:
 - `speed`: accepts floats. `1` is real time, `2` is twice as fast, and `0`
   means Max mode.
 
+When `/play` omits `speed`, Ditto starts at `1x`. Sending `"speed": 0`
+explicitly starts in Max mode.
+
 Max mode (`speed = 0`) skips all waits and dispatches steps back-to-back.
 
 ## Schemas
@@ -129,4 +136,3 @@ IDs must be path-safe and may not contain `/`, `..`, or path separators.
 
 Ditto writes sequences atomically through a temporary file and assumes a single
 Ditto process owns a given data directory.
-

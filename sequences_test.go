@@ -29,7 +29,7 @@ func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 			Channel: "tickets",
 			Payload: json.RawMessage(`{"id":"{{ticketId}}"}`),
 		}},
-		Vars: map[string]string{"ticketId": "T-1"},
+		Vars: map[string]json.RawMessage{"ticketId": json.RawMessage(`"T-1"`)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +54,43 @@ func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 	got.OnEnd = "explode"
 	if _, err := reg.Update(seq.ID, got); err == nil {
 		t.Fatal("expected on_end validation error")
+	}
+}
+
+func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Typed Vars",
+		OnEnd: "stay",
+		Vars: map[string]json.RawMessage{
+			"matchId": json.RawMessage(`12345`),
+		},
+		Steps: []EventSequenceStep{{
+			DelayMs: 0,
+			Channel: "matches",
+			Payload: json.RawMessage(`{"matchId":"{{int:matchId}}"}`),
+			VarsOverride: map[string]json.RawMessage{
+				"flag": json.RawMessage(`true`),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := reg.ResolveStep(seq, seq.Steps[0], nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rendered.Payload) != `{"matchId":12345}` {
+		t.Fatalf("unexpected payload: %s", rendered.Payload)
 	}
 }
 

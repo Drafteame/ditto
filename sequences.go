@@ -25,27 +25,27 @@ const (
 var ErrEventSequenceNotFound = errors.New("event sequence not found")
 
 type EventSequence struct {
-	Version     int                 `json:"version"`
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Description string              `json:"description,omitempty"`
-	Steps       []EventSequenceStep `json:"steps"`
-	Vars        map[string]string   `json:"vars,omitempty"`
-	OnEnd       string              `json:"on_end"`
-	CreatedAt   time.Time           `json:"created_at"`
-	UpdatedAt   time.Time           `json:"updated_at"`
+	Version     int                        `json:"version"`
+	ID          string                     `json:"id"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	Steps       []EventSequenceStep        `json:"steps"`
+	Vars        map[string]json.RawMessage `json:"vars,omitempty"`
+	OnEnd       string                     `json:"on_end"`
+	CreatedAt   time.Time                  `json:"created_at"`
+	UpdatedAt   time.Time                  `json:"updated_at"`
 }
 
 type EventSequenceStep struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name,omitempty"`
-	DelayMs      int64             `json:"delay_ms"`
-	TemplateRef  string            `json:"template_ref,omitempty"`
-	Channel      string            `json:"channel,omitempty"`
-	Adapter      string            `json:"adapter,omitempty"`
-	TypeName     string            `json:"type_name,omitempty"`
-	Payload      json.RawMessage   `json:"payload,omitempty"`
-	VarsOverride map[string]string `json:"vars_override,omitempty"`
+	ID           string                     `json:"id"`
+	Name         string                     `json:"name,omitempty"`
+	DelayMs      int64                      `json:"delay_ms"`
+	TemplateRef  string                     `json:"template_ref,omitempty"`
+	Channel      string                     `json:"channel,omitempty"`
+	Adapter      string                     `json:"adapter,omitempty"`
+	TypeName     string                     `json:"type_name,omitempty"`
+	Payload      json.RawMessage            `json:"payload,omitempty"`
+	VarsOverride map[string]json.RawMessage `json:"vars_override,omitempty"`
 }
 
 type EventSequenceRegistry struct {
@@ -245,12 +245,9 @@ func (r *EventSequenceRegistry) Delete(id string) error {
 }
 
 func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenceStep, runtimeVars map[string]string, index int) (RenderedDispatch, error) {
-	vars := make(map[string]string)
-	for key, value := range seq.Vars {
-		vars[key] = value
-	}
-	for key, value := range step.VarsOverride {
-		vars[key] = value
+	vars, err := sequenceVariablesToStrings(seq.Vars, step.VarsOverride)
+	if err != nil {
+		return RenderedDispatch{}, err
 	}
 	for key, value := range runtimeVars {
 		vars[key] = value
@@ -388,16 +385,12 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 				return fmt.Errorf("schema type %q is not loaded", strings.TrimSpace(step.TypeName))
 			}
 		}
-		for name := range step.VarsOverride {
-			if !templateNamePattern.MatchString(strings.TrimSpace(name)) {
-				return fmt.Errorf("invalid variable name %q", name)
-			}
+		if _, err := eventTemplateVariablesToStrings(step.VarsOverride); err != nil {
+			return err
 		}
 	}
-	for name := range seq.Vars {
-		if !templateNamePattern.MatchString(strings.TrimSpace(name)) {
-			return fmt.Errorf("invalid variable name %q", name)
-		}
+	if _, err := eventTemplateVariablesToStrings(seq.Vars); err != nil {
+		return err
 	}
 	return nil
 }
@@ -460,9 +453,9 @@ func normalizeEventSequence(seq EventSequence) EventSequence {
 		seq.OnEnd = strings.ToLower(strings.TrimSpace(seq.OnEnd))
 	}
 	if seq.Vars != nil {
-		vars := make(map[string]string, len(seq.Vars))
+		vars := make(map[string]json.RawMessage, len(seq.Vars))
 		for key, value := range seq.Vars {
-			vars[strings.TrimSpace(key)] = value
+			vars[strings.TrimSpace(key)] = append(json.RawMessage(nil), value...)
 		}
 		seq.Vars = vars
 	}
@@ -476,9 +469,9 @@ func normalizeEventSequence(seq EventSequence) EventSequence {
 		step.TypeName = strings.TrimSpace(step.TypeName)
 		step.Payload = append(json.RawMessage(nil), step.Payload...)
 		if step.VarsOverride != nil {
-			vars := make(map[string]string, len(step.VarsOverride))
+			vars := make(map[string]json.RawMessage, len(step.VarsOverride))
 			for key, value := range step.VarsOverride {
-				vars[strings.TrimSpace(key)] = value
+				vars[strings.TrimSpace(key)] = append(json.RawMessage(nil), value...)
 			}
 			step.VarsOverride = vars
 		}
@@ -541,9 +534,9 @@ func isSequenceOnEnd(onEnd string) bool {
 
 func cloneEventSequence(seq EventSequence) EventSequence {
 	if seq.Vars != nil {
-		vars := make(map[string]string, len(seq.Vars))
+		vars := make(map[string]json.RawMessage, len(seq.Vars))
 		for key, value := range seq.Vars {
-			vars[key] = value
+			vars[key] = append(json.RawMessage(nil), value...)
 		}
 		seq.Vars = vars
 	}
@@ -560,9 +553,9 @@ func cloneEventSequence(seq EventSequence) EventSequence {
 func cloneEventSequenceStep(step EventSequenceStep) EventSequenceStep {
 	step.Payload = append(json.RawMessage(nil), step.Payload...)
 	if step.VarsOverride != nil {
-		vars := make(map[string]string, len(step.VarsOverride))
+		vars := make(map[string]json.RawMessage, len(step.VarsOverride))
 		for key, value := range step.VarsOverride {
-			vars[key] = value
+			vars[key] = append(json.RawMessage(nil), value...)
 		}
 		step.VarsOverride = vars
 	}
@@ -580,6 +573,29 @@ func templateDefaults(tmpl EventTemplate) map[string]*string {
 		defaults[name] = &value
 	}
 	return defaults
+}
+
+func sequenceVariablesToStrings(sequenceVars, stepVars map[string]json.RawMessage) (map[string]string, error) {
+	out := make(map[string]string)
+	if len(sequenceVars) > 0 {
+		converted, err := eventTemplateVariablesToStrings(sequenceVars)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range converted {
+			out[key] = value
+		}
+	}
+	if len(stepVars) > 0 {
+		converted, err := eventTemplateVariablesToStrings(stepVars)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range converted {
+			out[key] = value
+		}
+	}
+	return out, nil
 }
 
 func decodeEventSequenceJSON(w http.ResponseWriter, r *http.Request, dst any, allowEmpty bool) bool {
@@ -727,12 +743,14 @@ func RegisterSequenceRoutes(mux *http.ServeMux, registry *EventSequenceRegistry,
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(updated)
 		case http.MethodDelete:
-			if state, ok := player.State(id); ok && isActivePlayerStatus(state.Status) {
-				http.Error(w, "sequence has an active player", http.StatusConflict)
-				return
-			}
-			if err := registry.Delete(id); err != nil {
-				http.Error(w, err.Error(), http.StatusNotFound)
+			if err := player.DeleteWhenIdle(id, func() error {
+				return registry.Delete(id)
+			}); err != nil {
+				status := http.StatusNotFound
+				if errors.Is(err, ErrSequencePlayerActive) {
+					status = http.StatusConflict
+				}
+				http.Error(w, err.Error(), status)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
