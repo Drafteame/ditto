@@ -354,7 +354,7 @@ Fields:
 - `base_adapter` (required): one of the built-in adapters (`raw`, `appsync`). The profile inherits its control plane (`connection_init`, `subscribe`, `pong`, …) and overrides `Subprotocols()` and the data envelope wrapping.
 - `subprotocols` (optional): WebSocket subprotocols negotiated during handshake.
 - `envelope` (required): templates rendered at dispatch time.
-  - `outer`: top-level WS frame. Variables: `${sub_id}`, `${inner_string}`.
+  - `outer`: top-level WS frame. Variables: `${sub_id}`, `${inner_string}`, `${inner_json}`, `${inner_json_string}`. `${inner_string}` is a raw JSON string literal containing the rendered inner envelope, so `"event":${inner_string}` yields a string field like `"event":"{\"t\":\"recovery\",\"e\":\"...\"}"`. `${inner_json}` inserts the rendered inner envelope as a raw JSON object/array/value. `${inner_json_string}` is the escaped string content form for templates that prefer `"event":"${inner_json_string}"`.
   - `inner_binary`: payload wrapper for protobuf-encoded binary payloads. Variables: `${alias}`, `${type_name}`, `${base64}`.
   - `inner_json`: payload wrapper for raw JSON payloads. Variables: `${alias}`, `${type_name}`, `${json}`.
 - `type_aliases` (optional): map from proto FQN to short alias used as `${alias}`. If the dispatched type has no alias entry, `${alias}` falls back to `${type_name}` (the FQN).

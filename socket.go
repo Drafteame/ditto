@@ -204,6 +204,18 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*Sch
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"clients": hub.Snapshot()})
 	})
+	mux.HandleFunc("/__ditto__/api/socket/adapter-profiles", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !isAllowedSocketAPIRequest(r) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(AdapterProfileSummaries())
+	})
 	mux.HandleFunc("/__ditto__/api/socket/dispatch", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -823,6 +835,17 @@ func appSyncErrorPayload(raw json.RawMessage) any {
 }
 
 func NewProtocolAdapter(name string) (ProtocolAdapter, error) {
+	adapterName := normalizeAdapter(name)
+	if adapterName == "" {
+		adapterName = "raw"
+	}
+	if profile, ok := adapterProfile(adapterName); ok {
+		return NewProfileAdapter(profile)
+	}
+	return newBuiltinProtocolAdapter(adapterName)
+}
+
+func newBuiltinProtocolAdapter(name string) (ProtocolAdapter, error) {
 	switch normalizeAdapter(name) {
 	case "", "raw":
 		return RawAdapter{}, nil

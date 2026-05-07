@@ -8,14 +8,15 @@ import (
 
 // DataLayout contains Ditto's bundle-compatible persistence paths.
 type DataLayout struct {
-	Root              string
-	ConfigPath        string
-	MocksDir          string
-	DescriptorsDir    string
-	EventTemplatesDir string
-	SequencesDir      string
-	RecordingsDir     string
-	ScenariosDir      string
+	Root               string
+	ConfigPath         string
+	MocksDir           string
+	DescriptorsDir     string
+	EventTemplatesDir  string
+	SequencesDir       string
+	AdapterProfilesDir string
+	RecordingsDir      string
+	ScenariosDir       string
 }
 
 type dataSubdir struct {
@@ -28,6 +29,7 @@ var dataSubdirs = []dataSubdir{
 	{"descriptors", func(layout *DataLayout, path string) { layout.DescriptorsDir = path }},
 	{"event_templates", func(layout *DataLayout, path string) { layout.EventTemplatesDir = path }},
 	{"sequences", func(layout *DataLayout, path string) { layout.SequencesDir = path }},
+	{adapterProfilesDirName, func(layout *DataLayout, path string) { layout.AdapterProfilesDir = path }},
 	{"recordings", func(layout *DataLayout, path string) { layout.RecordingsDir = path }},
 	{"scenarios", func(layout *DataLayout, path string) { layout.ScenariosDir = path }},
 }

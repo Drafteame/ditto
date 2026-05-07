@@ -20,6 +20,7 @@ func TestEnsureDataLayoutCreatesBundleCompatibleDirectories(t *testing.T) {
 		layout.DescriptorsDir,
 		layout.EventTemplatesDir,
 		layout.SequencesDir,
+		layout.AdapterProfilesDir,
 		layout.RecordingsDir,
 		layout.ScenariosDir,
 	}

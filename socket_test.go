@@ -601,3 +601,7 @@ func (a *countingAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessa
 func (a *countingAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
 	return EncodedServerMessage{}, 0
 }
+
+func (a *countingAdapter) Subprotocols() []string {
+	return nil
+}
