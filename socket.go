@@ -52,6 +52,7 @@ type ProtocolAdapter interface {
 	WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error)
 	EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error)
 	Heartbeat() (EncodedServerMessage, time.Duration)
+	Subprotocols() []string
 }
 
 type SubscriptionRegistry struct {
@@ -376,6 +377,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 		CompressionMode:    websocket.CompressionDisabled,
+		Subprotocols:       adapter.Subprotocols(),
 	})
 	if err != nil {
 		return
@@ -905,6 +907,10 @@ func (RawAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
 	return textMessage([]byte(`{"type":"ping"}`)), 30 * time.Second
 }
 
+func (RawAdapter) Subprotocols() []string {
+	return nil
+}
+
 type AppSyncAdapter struct{}
 
 func (AppSyncAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
@@ -991,6 +997,10 @@ func (AppSyncAdapter) WrapData(payload EncodedPayload, subID string) (EncodedSer
 
 func (AppSyncAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
 	return textMessage([]byte(`{"type":"ka"}`)), 5 * time.Second
+}
+
+func (AppSyncAdapter) Subprotocols() []string {
+	return []string{"aws-appsync-event-ws"}
 }
 
 func normalizeClientMessageType(t string) string {

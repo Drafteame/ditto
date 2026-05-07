@@ -48,6 +48,7 @@ Domain-specific data (Protobuf schemas, mocks, recordings, scenarios) lives in *
 | WS library | `nhooyr.io/websocket` (no CGO, plays well with Wails). |
 | Filesystem layout | Designed from day 1 to be exportable as `.dittopack`. See M0. |
 | Match/scenario simulation | No hardcoded generators. Composition of record + replay + scenario + dispatch. |
+| Adapter customization | Profile-based (`adapter_profiles/*.json`). A generic profile-driven adapter at runtime applies envelope templates + type aliases. No per-backend Go code; supporting a new backend = dropping a JSON file. |
 
 ## Filesystem layout
 
@@ -56,6 +57,7 @@ Domain-specific data (Protobuf schemas, mocks, recordings, scenarios) lives in *
   config.json          ← already exists
   mocks/               ← already exists
   descriptors/         ← schema packs loaded
+  adapter_profiles/    ← protocol adapter configs (envelope template + type aliases)
   event_templates/     ← reusable parameterized events
   sequences/           ← ordered event timelines
   recordings/          ← real captured WS traffic
@@ -78,6 +80,7 @@ defines the compatibility contract; it does not implement bundle import/export.
   "artifacts": {
     "mocks": ["mocks/users.json"],
     "descriptors": ["descriptors/events/manifest.json"],
+    "adapter_profiles": ["adapter_profiles/appsync-draftea.json"],
     "event_templates": ["event_templates/ticket_created.json"],
     "sequences": ["sequences/happy_path.json"],
     "recordings": ["recordings/session/channel.jsonl"],
@@ -111,6 +114,7 @@ Rules:
 | M6 — Replay + recording editing | ⏳ |
 | M7 — Scenarios | ⏳ |
 | M8 — Ditto Collections (`.dittopack`) | ⏳ |
+| M9 — Adapter profile UI | ⏳ |
 
 ### M0 — Foundations ✅
 
@@ -294,6 +298,76 @@ This milestone delivers **"simulate a full session"** without any session-specif
 - ADR: [Bundle ID Stability Policy](docs/adr/0003-bundle-id-stability-policy.md).
 
 **Done when:** export a scenario as `match-day-v1.dittopack`, share with a teammate, they import with a click, see conflicts (if any), resolve, activate the scenario, it works identically.
+
+---
+
+### M9 — Adapter profile UI
+
+**Goal:** create, edit, validate, and test adapter profiles from the dashboard. Today profiles are hand-written JSON files (see "Adapter profiles" below); M9 adds the visual layer so a non-technical user can onboard a new backend without touching files.
+
+- **Profile editor**: form-driven UI for `name`, `base_adapter`, `subprotocols`, envelope templates (with syntax highlighting), and the `type_aliases` mapping.
+- **Live preview pane**: pick a sample subscription ID, type, and payload — see exactly what frame will be sent on the wire as you edit.
+- **Validation**: known variables are recognised, missing/typo'd vars flagged, the rendered output is JSON-validated, dry-run dispatch against a connected client is available.
+- **CRUD via REST**: `POST/PUT/DELETE /__ditto__/api/socket/adapter-profiles`. New or edited profiles persist to `adapter_profiles/` and re-register at runtime without a restart.
+- **Reference profiles**: ship a small library (vanilla AppSync, Pusher-style, Socket.IO-style) so first-time users have a starting point.
+
+**Done when:** a non-technical user opens the dashboard, picks a starting reference profile, edits envelope and aliases visually, sees a live preview that matches their backend's actual frame, saves, and dispatches successfully without ever opening a JSON file.
+
+---
+
+## Adapter profiles
+
+Adapter profiles parameterize the WebSocket protocol adapters per backend. They are JSON files in `adapter_profiles/` (and travel inside `.dittopack` bundles, see M8) so that backend-specific envelope shape and type aliases live as **data, not Go code**. This keeps Ditto agnostic: supporting a new backend means dropping a JSON file in, not shipping a new Ditto version.
+
+### Profile JSON format
+
+Example: `adapter_profiles/appsync-draftea.json` (shipped as a seeded default).
+
+```json
+{
+  "manifest_version": 1,
+  "name": "appsync-draftea",
+  "base_adapter": "appsync",
+  "subprotocols": ["aws-appsync-event-ws"],
+  "envelope": {
+    "outer":        "{\"id\":\"${sub_id}\",\"type\":\"data\",\"event\":${inner_string}}",
+    "inner_binary": "{\"t\":\"${alias}\",\"e\":\"${base64}\"}",
+    "inner_json":   "{\"t\":\"${alias}\",\"e\":${json}}"
+  },
+  "type_aliases": {
+    "appsync.recovery.Recovery": "recovery",
+    "appsync.gameinfo.GameEventDto": "gameInfo",
+    "appsync.betinfo.BetEventDto": "betInfo",
+    "appsync.betinfo.BetsInfoDto": "betsInfo",
+    "appsync.statsinfo.StatsRealtimePayloadDto": "statsInfo",
+    "appsync.livestatsinfo.LiveStatEventDto": "liveStatsInfo",
+    "appsync.livestatsinfo.LiveStatsEventDto": "liveStatsInfoBatch",
+    "appsync.earlycashoutinfo.EarlyCashoutEventDto": "ticketCashoutInfo"
+  }
+}
+```
+
+Fields:
+
+- `manifest_version` (required, int): starts at `1`.
+- `name` (required): unique adapter name. Becomes the value of `?adapter=<name>` and the `adapter` field in REST/template/sequence requests.
+- `base_adapter` (required): one of the built-in adapters (`raw`, `appsync`). The profile inherits its control plane (`connection_init`, `subscribe`, `pong`, …) and overrides `Subprotocols()` and the data envelope wrapping.
+- `subprotocols` (optional): WebSocket subprotocols negotiated during handshake.
+- `envelope` (required): templates rendered at dispatch time.
+  - `outer`: top-level WS frame. Variables: `${sub_id}`, `${inner_string}`.
+  - `inner_binary`: payload wrapper for protobuf-encoded binary payloads. Variables: `${alias}`, `${type_name}`, `${base64}`.
+  - `inner_json`: payload wrapper for raw JSON payloads. Variables: `${alias}`, `${type_name}`, `${json}`.
+- `type_aliases` (optional): map from proto FQN to short alias used as `${alias}`. If the dispatched type has no alias entry, `${alias}` falls back to `${type_name}` (the FQN).
+
+### Loader and registration
+
+At startup Ditto scans `adapter_profiles/`, parses each `.json`, validates it, and registers it as a protocol adapter under its `name`. Bundled defaults (currently `appsync-draftea.json`) are seeded into the directory on first run so out-of-the-box `?adapter=appsync-draftea` works without manual setup. Existing files are not overwritten — user edits persist across upgrades.
+
+REST: `GET /__ditto__/api/socket/adapter-profiles` lists available profiles (read-only). Create/update via UI is M9.
+
+### Why a separate artifact
+
+Schema packs describe types. Profiles describe how a backend wraps those types on the wire. Two backends can share a schema pack while differing in envelope; one backend can use multiple schema packs under the same envelope. Keeping them separate avoids forcing re-packaging when only the envelope changes.
 
 ---
 

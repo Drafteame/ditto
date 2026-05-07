@@ -54,7 +54,7 @@ Ditto can also stand in for your app's WebSocket backend. The minimum to start m
 
 1. **Point your app at Ditto.** Set its WebSocket URL to `ws://localhost:8888/__ditto__/socket` (or `wss://...` if you started Ditto with `--https`). Ditto exposes `/__ditto__/ws` as an alias.
 2. **Open the Sockets tab** in the dashboard. Connected clients and the channels they have subscribed to appear there in real time.
-3. **Pick a protocol adapter.** Choose `raw` (plain JSON, no envelope) or `appsync` (AWS AppSync Events). Match what your app speaks.
+3. **Pick a protocol adapter.** Choose a built-in (`raw` for plain JSON, `appsync` for AWS AppSync Events) or any **adapter profile** loaded from `adapter_profiles/` (e.g. `appsync-draftea` ships as a default for AppSync backends with a Draftea-style custom envelope). Profiles are JSON config files that customise envelope shape and type aliases per backend with no Go code — see the [Adapter profiles section](WEBSOCKET_MOCKING_PLAN.md#adapter-profiles) of the plan. A visual editor for profiles is planned (M9 in the roadmap).
 4. **Dispatch an event.** Select a channel the client is subscribed to, write the JSON payload, and click **Dispatch**. The client receives it immediately.
 
 That's enough to send arbitrary events to a connected app. The features below are optional layers on top:
