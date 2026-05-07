@@ -145,10 +145,10 @@ func (a ProfileAdapter) WrapData(payload EncodedPayload, subID, channel string) 
 	var err error
 	if payload.Kind == websocket.MessageBinary {
 		innerTemplate = a.profile.Envelope.InnerBinary
-		innerVars, err = a.innerBinaryVars(payload)
+		innerVars, err = a.innerBinaryVars(payload, channel)
 	} else {
 		innerTemplate = a.profile.Envelope.InnerJSON
-		innerVars, err = a.innerJSONVars(payload)
+		innerVars, err = a.innerJSONVars(payload, channel)
 	}
 	if err != nil {
 		return EncodedServerMessage{}, err
@@ -175,7 +175,7 @@ func (a ProfileAdapter) WrapData(payload EncodedPayload, subID, channel string) 
 	return EncodedServerMessage{Data: outer, Kind: websocket.MessageText}, nil
 }
 
-func (a ProfileAdapter) innerBinaryVars(payload EncodedPayload) (map[string]adapterTemplateValue, error) {
+func (a ProfileAdapter) innerBinaryVars(payload EncodedPayload, channel string) (map[string]adapterTemplateValue, error) {
 	typeName := strings.TrimSpace(payload.TypeName)
 	alias := typeName
 	if mapped := a.profile.TypeAliases[typeName]; mapped != "" {
@@ -184,11 +184,12 @@ func (a ProfileAdapter) innerBinaryVars(payload EncodedPayload) (map[string]adap
 	return map[string]adapterTemplateValue{
 		"alias":     {value: alias},
 		"type_name": {value: typeName},
+		"channel":   {value: channel},
 		"base64":    {value: base64.StdEncoding.EncodeToString(payload.Data)},
 	}, nil
 }
 
-func (a ProfileAdapter) innerJSONVars(payload EncodedPayload) (map[string]adapterTemplateValue, error) {
+func (a ProfileAdapter) innerJSONVars(payload EncodedPayload, channel string) (map[string]adapterTemplateValue, error) {
 	typeName := strings.TrimSpace(payload.TypeName)
 	alias := typeName
 	if mapped := a.profile.TypeAliases[typeName]; mapped != "" {
@@ -201,10 +202,14 @@ func (a ProfileAdapter) innerJSONVars(payload EncodedPayload) (map[string]adapte
 	return map[string]adapterTemplateValue{
 		"alias":     {value: alias},
 		"type_name": {value: typeName},
+		"channel":   {value: channel},
 		"json":      {value: string(rawJSON), raw: true},
 	}, nil
 }
 
+// payloadJSONValue is used only by the JSON-payload path. Binary callers must
+// use the base64 variable instead; Data is considered here only when it already
+// contains valid JSON bytes from a text payload.
 func payloadJSONValue(payload EncodedPayload) ([]byte, error) {
 	if len(payload.Data) > 0 && json.Valid(payload.Data) {
 		return append([]byte(nil), payload.Data...), nil
@@ -318,7 +323,7 @@ func SeedDefaultAdapterProfiles(dir string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(target, data, 0o644); err != nil {
+		if err := atomicWriteFile(target, data, 0o644); err != nil {
 			return err
 		}
 		seeded[entry.Name()] = true
@@ -383,7 +388,29 @@ func writeSeededAdapterProfiles(dir string, seeded map[string]bool) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return os.WriteFile(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
+	return atomicWriteFile(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
+}
+
+func atomicWriteFile(path string, data []byte, perm fs.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func readEmbeddedAdapterProfile(path string) ([]byte, error) {

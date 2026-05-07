@@ -164,6 +164,29 @@ func TestProfileAdapterWrapDataExposesChannelVariable(t *testing.T) {
 	}
 }
 
+func TestProfileAdapterWrapDataExposesChannelVariableInsideInnerTemplate(t *testing.T) {
+	profile := testAdapterProfile("custom-profile", nil)
+	profile.Envelope.InnerBinary = `{"t":"${alias}","channel":"${channel}","e":"${base64}"}`
+	adapter, err := NewProfileAdapter(profile)
+	if err != nil {
+		t.Fatalf("NewProfileAdapter() error = %v", err)
+	}
+
+	encoded, err := adapter.WrapData(EncodedPayload{
+		Data:     []byte{1},
+		Kind:     websocket.MessageBinary,
+		TypeName: "appsync.recovery.Recovery",
+	}, "sub-1", `/inner"channel\name`)
+	if err != nil {
+		t.Fatalf("WrapData() error = %v", err)
+	}
+
+	_, inner := decodeProfileEnvelope(t, encoded.Data)
+	if inner.Channel != `/inner"channel\name` {
+		t.Fatalf("inner.channel = %q, want escaped channel value", inner.Channel)
+	}
+}
+
 func TestProfileAdapterWrapDataCanInsertInnerObjectRaw(t *testing.T) {
 	profile := testAdapterProfile("custom-profile", map[string]string{
 		"appsync.gameinfo.GameEventDto": "gameInfo",
@@ -461,8 +484,9 @@ func decodeProfileEnvelope(t *testing.T, data []byte) (struct {
 	Type  string `json:"type"`
 	Event string `json:"event"`
 }, struct {
-	T string `json:"t"`
-	E any    `json:"e"`
+	T       string `json:"t"`
+	Channel string `json:"channel,omitempty"`
+	E       any    `json:"e"`
 }) {
 	t.Helper()
 	var env struct {
@@ -474,8 +498,9 @@ func decodeProfileEnvelope(t *testing.T, data []byte) (struct {
 		t.Fatalf("outer JSON error: %v; data=%s", err, data)
 	}
 	var inner struct {
-		T string `json:"t"`
-		E any    `json:"e"`
+		T       string `json:"t"`
+		Channel string `json:"channel,omitempty"`
+		E       any    `json:"e"`
 	}
 	if err := json.Unmarshal([]byte(env.Event), &inner); err != nil {
 		t.Fatalf("inner JSON error: %v; event=%s", err, env.Event)

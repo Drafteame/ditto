@@ -223,7 +223,7 @@ Implementation notes:
 - Per-channel modes (config persisted): `mock` (default), `live`, `record`, `mixed` (live + permits additional injection).
 - `Recorder`: when a channel is in `record` mode, persist each incoming event with relative timestamp to `recordings/{name}/{channel}.jsonl`.
 - Decode to JSON using schema registry if a descriptor exists; otherwise store raw bytes + base64.
-- Adapter-profile recordings use a profile-aware envelope decoder. Store the raw frame plus the decoded inner payload; replay re-wraps through the current adapter profile so edited events still flow through `WrapData`.
+- Adapter-profile recordings use a profile-aware envelope decoder. Store the raw frame plus the decoded inner payload; replay re-wraps through the current adapter profile so edited events still flow through `WrapData`. Before implementation, write an ADR for the recording decoder strategy (heuristic per base adapter vs explicit inverse templates vs raw-frame-first hybrid).
 - Live upstream URL is server-level config (`--target` / saved target), not part of adapter profiles. If a backend later needs custom upgrade headers, add profile-level `upgrade_headers` separately.
 - **Throttling for high-volume traffic.** Until M4 the user was the rate limiter (manual dispatch, sequences). Live mode and recording introduce uncontrolled upstream rates, so this milestone owns the throttling story:
   - **UI log coalescing.** SOCKET frames in the live event log coalesce per channel when they exceed a threshold (default 20/sec) into a single `LogEvent` summarising the burst (e.g. `"42 frames in 1s"`). Individual frames remain inspectable on demand from the recording or a per-channel detail view.
@@ -298,6 +298,7 @@ This milestone delivers **"simulate a full session"** without any session-specif
   - Individual mock / sequence
 - Import with conflict resolution UI: per conflicting item, show a `git`-style diff + skip / overwrite / rename / merge options.
 - Adapter profile conflicts key by `name + manifest_version`. Same name/version applies cleanly; different versions require explicit user diff/choice.
+- Adapter profile seed markers are runtime state and must not be exported. Revisit moving the marker out of `adapter_profiles/` when bundle import/export defines which state files are packaged.
 - Persist manifest format with `schemaVersion` for future compatibility.
 - ADR: [Bundle ID Stability Policy](docs/adr/0003-bundle-id-stability-policy.md).
 
@@ -364,8 +365,8 @@ Fields:
 - `subprotocols` (optional): WebSocket subprotocols negotiated during handshake.
 - `envelope` (required): templates rendered at dispatch time.
   - `outer`: top-level WS frame. Variables: `${sub_id}`, `${channel}`, `${inner_object}`, `${inner_string}`. `${inner_object}` inserts the rendered inner envelope as a raw JSON object/array/value, e.g. `"event":${inner_object}`. `${inner_string}` is a raw JSON string literal containing the rendered inner envelope, so `"event":${inner_string}` yields a string field like `"event":"{\"t\":\"recovery\",\"e\":\"...\"}"`.
-  - `inner_binary`: payload wrapper for protobuf-encoded binary payloads. Variables: `${alias}`, `${type_name}`, `${base64}`.
-  - `inner_json`: payload wrapper for raw JSON payloads. Variables: `${alias}`, `${type_name}`, `${json}`.
+  - `inner_binary`: payload wrapper for protobuf-encoded binary payloads. Variables: `${alias}`, `${type_name}`, `${channel}`, `${base64}`.
+  - `inner_json`: payload wrapper for raw JSON payloads. Variables: `${alias}`, `${type_name}`, `${channel}`, `${json}`.
 - `type_aliases` (optional): map from proto FQN to short alias used as `${alias}`. If the dispatched type has no alias entry, `${alias}` falls back to `${type_name}` (the FQN).
 
 ### Loader and registration
