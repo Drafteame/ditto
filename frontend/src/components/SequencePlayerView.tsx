@@ -46,14 +46,15 @@ export function SequencePlayerView({
 
       <div className="sequence-timeline">
         {sequence.steps.map((step, index) => {
-          const active = status === 'playing' && index === current
-          const complete = index < current && status !== 'completed'
+          const active = (status === 'playing' || status === 'paused') && index === current
+          const complete = (status === 'completed' && index <= current) || index < current
+          const errored = status === 'error' && index === current
           const width = Math.max(72, Math.round(((step.delay_ms || 0) / maxDelay) * 180))
           return (
             <button
               key={step.id}
               type="button"
-              className={`timeline-node ${active ? 'active' : ''} ${complete ? 'complete' : ''}`}
+              className={`timeline-node ${active ? 'active' : ''} ${complete ? 'complete' : ''} ${status === 'paused' && active ? 'paused' : ''} ${errored ? 'error' : ''}`}
               style={{ minWidth: width }}
               onClick={() => onSeek(index)}
               title={`Seek to step ${index + 1}`}
@@ -91,4 +92,3 @@ export function SequencePlayerView({
     </section>
   )
 }
-

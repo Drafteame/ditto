@@ -126,6 +126,10 @@ func (r *EventSequenceRegistry) Load() error {
 			seq.ID = id
 		}
 		fileID := seq.ID
+		if err := validateSequenceVariableKeyCollisions(seq); err != nil {
+			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
+			continue
+		}
 		seq = normalizeEventSequence(seq)
 		seq.ID = fileID
 		if seq.ID != id || !isSafeEventTemplateID(seq.ID) {
@@ -172,6 +176,9 @@ func (r *EventSequenceRegistry) Get(id string) (EventSequence, error) {
 }
 
 func (r *EventSequenceRegistry) Create(seq EventSequence) (EventSequence, error) {
+	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
+		return EventSequence{}, err
+	}
 	seq = normalizeEventSequence(seq)
 	now := time.Now().UTC()
 	seq.ID = ""
@@ -202,6 +209,9 @@ func (r *EventSequenceRegistry) Create(seq EventSequence) (EventSequence, error)
 func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSequence, error) {
 	if !isSafeEventTemplateID(id) {
 		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+	}
+	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
+		return EventSequence{}, err
 	}
 	seq = normalizeEventSequence(seq)
 	assignSequenceStepIDs(&seq)
@@ -381,8 +391,14 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 		if _, err := eventTemplateVariablesToStrings(step.VarsOverride); err != nil {
 			return err
 		}
+		if err := validateSequenceVariableKeys(step.VarsOverride, fmt.Sprintf("step %d vars_override", i+1)); err != nil {
+			return err
+		}
 	}
 	if _, err := eventTemplateVariablesToStrings(seq.Vars); err != nil {
+		return err
+	}
+	if err := validateSequenceVariableKeys(seq.Vars, "sequence vars"); err != nil {
 		return err
 	}
 	return nil
@@ -591,6 +607,36 @@ func sequenceVariablesToStrings(sequenceVars, stepVars map[string]json.RawMessag
 	return out, nil
 }
 
+func validateSequenceVariableKeys(vars map[string]json.RawMessage, label string) error {
+	if len(vars) == 0 {
+		return nil
+	}
+	seen := make(map[string]string, len(vars))
+	for key := range vars {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			return fmt.Errorf("%s contains an empty variable name", label)
+		}
+		if prior, ok := seen[trimmed]; ok && prior != key {
+			return fmt.Errorf("%s contains duplicate variable name %q after trimming", label, trimmed)
+		}
+		seen[trimmed] = key
+	}
+	return nil
+}
+
+func validateSequenceVariableKeyCollisions(seq EventSequence) error {
+	if err := validateSequenceVariableKeys(seq.Vars, "sequence vars"); err != nil {
+		return err
+	}
+	for i, step := range seq.Steps {
+		if err := validateSequenceVariableKeys(step.VarsOverride, fmt.Sprintf("step %d vars_override", i+1)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func decodeEventSequenceJSON(w http.ResponseWriter, r *http.Request, dst any, allowEmpty bool) bool {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxEventSequenceBodyBytes))
 	if err != nil {
@@ -758,7 +804,7 @@ func handleSequencePlayerAction(w http.ResponseWriter, r *http.Request, player *
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if r.Header.Get("Content-Type") != "" && !hasJSONContentType(r) {
+	if requestHasBody(r) && !hasJSONContentType(r) {
 		http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -814,4 +860,8 @@ func handleSequencePlayerAction(w http.ResponseWriter, r *http.Request, player *
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(state)
+}
+
+func requestHasBody(r *http.Request) bool {
+	return r.Body != nil && r.ContentLength != 0
 }

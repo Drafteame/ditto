@@ -1455,6 +1455,22 @@ svg {
   color: oklch(18% 0.01 240);
   background: var(--accent);
 }
+.timeline-node.paused {
+  border-style: dashed;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--warn) 16%, transparent);
+}
+.timeline-node.paused span {
+  color: var(--warn);
+  background: color-mix(in oklch, var(--warn) 14%, transparent);
+}
+.timeline-node.error {
+  border-color: var(--err);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--err) 16%, transparent);
+}
+.timeline-node.error span {
+  color: var(--err);
+  background: color-mix(in oklch, var(--err) 14%, transparent);
+}
 .timeline-node.complete {
   opacity: 0.72;
 }

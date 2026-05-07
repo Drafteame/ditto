@@ -100,6 +100,75 @@ func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
 	}
 }
 
+func TestEventSequenceUpdatePreservesStepIDsWhenSent(t *testing.T) {
+	reg := newTestSequenceRegistry(t)
+	seq, err := reg.Create(EventSequence{
+		Name:  "IDs",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{{
+			DelayMs: 0,
+			Channel: "tickets",
+			Payload: json.RawMessage(`{"ok":true}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepID := seq.Steps[0].ID
+	seq.Steps[0].Name = "Renamed"
+	updated, err := reg.Update(seq.ID, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Steps[0].ID != stepID {
+		t.Fatalf("step id changed from %q to %q", stepID, updated.Steps[0].ID)
+	}
+}
+
+func TestEventSequenceUpdateRegeneratesMissingStepIDs(t *testing.T) {
+	reg := newTestSequenceRegistry(t)
+	seq, err := reg.Create(EventSequence{
+		Name:  "Missing IDs",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{{
+			DelayMs: 0,
+			Channel: "tickets",
+			Payload: json.RawMessage(`{"ok":true}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq.Steps[0].ID = ""
+	updated, err := reg.Update(seq.ID, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Steps[0].ID == "" {
+		t.Fatal("expected regenerated step id")
+	}
+}
+
+func TestEventSequenceRejectsTrimmedVariableKeyCollision(t *testing.T) {
+	reg := newTestSequenceRegistry(t)
+	_, err := reg.Create(EventSequence{
+		Name:  "Collision",
+		OnEnd: "stay",
+		Vars: map[string]json.RawMessage{
+			"foo":   json.RawMessage(`"a"`),
+			" foo ": json.RawMessage(`"b"`),
+		},
+		Steps: []EventSequenceStep{{
+			DelayMs: 0,
+			Channel: "tickets",
+			Payload: json.RawMessage(`{"ok":true}`),
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected trimmed variable key collision")
+	}
+}
+
 func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	dir := t.TempDir()
 	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
@@ -170,4 +239,45 @@ func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", rec.Code)
 	}
+}
+
+func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
+	reg := newTestSequenceRegistry(t)
+	seq, err := reg.Create(EventSequence{
+		Name:  "HTTP",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{{
+			DelayMs: 0,
+			Channel: "tickets",
+			Payload: json.RawMessage(`{"ok":true}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	player := NewSequencePlayer(reg, reg.templates, nil, NewSocketHub(NewEventBus(), false), NewPlayerBroadcaster())
+	mux := http.NewServeMux()
+	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
+
+	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/sequences/"+seq.ID+"/seek", strings.NewReader(`{"step":0}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func newTestSequenceRegistry(t *testing.T) *EventSequenceRegistry {
+	t.Helper()
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
 }

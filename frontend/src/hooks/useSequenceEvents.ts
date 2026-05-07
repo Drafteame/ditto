@@ -21,8 +21,12 @@ export function useSequenceEvents(onEvent: (event: PlayerEvent) => void, onRecon
         hasConnectedBefore = true
       }
       es.onmessage = (e) => {
-        const event: PlayerEvent = JSON.parse(e.data)
-        onEventRef.current(event)
+        try {
+          const event: PlayerEvent = JSON.parse(e.data)
+          onEventRef.current(event)
+        } catch (err) {
+          console.warn('failed to parse sequence event', err)
+        }
       }
       es.onerror = () => {
         es?.close()
@@ -37,4 +41,3 @@ export function useSequenceEvents(onEvent: (event: PlayerEvent) => void, onRecon
     }
   }, [])
 }
-

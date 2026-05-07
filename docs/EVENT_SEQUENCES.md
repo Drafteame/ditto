@@ -143,3 +143,9 @@ IDs must be path-safe and may not contain `/`, `..`, or path separators.
 
 Ditto writes sequences atomically through a temporary file and assumes a single
 Ditto process owns a given data directory.
+
+## Editor Notes
+
+The sequence editor currently uses the same plain JSON textareas as the
+template editor. A shared schema-aware JSON editor for dispatcher, templates,
+and sequences is planned as follow-up UI debt.
