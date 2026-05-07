@@ -6,6 +6,7 @@ export interface LogEvent {
   status: number
   duration_ms: number
   response_body?: string
+  source?: string
   request_headers?: Record<string, string[]>
   mock_index?: number
   sequence_step?: number
@@ -100,6 +101,42 @@ export interface SocketDispatchResult {
   delivered: number
   dropped?: string[]
   errors?: string[]
+}
+
+export interface EventTemplateVariable {
+  name: string
+  description?: string
+  default?: string
+}
+
+export interface EventTemplate {
+  version: number
+  id: string
+  name: string
+  description?: string
+  channel: string
+  adapter?: 'raw' | 'appsync' | ''
+  type_name?: string
+  payload: unknown
+  variables?: EventTemplateVariable[]
+  created_at: string
+  updated_at: string
+}
+
+export interface EventTemplatesResponse {
+  templates: EventTemplate[]
+}
+
+export interface EventTemplateDispatchRequest {
+  variables?: Record<string, unknown>
+  channel_override?: string
+  adapter_override?: 'raw' | 'appsync' | ''
+}
+
+export interface EventTemplateDispatchResult extends SocketDispatchResult {
+  resolved_payload: unknown
+  missing_variables?: string[]
+  invalid_casts?: Array<{ name: string; kind: string; value: string }>
 }
 
 export interface SchemaField {

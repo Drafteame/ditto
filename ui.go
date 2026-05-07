@@ -29,6 +29,7 @@ type LogEvent struct {
 	Status         int                 `json:"status"`
 	DurationMs     int64               `json:"duration_ms"`
 	ResponseBody   string              `json:"response_body,omitempty"`
+	Source         string              `json:"source,omitempty"`
 	RequestHeaders map[string][]string `json:"request_headers,omitempty"`
 	MockIndex      int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
 	SequenceStep   int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback

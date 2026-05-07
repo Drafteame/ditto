@@ -91,6 +91,7 @@ type Server struct {
 	ProxyMgr  *ProxyManager
 	SocketHub *SocketHub
 	Schemas   *SchemaRegistry
+	Templates *EventTemplateRegistry
 	Info      ServerInfo
 	Config    ServerConfig
 	CertPath  string
@@ -108,6 +109,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Layout.DescriptorsDir == "" {
 		return nil, fmt.Errorf("server config layout with descriptors dir is required")
 	}
+	if cfg.Layout.EventTemplatesDir == "" {
+		return nil, fmt.Errorf("server config layout with event templates dir is required")
+	}
 
 	store := NewMockStore(cfg.MocksDir)
 	if err := store.Load(); err != nil {
@@ -122,6 +126,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)
+	}
+	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load event template registry: %w", err)
 	}
 
 	var certPath, keyPath string
@@ -151,6 +159,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	RegisterUI(mux, store, bus, proxyMgr, info, cfg.ServeUI)
 	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
 	RegisterSchemaRoutes(mux, schemaRegistry)
+	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub, schemaRegistry)
 
 	// Main proxy/mock handler
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -272,6 +281,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		ProxyMgr:  proxyMgr,
 		SocketHub: socketHub,
 		Schemas:   schemaRegistry,
+		Templates: eventTemplates,
 		Info:      info,
 		Config:    cfg,
 		CertPath:  certPath,

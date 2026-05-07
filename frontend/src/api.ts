@@ -1,6 +1,10 @@
 import type {
   Mock,
   MocksResponse,
+  EventTemplate,
+  EventTemplateDispatchRequest,
+  EventTemplateDispatchResult,
+  EventTemplatesResponse,
   SchemaPacksResponse,
   SchemaPack,
   SchemaTypesResponse,
@@ -142,6 +146,79 @@ export async function dispatchSocketEvent(req: SocketDispatchRequest): Promise<S
     throw new Error(text || `HTTP ${res.status}`)
   }
   return res.json()
+}
+
+export async function fetchEventTemplates(): Promise<EventTemplatesResponse> {
+  const res = await fetch(`${API_BASE}/event-templates`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchEventTemplate(id: string): Promise<EventTemplate> {
+  const res = await fetch(`${API_BASE}/event-templates/${encodeURIComponent(id)}`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function saveEventTemplate(template: Partial<EventTemplate>, id?: string): Promise<EventTemplate> {
+  const url = id
+    ? `${API_BASE}/event-templates/${encodeURIComponent(id)}`
+    : `${API_BASE}/event-templates`
+  const res = await fetch(url, {
+    method: id ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(template),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function deleteEventTemplate(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/event-templates/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+}
+
+export async function dispatchEventTemplate(
+  id: string,
+  req: EventTemplateDispatchRequest,
+): Promise<EventTemplateDispatchResult> {
+  const res = await fetch(`${API_BASE}/event-templates/${encodeURIComponent(id)}/dispatch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  const text = await res.text().catch(() => '')
+  let data: EventTemplateDispatchResult | null = null
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch {
+    data = null
+  }
+  if (!res.ok) {
+    const missing = data?.missing_variables?.length
+      ? `Missing variables: ${data.missing_variables.join(', ')}`
+      : ''
+    const invalid = data?.invalid_casts?.length
+      ? `Invalid casts: ${data.invalid_casts.map(item => `${item.kind}:${item.name}`).join(', ')}`
+      : ''
+    throw new Error([missing, invalid, text || `HTTP ${res.status}`].filter(Boolean).join(' / '))
+  }
+  if (!data) throw new Error(`HTTP ${res.status}`)
+  return data
 }
 
 export async function fetchSchemaPacks(): Promise<SchemaPacksResponse> {
