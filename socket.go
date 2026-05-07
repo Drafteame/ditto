@@ -651,12 +651,16 @@ func rawPayload(raw json.RawMessage) any {
 func appSyncErrorPayload(raw json.RawMessage) any {
 	message := "socket error"
 	if len(raw) > 0 {
-		var obj map[string]any
-		if err := json.Unmarshal(raw, &obj); err == nil {
-			if value, ok := obj["error"].(string); ok && value != "" {
-				message = value
-			} else if value, ok := obj["message"].(string); ok && value != "" {
-				message = value
+		var value any
+		if err := json.Unmarshal(raw, &value); err == nil {
+			if text, ok := value.(string); ok && text != "" {
+				message = text
+			} else if obj, ok := value.(map[string]any); ok {
+				if value, ok := obj["error"].(string); ok && value != "" {
+					message = value
+				} else if value, ok := obj["message"].(string); ok && value != "" {
+					message = value
+				}
 			}
 		} else {
 			message = string(raw)

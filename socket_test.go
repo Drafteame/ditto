@@ -100,6 +100,35 @@ func TestAppSyncAdapterEnvelope(t *testing.T) {
 	}
 }
 
+func TestAppSyncAdapterErrorPayloadUsesJSONString(t *testing.T) {
+	adapter := AppSyncAdapter{}
+
+	encoded, err := adapter.EncodeServerMessage(ServerMsg{
+		Type:    "error",
+		ID:      "sub-1",
+		Payload: json.RawMessage(`"plain error"`),
+	})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage() error = %v", err)
+	}
+
+	var env struct {
+		Type    string `json:"type"`
+		ID      string `json:"id"`
+		Payload struct {
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(encoded.Data, &env); err != nil {
+		t.Fatalf("encoded AppSync error is invalid JSON: %v", err)
+	}
+	if env.Type != "error" || env.ID != "sub-1" || len(env.Payload.Errors) != 1 || env.Payload.Errors[0].Message != "plain error" {
+		t.Fatalf("encoded AppSync error = %s", encoded.Data)
+	}
+}
+
 func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 	hub := NewSocketHub(NewEventBus(), false)
 	mux := http.NewServeMux()
@@ -308,6 +337,81 @@ func TestSocketOriginPolicy(t *testing.T) {
 				t.Fatalf("isAllowedSocketAPIRequest() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false)
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/?adapter=raw", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{"https://evil.example"}},
+	})
+	if err == nil {
+		t.Fatalf("websocket.Dial() succeeded, want forbidden origin failure")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Fatalf("handshake status = %d, want %d", status, http.StatusForbidden)
+	}
+}
+
+func TestSocketHubAllowsLocalhostCrossPortHandshake(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false)
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/?adapter=raw", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{"http://localhost:3000"}},
+	})
+	if err != nil {
+		t.Fatalf("websocket.Dial() error = %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+}
+
+func TestWebSocketProxyModeRejectsForbiddenOrigin(t *testing.T) {
+	targetHit := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	defer target.Close()
+
+	srv, err := NewServer(ServerConfig{
+		Port:     8888,
+		Target:   target.URL,
+		MocksDir: t.TempDir(),
+		ServeUI:  false,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:8888/events?__ditto_ws=live", nil)
+	req.Host = "192.168.1.10:8888"
+	req.RemoteAddr = "192.168.1.20:55555"
+	req.Header.Set("Origin", "http://192.168.1.10:3000")
+	req.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+
+	srv.Mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("proxy websocket status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if targetHit {
+		t.Fatalf("forbidden websocket proxy request reached target")
 	}
 }
 

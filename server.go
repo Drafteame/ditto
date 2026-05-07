@@ -143,6 +143,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return
 		}
 		if IsWebSocketRequest(r) {
+			if !isAllowedSocketAPIRequest(r) {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
 			if shouldProxyWebSocket(r) && proxyMgr.Target() != "" {
 				proxyMgr.ServeHTTP(w, r)
 				return
