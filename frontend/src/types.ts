@@ -139,6 +139,79 @@ export interface EventTemplateDispatchResult extends SocketDispatchResult {
   invalid_casts?: Array<{ name: string; kind: string; value: string }>
 }
 
+export type SequenceOnEnd = 'loop' | 'stay' | 'reset'
+
+export interface EventSequenceStep {
+  id: string
+  name?: string
+  delay_ms: number
+  template_ref?: string
+  channel?: string
+  adapter?: 'raw' | 'appsync' | ''
+  type_name?: string
+  payload?: unknown
+  vars_override?: Record<string, string>
+}
+
+export interface EventSequence {
+  version: number
+  id: string
+  name: string
+  description?: string
+  steps: EventSequenceStep[]
+  vars?: Record<string, string>
+  on_end: SequenceOnEnd
+  created_at: string
+  updated_at: string
+}
+
+export interface EventSequencesResponse {
+  sequences: EventSequence[]
+}
+
+export type PlayerStatus = 'idle' | 'playing' | 'paused' | 'completed' | 'stopped' | 'error'
+
+export interface PlayerState {
+  sequence_id: string
+  status: PlayerStatus
+  current_step: number
+  total_steps: number
+  speed: number
+  started_at?: string
+  updated_at: string
+  last_error?: string
+  last_dispatch_summary?: string
+}
+
+export interface PlayerEvent {
+  type: 'state' | 'step' | 'error' | 'completed' | 'stopped'
+  state: PlayerState
+  sequence_id: string
+  step_id?: string
+  step_index?: number
+  dispatch_summary?: string
+  error?: string
+  at: string
+}
+
+export interface SequencePlayRequest {
+  vars?: Record<string, unknown>
+  start_step?: number
+  speed?: number
+}
+
+export interface SequenceSeekRequest {
+  step: number
+}
+
+export interface SequenceSpeedRequest {
+  speed: number
+}
+
+export interface SequenceStatesResponse {
+  states: PlayerState[]
+}
+
 export interface SchemaField {
   name: string
   json_name: string

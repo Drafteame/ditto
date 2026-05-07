@@ -1306,6 +1306,11 @@ svg {
 .template-actions {
   display: flex;
   gap: 4px;
+  align-items: center;
+}
+.template-row.active-row {
+  border-color: color-mix(in oklch, var(--accent) 45%, var(--line));
+  background: color-mix(in oklch, var(--accent) 7%, var(--bg-1));
 }
 .template-modal {
   width: min(920px, calc(100vw - 28px));
@@ -1346,6 +1351,183 @@ svg {
   .template-form-grid,
   .template-variable-row {
     grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   Event sequences
+   ========================================================= */
+.sequences-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(360px, 0.95fr) minmax(420px, 1.05fr);
+  gap: 12px;
+  padding: 12px;
+  overflow: hidden;
+}
+.sequences-grid .template-list {
+  padding: 0;
+}
+.sequence-player {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+  padding: 12px;
+  overflow: auto;
+}
+.sequence-player-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.player-status {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.player-status.playing {
+  color: var(--ok);
+  background: color-mix(in oklch, var(--ok) 13%, transparent);
+}
+.player-status.error {
+  color: var(--err);
+  background: color-mix(in oklch, var(--err) 13%, transparent);
+}
+.sequence-timeline {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px 0 12px;
+}
+.timeline-node {
+  min-height: 76px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-0);
+  color: var(--fg-1);
+  text-align: left;
+  cursor: pointer;
+}
+.timeline-node span,
+.timeline-node strong,
+.timeline-node small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-node span {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.timeline-node strong {
+  margin-top: 7px;
+  color: var(--fg-0);
+  font-size: 12px;
+}
+.timeline-node small {
+  margin-top: 3px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.timeline-node.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 18%, transparent);
+}
+.timeline-node.active span {
+  color: oklch(18% 0.01 240);
+  background: var(--accent);
+}
+.timeline-node.complete {
+  opacity: 0.72;
+}
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in oklch, var(--line) 65%, transparent);
+}
+.speed-select {
+  width: 94px;
+}
+.transport-summary {
+  min-width: 0;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sequence-modal {
+  width: min(1120px, calc(100vw - 28px));
+}
+.sequence-editor {
+  max-height: min(76vh, 780px);
+}
+.seq-vars {
+  min-height: 84px;
+}
+.sequence-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sequence-step-row {
+  display: grid;
+  grid-template-columns: 22px 30px minmax(120px, 1fr) 92px minmax(130px, 1fr) minmax(130px, 1fr) 92px minmax(150px, 1fr) minmax(180px, 1fr) minmax(150px, 0.8fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-0);
+}
+.drag-grip {
+  margin-top: 8px;
+  color: var(--fg-3);
+  cursor: grab;
+}
+.step-index {
+  margin-top: 6px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.step-json {
+  min-height: 76px;
+  resize: vertical;
+}
+@media (max-width: 1120px) {
+  .sequences-grid {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+  .sequence-step-row {
+    grid-template-columns: 22px 30px repeat(2, minmax(120px, 1fr));
+  }
+  .sequence-step-row .step-json,
+  .sequence-step-row .btn.danger {
+    grid-column: 3 / -1;
   }
 }
 

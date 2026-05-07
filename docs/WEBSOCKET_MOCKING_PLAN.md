@@ -174,13 +174,13 @@ Rules:
 
 ---
 
-### M4 — Event sequences + transport controls
+### M4 — Event sequences + transport controls ✅
 
 **Goal:** compose timed sequences of events and play them like a video.
 
 - `EventSequence` model: `{name, steps: [{template_ref|inline, channel, delay_ms, vars_override}], on_end: loop|stay|reset}`.
 - `SequencePlayer` engine in Go: one goroutine per active sequence, pausable, scrubbable, with adjustable speed (1x, 2x, 10x, max).
-- REST API: `POST /__ditto__/api/sequences/{id}/play|pause|stop|seek?step=N|speed?x=2`.
+- REST API: `POST /__ditto__/api/sequences/{id}/play|pause|stop|seek|speed`.
 - Player state broadcast over SSE (current cursor, current step, status).
 - Frontend:
   - Sequence editor: drag-and-drop step list with delays.
@@ -188,6 +188,14 @@ Rules:
   - Live indicator showing which step is executing.
 
 **Done when:** compose a 5-step sequence, play, pause at step 3, scrub to step 5. Each action reflects in the connected app.
+
+Implementation notes:
+
+- `delay_ms` is always the wait before the step, including the first step.
+- `speed = 0` is Max mode and skips waits, dispatching steps back-to-back.
+- Sequence playback uses a snapshot taken at `play`; edits affect the next run.
+- Steps with `type_name` pre-encode their rendered payload and still exit
+  through `dispatchRendered`.
 
 ---
 

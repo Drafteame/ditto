@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -92,6 +93,8 @@ type Server struct {
 	SocketHub *SocketHub
 	Schemas   *SchemaRegistry
 	Templates *EventTemplateRegistry
+	Sequences *EventSequenceRegistry
+	Player    *SequencePlayer
 	Info      ServerInfo
 	Config    ServerConfig
 	CertPath  string
@@ -112,6 +115,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Layout.EventTemplatesDir == "" {
 		return nil, fmt.Errorf("server config layout with event templates dir is required")
 	}
+	if cfg.Layout.SequencesDir == "" {
+		return nil, fmt.Errorf("server config layout with sequences dir is required")
+	}
 
 	store := NewMockStore(cfg.MocksDir)
 	if err := store.Load(); err != nil {
@@ -131,6 +137,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event template registry: %w", err)
 	}
+	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
+	}
+	playerBroadcaster := NewPlayerBroadcaster()
+	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster)
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
@@ -160,6 +172,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
 	RegisterSchemaRoutes(mux, schemaRegistry)
 	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub, schemaRegistry)
+	RegisterSequenceRoutes(mux, eventSequences, sequencePlayer, playerBroadcaster)
 
 	// Main proxy/mock handler
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -282,6 +295,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		SocketHub: socketHub,
 		Schemas:   schemaRegistry,
 		Templates: eventTemplates,
+		Sequences: eventSequences,
+		Player:    sequencePlayer,
 		Info:      info,
 		Config:    cfg,
 		CertPath:  certPath,
@@ -337,6 +352,11 @@ func (s *Server) ListenAndServeAsync() error {
 func (s *Server) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.Player != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = s.Player.Shutdown(ctx)
+		cancel()
+	}
 	if s.listener != nil {
 		err := s.listener.Close()
 		s.listener = nil
