@@ -12,6 +12,7 @@ import type {
 import * as api from '../api'
 import { Braces, Download, Radio, Refresh, Send, X } from './icons'
 import { detectTemplateVariablesInValue, isBuiltinVariable } from './EventTemplatesPanel'
+import { useSocketStore, buildAdapterOptions } from '../stores/useSocketStore'
 
 interface SocketPanelProps {
   clients: SocketClient[]
@@ -34,8 +35,6 @@ interface SocketPanelProps {
   onDispatchTemplate: (id: string, variables: Record<string, string>) => Promise<EventTemplateDispatchResult>
   showToast: (message: string, kind?: 'warn') => void
 }
-
-type SocketAdapter = '' | 'raw' | 'appsync'
 
 const DEFAULT_PAYLOAD = `{
   "type": "example.event",
@@ -69,8 +68,11 @@ export function SocketPanel({
     return [...set].sort((a, b) => a.localeCompare(b))
   }, [clients])
 
+  const adapterProfiles = useSocketStore(state => state.adapterProfiles)
+  const adapterOptions = useMemo(() => buildAdapterOptions(adapterProfiles), [adapterProfiles])
+
   const [channel, setChannel] = useState('')
-  const [adapter, setAdapter] = useState<SocketAdapter>('')
+  const [adapter, setAdapter] = useState<string>('')
   const [typeName, setTypeName] = useState('')
   const [payload, setPayload] = useState(DEFAULT_PAYLOAD)
   const [dispatching, setDispatching] = useState(false)
@@ -260,10 +262,11 @@ export function SocketPanel({
             </label>
             <label>
               <span>Adapter</span>
-              <select className="select" value={adapter} onChange={e => setAdapter(e.target.value as SocketAdapter)}>
+              <select className="select" value={adapter} onChange={e => setAdapter(e.target.value)}>
                 <option value="">Client default</option>
-                <option value="raw">Raw</option>
-                <option value="appsync">AppSync</option>
+                {adapterOptions.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
             </label>
           </div>

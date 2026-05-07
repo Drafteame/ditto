@@ -37,6 +37,7 @@ export default function App() {
   const refreshData = useCallback(() => {
     loadMocks()
     useSocketStore.getState().loadClients()
+    useSocketStore.getState().loadAdapterProfiles()
     useSchemaStore.getState().loadSchemas()
     useEventTemplateStore.getState().loadTemplates()
     useSequenceStore.getState().loadSequences()

@@ -3,8 +3,7 @@ import type { EventSequence, EventSequenceStep, EventTemplate, PlayerEvent, Play
 import { Edit, Grip, Plus, Refresh, Sequence, Trash, X } from './icons'
 import { useConfirm } from './ConfirmDialog'
 import { SequencePlayerView } from './SequencePlayerView'
-
-type SocketAdapter = '' | 'raw' | 'appsync'
+import { useSocketStore, buildAdapterOptions } from '../stores/useSocketStore'
 
 interface StepDraft {
   id?: string
@@ -12,7 +11,7 @@ interface StepDraft {
   delay_ms: number
   template_ref: string
   channel: string
-  adapter: SocketAdapter
+  adapter: string
   type_name: string
   payload: string
   vars_override: string
@@ -65,7 +64,7 @@ function draftFromSequence(sequence?: EventSequence): SequenceDraft {
         delay_ms: step.delay_ms ?? 0,
         template_ref: step.template_ref ?? '',
         channel: step.channel ?? '',
-        adapter: (step.adapter ?? '') as SocketAdapter,
+        adapter: step.adapter ?? '',
         type_name: step.type_name ?? '',
         payload: step.payload === undefined ? '' : JSON.stringify(step.payload, null, 2),
         vars_override: JSON.stringify(step.vars_override ?? {}, null, 2),
@@ -231,6 +230,8 @@ function SequenceEditorModal({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const adapterProfiles = useSocketStore(store => store.adapterProfiles)
+  const adapterOptions = useMemo(() => buildAdapterOptions(adapterProfiles), [adapterProfiles])
 
   function updateStep(index: number, patch: Partial<StepDraft>) {
     setState(current => ({
@@ -375,10 +376,11 @@ function SequenceEditorModal({
                   {templates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}
                 </select>
                 <input className="input" value={step.channel} onChange={e => updateStep(index, { channel: e.target.value })} placeholder="channel override" />
-                <select className="select" value={step.adapter} onChange={e => updateStep(index, { adapter: e.target.value as SocketAdapter })}>
+                <select className="select" value={step.adapter} onChange={e => updateStep(index, { adapter: e.target.value })}>
                   <option value="">Default</option>
-                  <option value="raw">Raw</option>
-                  <option value="appsync">AppSync</option>
+                  {adapterOptions.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
                 <select className="select" value={step.type_name} onChange={e => updateStep(index, { type_name: e.target.value })}>
                   <option value="">Raw JSON</option>

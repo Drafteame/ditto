@@ -2,8 +2,7 @@ import { useMemo, useState } from 'react'
 import type { EventTemplate, EventTemplateVariable, SchemaTypeDescriptor } from '../types'
 import { Braces, Edit, Plus, Refresh, Send, Trash, X } from './icons'
 import { useConfirm } from './ConfirmDialog'
-
-type SocketAdapter = '' | 'raw' | 'appsync'
+import { useSocketStore, buildAdapterOptions } from '../stores/useSocketStore'
 
 const DEFAULT_TEMPLATE_PAYLOAD = `{
   "ticketId": "{{ticketId}}",
@@ -26,7 +25,7 @@ interface TemplateDraft {
   name: string
   description: string
   channel: string
-  adapter: SocketAdapter
+  adapter: string
   type_name: string
   payload: string
   variables: EventTemplateVariable[]
@@ -38,7 +37,7 @@ function draftFromTemplate(template?: EventTemplate): TemplateDraft {
     name: template?.name ?? '',
     description: template?.description ?? '',
     channel: template?.channel ?? '',
-    adapter: (template?.adapter ?? '') as SocketAdapter,
+    adapter: template?.adapter ?? '',
     type_name: template?.type_name ?? '',
     payload: template ? JSON.stringify(template.payload, null, 2) : DEFAULT_TEMPLATE_PAYLOAD,
     variables: template?.variables?.length
@@ -160,6 +159,8 @@ function TemplateEditorModal({
   const [state, setState] = useState(draft)
   const [saving, setSaving] = useState(false)
   const [jsonError, setJsonError] = useState('')
+  const adapterProfiles = useSocketStore(store => store.adapterProfiles)
+  const adapterOptions = useMemo(() => buildAdapterOptions(adapterProfiles), [adapterProfiles])
 
   const detectedVariables = useMemo(() => detectTemplateVariables(state.payload), [state.payload])
 
@@ -259,10 +260,11 @@ function TemplateEditorModal({
             </label>
             <label>
               <span>Adapter</span>
-              <select className="select" value={state.adapter} onChange={e => setState({ ...state, adapter: e.target.value as SocketAdapter })}>
+              <select className="select" value={state.adapter} onChange={e => setState({ ...state, adapter: e.target.value })}>
                 <option value="">Client default</option>
-                <option value="raw">Raw</option>
-                <option value="appsync">AppSync</option>
+                {adapterOptions.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
             </label>
             <label>

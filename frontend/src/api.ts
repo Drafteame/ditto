@@ -1,4 +1,5 @@
 import type {
+  AdapterProfilesResponse,
   Mock,
   MocksResponse,
   EventTemplate,
@@ -134,6 +135,15 @@ export async function openUrl(url: string): Promise<void> {
 
 export async function fetchSocketClients(): Promise<SocketClientsResponse> {
   const res = await fetch(`${API_BASE}/socket/clients`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchAdapterProfiles(): Promise<AdapterProfilesResponse> {
+  const res = await fetch(`${API_BASE}/socket/adapter-profiles`)
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `HTTP ${res.status}`)

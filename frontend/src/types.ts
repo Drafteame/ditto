@@ -80,7 +80,7 @@ export interface Toast {
 
 export interface SocketClient {
   id: string
-  adapter: 'raw' | 'appsync' | string
+  adapter: string
   remote_addr: string
   connected_at: string
   subscriptions: string[]
@@ -93,9 +93,18 @@ export interface SocketClientsResponse {
 export interface SocketDispatchRequest {
   channel: string
   payload: unknown
-  adapter?: 'raw' | 'appsync' | ''
+  adapter?: string
   type_name?: string
 }
+
+export interface AdapterProfileSummary {
+  name: string
+  base_adapter: string
+  subprotocols: string[]
+  type_aliases: Record<string, string>
+}
+
+export type AdapterProfilesResponse = AdapterProfileSummary[]
 
 export interface SocketDispatchResult {
   delivered: number
@@ -115,7 +124,7 @@ export interface EventTemplate {
   name: string
   description?: string
   channel: string
-  adapter?: 'raw' | 'appsync' | ''
+  adapter?: string
   type_name?: string
   payload: unknown
   variables?: EventTemplateVariable[]
@@ -130,7 +139,7 @@ export interface EventTemplatesResponse {
 export interface EventTemplateDispatchRequest {
   variables?: Record<string, unknown>
   channel_override?: string
-  adapter_override?: 'raw' | 'appsync' | ''
+  adapter_override?: string
 }
 
 export interface EventTemplateDispatchResult extends SocketDispatchResult {
@@ -147,7 +156,7 @@ export interface EventSequenceStep {
   delay_ms: number
   template_ref?: string
   channel?: string
-  adapter?: 'raw' | 'appsync' | ''
+  adapter?: string
   type_name?: string
   payload?: unknown
   vars_override?: Record<string, unknown>
