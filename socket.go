@@ -477,7 +477,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 			result.Dropped = append(result.Dropped, client.id)
 		}
 	}
-	h.publishSocketEvent("DISPATCH", channel, http.StatusOK, dispatchSummary(result), 0, source)
+	h.publishSocketEventWithSource("DISPATCH", channel, http.StatusOK, dispatchSummary(result), 0, source)
 	return result
 }
 
@@ -657,7 +657,11 @@ func (h *SocketHub) enqueueControl(client *SocketClient, msg ServerMsg) {
 	}
 }
 
-func (h *SocketHub) publishSocketEvent(method, path string, status int, body string, duration int64, source ...string) {
+func (h *SocketHub) publishSocketEvent(method, path string, status int, body string, duration int64) {
+	h.publishSocketEventWithSource(method, path, status, body, duration, "")
+}
+
+func (h *SocketHub) publishSocketEventWithSource(method, path string, status int, body string, duration int64, source string) {
 	event := LogEvent{
 		Timestamp:    time.Now().Format("15:04:05"),
 		Type:         "SOCKET",
@@ -666,9 +670,7 @@ func (h *SocketHub) publishSocketEvent(method, path string, status int, body str
 		Status:       status,
 		DurationMs:   duration,
 		ResponseBody: body,
-	}
-	if len(source) > 0 {
-		event.Source = strings.TrimSpace(source[0])
+		Source:       strings.TrimSpace(source),
 	}
 	logRequest(h.jsonLogs, event)
 	h.bus.Publish(event)

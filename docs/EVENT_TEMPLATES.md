@@ -67,6 +67,10 @@ Unsupported casts, such as `{{date:dob}}`, are rejected. Invalid values at
 dispatch time are returned as `invalid_casts`; variables with no user value and
 no default are returned as `missing_variables`.
 
+When a variable is sent as JSON `null`, plain placeholders keep string
+semantics: `{{x}}` resolves to the literal string `"null"`. Use `{{json:x}}`
+when the resolved payload needs a true JSON `null`.
+
 Resolution is single-pass. If `a = "{{b}}"`, then `"{{a}}"` resolves to the
 literal string `"{{b}}"`.
 
