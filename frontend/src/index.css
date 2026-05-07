@@ -357,6 +357,18 @@ svg {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.mock-row .mock-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  background: color-mix(in oklch, currentColor 14%, transparent);
+}
+.mock-row.disabled .mock-status {
+  opacity: 0.4;
+}
 .mock-row .mock-actions {
   display: flex;
   gap: 2px;
@@ -704,6 +716,26 @@ svg {
 }
 .status-5 {
   color: var(--err);
+}
+
+/* Pill variants — tint the .tag-type background by status range */
+.tag-type.status-200,
+.tag-type.status-201,
+.tag-type.status-204 {
+  color: var(--ok);
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+}
+.tag-type.status-3 {
+  color: var(--proxy);
+  background: color-mix(in oklch, var(--proxy) 14%, transparent);
+}
+.tag-type.status-4 {
+  color: var(--warn);
+  background: color-mix(in oklch, var(--warn) 14%, transparent);
+}
+.tag-type.status-5 {
+  color: var(--err);
+  background: color-mix(in oklch, var(--err) 14%, transparent);
 }
 
 /* =========================================================

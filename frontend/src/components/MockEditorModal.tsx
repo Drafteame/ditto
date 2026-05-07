@@ -3,6 +3,7 @@ import type { Mock, ResponseMode, SequenceStep } from '../types'
 import * as api from '../api'
 import { useCopy } from '../hooks/useCopy'
 import { useSearch } from '../hooks/useSearch'
+import { statusClass } from '../status'
 import { Alert, Braces, Check, ChevronRight, Copy, Plus, Refresh, Trash, X } from './icons'
 import { SearchBar } from './SearchBar'
 import { useConfirm } from './ConfirmDialog'
@@ -611,7 +612,7 @@ export function MockEditorModal({
             <div className="fld">
               <label>Status</label>
               <input
-                className="input"
+                className={`input ${statusClass(status)}`}
                 type="number"
                 value={status}
                 onChange={e => setStatus(parseInt(e.target.value) || 200)}
@@ -710,7 +711,9 @@ export function MockEditorModal({
                       >
                         <span className="n">step {i + 1}</span>
                         <h4>
-                          <span className="tag-type MOCK">{step.status}</span>
+                          <span className={`tag-type ${statusClass(step.status)}`}>
+                            {step.status}
+                          </span>
                           {active && <span className="next-tag">NEXT</span>}
                         </h4>
                         <pre className="preview">{truncatePreview(step.body)}</pre>
@@ -750,7 +753,7 @@ export function MockEditorModal({
                   <div className="fld">
                     <label>Status</label>
                     <input
-                      className="input"
+                      className={`input ${statusClass(sequenceSteps[editingStepIndex].status)}`}
                       type="number"
                       value={sequenceSteps[editingStepIndex].status}
                       onChange={e =>
