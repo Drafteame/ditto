@@ -612,7 +612,7 @@ export function MockEditorModal({
             <div className="fld">
               <label>Status</label>
               <input
-                className="input"
+                className={`input ${statusClass(status)}`}
                 type="number"
                 value={status}
                 onChange={e => setStatus(parseInt(e.target.value) || 200)}
@@ -753,7 +753,7 @@ export function MockEditorModal({
                   <div className="fld">
                     <label>Status</label>
                     <input
-                      className="input"
+                      className={`input ${statusClass(sequenceSteps[editingStepIndex].status)}`}
                       type="number"
                       value={sequenceSteps[editingStepIndex].status}
                       onChange={e =>
