@@ -48,6 +48,23 @@ cd frontend && npm install && npm run build && cd ..
 go build -o ditto .
 ```
 
+## WebSocket mocking
+
+Ditto can also stand in for your app's WebSocket backend. The minimum to start mocking events:
+
+1. **Point your app at Ditto.** Set its WebSocket URL to `ws://localhost:8888/__ditto__/socket` (or `wss://...` if you started Ditto with `--https`). Ditto exposes `/__ditto__/ws` as an alias.
+2. **Open the Sockets tab** in the dashboard. Connected clients and the channels they have subscribed to appear there in real time.
+3. **Pick a protocol adapter.** Choose `raw` (plain JSON, no envelope) or `appsync` (AWS AppSync Events). Match what your app speaks.
+4. **Dispatch an event.** Select a channel the client is subscribed to, write the JSON payload, and click **Dispatch**. The client receives it immediately.
+
+That's enough to send arbitrary events to a connected app. The features below are optional layers on top:
+
+- **Protobuf payloads** — upload a `.proto` schema pack from the Sockets tab. Pick a type from the dropdown and edit JSON with schema-aware autocomplete; Ditto serializes to Protobuf at dispatch time. No codegen.
+- **Reusable events** — save a composed event as a template with `{{vars}}` substitution. See [docs/EVENT_TEMPLATES.md](docs/EVENT_TEMPLATES.md).
+- **Timed sequences** — chain templates into a timeline with delays and play/pause/scrub/speed transport controls. See [docs/EVENT_SEQUENCES.md](docs/EVENT_SEQUENCES.md).
+
+Full plan and milestone-by-milestone breakdown: [docs/WEBSOCKET_MOCKING_PLAN.md](docs/WEBSOCKET_MOCKING_PLAN.md).
+
 ## Headless mode
 
 For CI, servers, or terminal-only workflows. Runs without the desktop window but keeps the REST API available.

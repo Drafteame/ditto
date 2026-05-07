@@ -115,34 +115,57 @@ Return different responses on subsequent calls to the same endpoint. Essential f
 - UI: visual sequence editor showing the response chain.
 - Example: `GET /deposits/status` → call 1: `{"status": "pending"}` → call 2: `{"status": "processing"}` → call 3: `{"status": "completed"}`.
 
-### v1.6 — Scenarios
+### v1.6 — Scenarios (hybrid HTTP + WebSocket)
 
-Group mocks into named sets that activate together with a single toggle.
+The unit that ties everything together: a single named bundle that atomically activates **HTTP mocks, WebSocket channel modes, WebSocket sequences, and HTTP→Socket triggers**. One toggle, one consistent stage for the app.
 
-- A scenario is a named collection of mock references (+ optional sequence overrides).
-- Activating a scenario enables all its mocks and disables any conflicting mocks from other scenarios.
-- UI: scenario cards in the sidebar, one-click activation, visual indicator of active scenario.
-- Scenarios are JSON files stored alongside mocks (e.g., `scenarios/failed_deposit.json`).
-- Example scenarios: "Happy deposit flow", "Failed KYC", "Empty wallet", "Slow network".
+Implementation lands as M7 of the WebSocket plan — see [docs/WEBSOCKET_MOCKING_PLAN.md](docs/WEBSOCKET_MOCKING_PLAN.md). Pre-requisites: v1.5 (HTTP sequences) and the WS milestones up to M4 (already done) plus M5 (per-channel modes).
+
+A scenario can carry any combination of:
+
+- **HTTP mocks** — references to mock files (`mocks/*.json`), with optional inline `sequence` overrides from v1.5.
+- **WebSocket channel modes** — declare per-channel behaviour (`mock`, `live`, `record`, `mixed`) for the duration of the scenario.
+- **WebSocket sequences** — references to timed event timelines (`sequences/*.json`), optionally auto-started on activation.
+- **HTTP→Socket triggers** — when the app makes a matching HTTP call, fire a WS sequence. This is the bridge between both worlds: real backends often emit a socket event in response to an HTTP request, and triggers reproduce that without code.
+
+UI: scenario cards in the sidebar, one-click activation, visual indicator of the active scenario, "Stop scenario" to revert. Activating a scenario disables conflicting mocks/channels and enables its own.
+
+Scenarios are JSON files in `scenarios/` (e.g., `scenarios/match_day_happy_path.json`).
 
 ```json
 {
-  "name": "Failed deposit flow",
-  "description": "Simulates a deposit that fails at payment confirmation",
+  "name": "Match Day - Happy Path",
+  "description": "Full match flow: lineup loads, user places a ticket, live stats stream",
   "mocks": [
-    { "ref": "get_wallet_low_balance.json" },
-    { "ref": "post_deposit_initiated.json" },
+    { "ref": "match_lineup.json" },
+    { "ref": "user_balance.json" },
     {
       "ref": "get_deposit_status.json",
       "sequence": [
         { "status": 200, "body": { "status": "pending" } },
         { "status": 200, "body": { "status": "processing" } },
-        { "status": 200, "body": { "status": "failed", "reason": "insufficient_funds" } }
+        { "status": 200, "body": { "status": "completed" } }
       ]
+    }
+  ],
+  "channel_modes": {
+    "/games/123": "mock",
+    "/livestats/123": "mock"
+  },
+  "sequences": [
+    { "ref": "match_full_90min.json", "auto_start": false }
+  ],
+  "triggers": [
+    {
+      "on": "http",
+      "match": { "method": "POST", "path": "/osb/tickets/" },
+      "fire": { "sequence": "ticket_created_flow.json" }
     }
   ]
 }
 ```
+
+Example scenarios: "Match Day - Happy Path", "Failed deposit flow", "Live game with lag spikes", "Empty wallet".
 
 ### v1.7 — Mock tree view
 
@@ -160,18 +183,18 @@ Full-blown WebSocket mocking layer: send arbitrary events to a connected app, re
 
 Designed to keep Ditto **agnostic to any specific business or domain** — Protobuf schemas, recordings, and scenarios all live as user-loadable artifacts (schema packs, collections), never hardcoded.
 
-Capabilities, in incremental order:
+Capabilities, in incremental order (✅ = delivered, see milestone tag):
 
-- **Generic WS server + protocol adapter**: pluggable adapters (AppSync, Socket.IO, raw JSON) so any app's WS protocol can be supported.
-- **Manual event dispatch**: send arbitrary events from the UI to specific channels.
-- **Schema packs**: load `.proto` files at runtime (dynamic descriptors, no codegen). UI shows type dropdown + JSON editor with schema-aware autocomplete; Ditto serializes to Protobuf at dispatch.
-- **Event templates**: save reusable parameterized events (`{{ticketId}}`, `{{userId}}`, etc.).
-- **Event sequences**: timed event timelines with transport controls (play/pause/scrub/speed).
-- **Per-channel modes**: each channel can be `mock`, `live` (passthrough to real backend), `record`, or `mixed`.
-- **Recordings**: capture real WS sessions to disk, then edit, splice, and replay.
-- **Scenarios** (extends v1.6): combine HTTP mocks + sequences + channel modes + HTTP→Socket triggers into one atomic activation. Lets you simulate complete flows (e.g. a full sports match, a casino session) by composition, with no domain-specific code.
+- ✅ **Generic WS server + protocol adapter** (M1): pluggable adapters (AppSync, raw JSON) so any app's WS protocol can be supported.
+- ✅ **Manual event dispatch** (M1): send arbitrary events from the UI to specific channels.
+- ✅ **Schema packs** (M2): load `.proto` files at runtime (dynamic descriptors, no codegen). UI shows type dropdown + JSON editor with schema-aware autocomplete; Ditto serializes to Protobuf at dispatch.
+- ✅ **Event templates** (M3): save reusable parameterized events (`{{ticketId}}`, `{{userId}}`, etc.).
+- ✅ **Event sequences** (M4): timed event timelines with transport controls (play/pause/scrub/speed).
+- ⏳ **Per-channel modes** (M5): each channel can be `mock`, `live` (passthrough to real backend), `record`, or `mixed`.
+- ⏳ **Recordings** (M5/M6): capture real WS sessions to disk, then edit, splice, and replay.
+- ⏳ **Scenarios** (M7, extends v1.6): combine HTTP mocks + sequences + channel modes + HTTP→Socket triggers into one atomic activation. Lets you simulate complete flows (e.g. a full sports match, a casino session) by composition, with no domain-specific code.
 
-See [docs/WEBSOCKET_MOCKING_PLAN.md](WEBSOCKET_MOCKING_PLAN.md) for the full milestone-by-milestone plan.
+See [WEBSOCKET_MOCKING_PLAN.md](WEBSOCKET_MOCKING_PLAN.md) for the full milestone-by-milestone plan.
 
 ### v1.9 — Ditto Collections (`.dittopack`)
 

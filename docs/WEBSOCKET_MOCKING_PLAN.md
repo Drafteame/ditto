@@ -100,7 +100,19 @@ Rules:
 
 ## Milestones
 
-### M0 — Foundations
+| Milestone | Status |
+|---|---|
+| M0 — Foundations | ✅ Done |
+| M1 — WS server + protocol adapter + manual dispatch | ✅ Done |
+| M2 — Schema packs + Protobuf encoding | ✅ Done |
+| M3 — Event templates + quick-fire palette | ✅ Done |
+| M4 — Event sequences + transport controls | ✅ Done |
+| M5 — Live mode + Recording | ⏳ Next |
+| M6 — Replay + recording editing | ⏳ |
+| M7 — Scenarios | ⏳ |
+| M8 — Ditto Collections (`.dittopack`) | ⏳ |
+
+### M0 — Foundations ✅
 
 **Goal:** decouple the base without touching features.
 
@@ -114,7 +126,7 @@ Rules:
 
 ---
 
-### M1 — WS server + protocol adapter + manual dispatch
+### M1 — WS server + protocol adapter + manual dispatch ✅
 
 **Goal:** the client app connects to Ditto and receives events sent manually. No Protobuf yet — raw JSON only.
 
@@ -141,7 +153,7 @@ Rules:
 
 ---
 
-### M2 — Schema packs + Protobuf encoding
+### M2 — Schema packs + Protobuf encoding ✅
 
 **Goal:** pick a type from a loaded schema and edit JSON with autocomplete; Ditto serializes to Protobuf at dispatch time.
 
@@ -158,7 +170,7 @@ Rules:
 
 ---
 
-### M3 — Event templates + quick-fire palette
+### M3 — Event templates + quick-fire palette ✅
 
 **Goal:** save composed events as reusable templates with variable substitution.
 
