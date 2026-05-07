@@ -336,6 +336,9 @@ function SchemaPacksModal({
   }
 
   async function handleDelete(pack: SchemaPack) {
+    if (!window.confirm(`Delete schema pack "${pack.name}"?`)) {
+      return
+    }
     try {
       await onDelete(pack.id)
       showToast(`Deleted schema pack ${pack.name}`)

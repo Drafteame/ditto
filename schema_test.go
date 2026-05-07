@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -116,6 +118,66 @@ func TestSchemaRegistryFailedPackDoesNotPoisonRegistry(t *testing.T) {
 	}
 }
 
+func TestSchemaRegistryRejectsDifferentDescriptorsWithSamePath(t *testing.T) {
+	root := t.TempDir()
+	first := writeProto(t, filepath.Join(root, "a-pack"), "event.proto", `syntax = "proto3"; package ditto.a; message Event { string id = 1; }`)
+	second := writeProto(t, filepath.Join(root, "b-pack"), "event.proto", `syntax = "proto3"; package ditto.b; message Event { string id = 1; }`)
+
+	reg, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+	if _, err := reg.RegisterPack(first); err == nil {
+		t.Fatalf("RegisterPack(first) unexpectedly succeeded for duplicate pack id")
+	}
+	if _, err := reg.RegisterPack(second); err == nil || !strings.Contains(err.Error(), "already registered with different contents") {
+		t.Fatalf("RegisterPack(second) error = %v, want path collision", err)
+	}
+}
+
+func TestSchemaRegistryZipUploadPreservesManifest(t *testing.T) {
+	root := t.TempDir()
+	reg, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	addZipFile(t, zw, "bundle/manifest.json", `{"manifest_version":1,"id":"custom-pack","name":"Custom Pack","version":"1.2.3"}`)
+	addZipFile(t, zw, "bundle/event.proto", `syntax = "proto3"; package ditto.zip; message Event { string id = 1; }`)
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	pack, err := reg.ImportUploadedPack("events.zip", bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("ImportUploadedPack() error = %v", err)
+	}
+	if pack.ID != "custom-pack" || pack.Name != "custom-pack" || pack.Version != "1.2.3" {
+		t.Fatalf("pack metadata = %#v", pack)
+	}
+	if _, err := os.Stat(filepath.Join(root, "custom-pack", "manifest.json")); err != nil {
+		t.Fatalf("manifest was not preserved: %v", err)
+	}
+}
+
+func TestSchemaRegistryRejectsUnsupportedManifestVersion(t *testing.T) {
+	root := t.TempDir()
+	dir := writeProto(t, filepath.Join(root, "bad-version"), "event.proto", `syntax = "proto3"; package ditto.badversion; message Event { string id = 1; }`)
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"manifest_version":2,"name":"bad"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := NewSchemaRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+	if _, err := reg.RegisterPack(dir); err == nil || !strings.Contains(err.Error(), "unsupported manifest_version") {
+		t.Fatalf("RegisterPack() error = %v, want manifest version rejection", err)
+	}
+}
+
 func TestAppSyncWrapsBinaryPayloadAsBase64(t *testing.T) {
 	payload := EncodedPayload{
 		Data:        []byte{8, 7},
@@ -156,4 +218,15 @@ func writeProto(t *testing.T, dir, name, body string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func addZipFile(t *testing.T, zw *zip.Writer, name, body string) {
+	t.Helper()
+	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
 }

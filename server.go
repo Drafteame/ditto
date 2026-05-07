@@ -77,6 +77,7 @@ type ServerConfig struct {
 	Port     int
 	Target   string
 	MocksDir string
+	Layout   DataLayout
 	HTTPS    bool
 	CertDir  string
 	ServeUI  bool
@@ -111,7 +112,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	proxyMgr := NewProxyManager(cfg.Target)
 	jsonLogs := cfg.JSONLogs
 	socketHub := NewSocketHub(bus, jsonLogs)
-	descriptorsDir := filepath.Join(filepath.Dir(cfg.MocksDir), "descriptors")
+	descriptorsDir := cfg.Layout.DescriptorsDir
+	if descriptorsDir == "" {
+		descriptorsDir = NewDataLayout(filepath.Dir(cfg.MocksDir)).DescriptorsDir
+	}
 	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)

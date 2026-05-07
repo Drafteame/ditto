@@ -122,7 +122,6 @@ export interface SchemaTypeDescriptor {
   file: string
   pack_id: string
   fields: SchemaField[]
-  json_schema: Record<string, unknown>
   example_json: unknown
 }
 
