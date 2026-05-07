@@ -196,6 +196,36 @@ export const Send = (p: IconProps) => (
   </Svg>
 )
 
+export const Play = (p: IconProps) => (
+  <Svg {...p}>
+    <polygon points="6 3 20 12 6 21 6 3" />
+  </Svg>
+)
+
+export const Pause = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="6" y="4" width="4" height="16" rx="1" />
+    <rect x="14" y="4" width="4" height="16" rx="1" />
+  </Svg>
+)
+
+export const Stop = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="5" y="5" width="14" height="14" rx="2" />
+  </Svg>
+)
+
+export const Grip = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="9" cy="6" r="1" />
+    <circle cx="9" cy="12" r="1" />
+    <circle cx="9" cy="18" r="1" />
+    <circle cx="15" cy="6" r="1" />
+    <circle cx="15" cy="12" r="1" />
+    <circle cx="15" cy="18" r="1" />
+  </Svg>
+)
+
 export const Radio = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="2" />

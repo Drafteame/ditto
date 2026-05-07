@@ -174,13 +174,13 @@ Rules:
 
 ---
 
-### M4 — Event sequences + transport controls
+### M4 — Event sequences + transport controls ✅
 
 **Goal:** compose timed sequences of events and play them like a video.
 
 - `EventSequence` model: `{name, steps: [{template_ref|inline, channel, delay_ms, vars_override}], on_end: loop|stay|reset}`.
 - `SequencePlayer` engine in Go: one goroutine per active sequence, pausable, scrubbable, with adjustable speed (1x, 2x, 10x, max).
-- REST API: `POST /__ditto__/api/sequences/{id}/play|pause|stop|seek?step=N|speed?x=2`.
+- REST API: `POST /__ditto__/api/sequences/{id}/play|pause|stop|seek|speed`.
 - Player state broadcast over SSE (current cursor, current step, status).
 - Frontend:
   - Sequence editor: drag-and-drop step list with delays.
@@ -188,6 +188,14 @@ Rules:
   - Live indicator showing which step is executing.
 
 **Done when:** compose a 5-step sequence, play, pause at step 3, scrub to step 5. Each action reflects in the connected app.
+
+Implementation notes:
+
+- `delay_ms` is always the wait before the step, including the first step.
+- `speed = 0` is Max mode and skips waits, dispatching steps back-to-back.
+- Sequence playback uses a snapshot taken at `play`; edits affect the next run.
+- Steps with `type_name` pre-encode their rendered payload and still exit
+  through `dispatchRendered`.
 
 ---
 
@@ -245,6 +253,7 @@ Rules:
 
 - Activation: disables conflicting mocks/channels, enables the scenario's, arms triggers.
 - HTTP→Socket triggers: when an HTTP request matches, Ditto fires a sequence. This solves the common pattern "the backend emits a socket event when it receives request X".
+- Design decision before implementation: triggers need fire-and-forget sequence runs so concurrent HTTP requests can launch independent snapshots of the same sequence ID without colliding with the UI-tracked `SequencePlayer.Play` runner.
 - Frontend: scenario cards in the sidebar (aligned with ROADMAP v1.6 spec), active-scenario visual indicator, "Stop scenario" button.
 
 **Done when:** activate a scenario → relevant HTTP mocks load, relevant channels switch to `mock` mode, the sequence is armed. Exercise the app: trigger fires the sequence on the matching HTTP call. Everything choreographed.
@@ -265,6 +274,7 @@ This milestone delivers **"simulate a full session"** without any session-specif
   - Individual mock / sequence
 - Import with conflict resolution UI: per conflicting item, show a `git`-style diff + skip / overwrite / rename / merge options.
 - Persist manifest format with `schemaVersion` for future compatibility.
+- Design decision before implementation: artifact references need stable identity across renames. Current template/sequence IDs are generated as `slug-shortHash`; M8 should either introduce immutable IDs with separate display slugs or define a migration/conflict policy for renamed artifacts.
 
 **Done when:** export a scenario as `match-day-v1.dittopack`, share with a teammate, they import with a click, see conflicts (if any), resolve, activate the scenario, it works identically.
 
@@ -275,6 +285,7 @@ This milestone delivers **"simulate a full session"** without any session-specif
 - **Tests:** every milestone adds Go unit tests for its slice (protocol adapter, registry, sequence player engine). E2E: a Go-based test WS client that masquerades as the app and verifies events. Defer client-side integration testing until M5+.
 - **Documentation:** every milestone updates ROADMAP.md and adds a doc in `docs/` describing the format of any new artifacts (templates, sequences, recordings, scenarios). These docs are part of DoD.
 - **Backward compatibility:** Protobuf schemas evolve. Recordings and sequences depending on them must tolerate added fields (Protobuf's forward compat helps) and warn when a referenced field disappears. Schema packs are versioned (`pack-v1`, `pack-v2`); allow coexistence.
+- **Channel modes:** M5 should keep sequence runners agnostic by putting mock/live/record/mixed decisions behind a `ChannelModeRegistry` consulted by `dispatchRendered`, which remains the single WebSocket exit point.
 - **Performance:** the `SequencePlayer` should run dozens of concurrent sequences without saturation. Benchmark from M4.
 
 ---

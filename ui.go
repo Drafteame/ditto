@@ -54,17 +54,25 @@ func (b *EventBus) Subscribe() chan LogEvent {
 	return ch
 }
 
+// Unsubscribe stops broadcasting to ch.
+//
+// The channel is intentionally not closed: Publish snapshots subscribers under
+// the lock and sends without the lock held, so a concurrent close could panic.
+// Owning goroutines should exit on their own signal, usually r.Context().Done().
 func (b *EventBus) Unsubscribe(ch chan LogEvent) {
 	b.mu.Lock()
 	delete(b.clients, ch)
-	close(ch)
 	b.mu.Unlock()
 }
 
 func (b *EventBus) Publish(event LogEvent) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	clients := make([]chan LogEvent, 0, len(b.clients))
 	for ch := range b.clients {
+		clients = append(clients, ch)
+	}
+	b.mu.Unlock()
+	for _, ch := range clients {
 		select {
 		case ch <- event:
 		default: // drop if client is slow
@@ -109,10 +117,15 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 		defer bus.Unsubscribe(ch)
 
 		ctx := r.Context()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-heartbeat.C:
+				fmt.Fprintf(w, ": keepalive\n\n")
+				flusher.Flush()
 			case event := <-ch:
 				data, _ := json.Marshal(event)
 				fmt.Fprintf(w, "data: %s\n\n", data)

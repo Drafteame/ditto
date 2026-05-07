@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useMemo } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import type { LogEntry } from './types'
 import { useSSE } from './hooks/useSSE'
+import { useSequenceEvents } from './hooks/useSequenceEvents'
 import { useToast } from './hooks/useToast'
 import * as api from './api'
 import { useAppUiStore } from './stores/useAppUiStore'
 import { useLogStore } from './stores/useLogStore'
 import { useMockStore } from './stores/useMockStore'
 import { useEventTemplateStore } from './stores/useEventTemplateStore'
+import { useSequenceStore } from './stores/useSequenceStore'
 import { useSchemaStore } from './stores/useSchemaStore'
 import { useSocketStore } from './stores/useSocketStore'
 import { Header } from './components/Header'
@@ -16,6 +18,7 @@ import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
 import { LogPanel, LOG_SEARCH_INPUT_ID } from './components/LogPanel'
 import { SocketPanel } from './components/SocketPanel'
 import { EventTemplatesPanel } from './components/EventTemplatesPanel'
+import { SequencesPanel } from './components/SequencesPanel'
 import { Drawer } from './components/Drawer'
 import { MockEditorModal, createNewMockState, createEditMockState } from './components/MockEditorModal'
 import { QRModal } from './components/QRModal'
@@ -135,6 +138,37 @@ export default function App() {
     deleteEventTemplate: state.deleteTemplate,
     dispatchEventTemplate: state.dispatchTemplate,
   })))
+  const {
+    sequences,
+    playerStates,
+    sequencesLoading,
+    sequencesError,
+    loadSequences,
+    loadPlayerStates,
+    saveSequence,
+    deleteSequence,
+    playSequence,
+    pauseSequence,
+    stopSequence,
+    seekSequence,
+    setSequenceSpeed,
+    applyPlayerEvent,
+  } = useSequenceStore(useShallow(state => ({
+    sequences: state.sequences,
+    playerStates: state.playerStates,
+    sequencesLoading: state.loading,
+    sequencesError: state.error,
+    loadSequences: state.loadSequences,
+    loadPlayerStates: state.loadPlayerStates,
+    saveSequence: state.saveSequence,
+    deleteSequence: state.deleteSequence,
+    playSequence: state.playSequence,
+    pauseSequence: state.pauseSequence,
+    stopSequence: state.stopSequence,
+    seekSequence: state.seekSequence,
+    setSequenceSpeed: state.setSequenceSpeed,
+    applyPlayerEvent: state.applyPlayerEvent,
+  })))
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
@@ -165,14 +199,25 @@ export default function App() {
       loadSocketClients()
       loadSchemas()
       loadEventTemplates()
-    }, [loadEventTemplates, loadMocks, loadSchemas, loadSocketClients, setConnected]),
+      loadSequences()
+    }, [loadEventTemplates, loadMocks, loadSchemas, loadSequences, loadSocketClients, setConnected]),
     useCallback(() => setConnected(false), [setConnected]),
     useCallback(() => {
       loadMocks()
       loadSocketClients()
       loadSchemas()
       loadEventTemplates()
-    }, [loadEventTemplates, loadMocks, loadSchemas, loadSocketClients]),
+      loadSequences()
+    }, [loadEventTemplates, loadMocks, loadSchemas, loadSequences, loadSocketClients]),
+  )
+
+  useSequenceEvents(
+    useCallback((event) => {
+      applyPlayerEvent(event)
+    }, [applyPlayerEvent]),
+    useCallback(() => {
+      loadPlayerStates()
+    }, [loadPlayerStates]),
   )
 
   useEffect(() => {
@@ -180,10 +225,11 @@ export default function App() {
     loadSocketClients()
     loadSchemas()
     loadEventTemplates()
+    loadSequences()
     api.fetchUpdateCheck().then(data => {
       if (data.available) setUpdateInfo(data)
     }).catch(() => {})
-  }, [loadEventTemplates, loadMocks, loadSchemas, loadSocketClients, setUpdateInfo])
+  }, [loadEventTemplates, loadMocks, loadSchemas, loadSequences, loadSocketClients, setUpdateInfo])
 
   useEffect(() => {
     return () => {
@@ -315,11 +361,32 @@ export default function App() {
             showToast={showToast}
           />
         )
+      case 'sequences':
+        return (
+          <SequencesPanel
+            sequences={sequences}
+            templates={eventTemplates}
+            schemaTypes={schemaTypes}
+            playerStates={playerStates}
+            loading={sequencesLoading}
+            error={sequencesError}
+            onRefresh={loadSequences}
+            onSave={saveSequence}
+            onDelete={deleteSequence}
+            onPlay={async (id) => { await playSequence(id) }}
+            onPause={async (id) => { await pauseSequence(id) }}
+            onStop={async (id) => { await stopSequence(id) }}
+            onSeek={async (id, step) => { await seekSequence(id, step) }}
+            onSpeed={async (id, speed) => { await setSequenceSpeed(id, speed) }}
+            showToast={showToast}
+          />
+        )
     }
   }, [
     activeView,
     connectedClients,
     deleteEventTemplate,
+    deleteSequence,
     deleteSchemaPack,
     dispatchEventTemplate,
     eventTemplates,
@@ -327,10 +394,15 @@ export default function App() {
     eventTemplatesLoading,
     handleSaveAsMock,
     loadEventTemplates,
+    loadSequences,
     loadSchemas,
     loadSocketClients,
     logEntries,
+    pauseSequence,
+    playerStates,
+    playSequence,
     saveEventTemplate,
+    saveSequence,
     schemaPacks,
     schemaTypes,
     schemasError,
@@ -338,9 +410,15 @@ export default function App() {
     selectLog,
     selectedLogId,
     serverInfo,
+    sequences,
+    sequencesError,
+    sequencesLoading,
+    seekSequence,
+    setSequenceSpeed,
     showToast,
     socketClientsError,
     socketClientsLoading,
+    stopSequence,
     uploadSchemaPack,
   ])
 
@@ -399,6 +477,14 @@ export default function App() {
             >
               Event Templates
               <span className="c">{eventTemplates.length}</span>
+            </button>
+            <button
+              type="button"
+              className={activeView === 'sequences' ? 'active' : ''}
+              onClick={() => setActiveView('sequences')}
+            >
+              Sequences
+              <span className="c">{sequences.length}</span>
             </button>
           </div>
           {mainContent}

@@ -5,6 +5,12 @@ import type {
   EventTemplateDispatchRequest,
   EventTemplateDispatchResult,
   EventTemplatesResponse,
+  EventSequence,
+  EventSequencesResponse,
+  SequencePlayRequest,
+  SequenceSeekRequest,
+  SequenceSpeedRequest,
+  SequenceStatesResponse,
   SchemaPacksResponse,
   SchemaPack,
   SchemaTypesResponse,
@@ -219,6 +225,112 @@ export async function dispatchEventTemplate(
   }
   if (!data) throw new Error(`HTTP ${res.status}`)
   return data
+}
+
+export async function fetchSequences(): Promise<EventSequencesResponse> {
+  const res = await fetch(`${API_BASE}/sequences`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchSequence(id: string): Promise<EventSequence> {
+  const res = await fetch(`${API_BASE}/sequences/${encodeURIComponent(id)}`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function saveSequence(sequence: Partial<EventSequence>, id?: string): Promise<EventSequence> {
+  const url = id ? `${API_BASE}/sequences/${encodeURIComponent(id)}` : `${API_BASE}/sequences`
+  const res = await fetch(url, {
+    method: id ? 'PUT' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(sequence),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function deleteSequence(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sequences/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+}
+
+export async function playSequence(id: string, req: SequencePlayRequest = {}) {
+  const res = await fetch(`${API_BASE}/sequences/${encodeURIComponent(id)}/play`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function pauseSequence(id: string) {
+  const res = await fetch(`${API_BASE}/sequences/${encodeURIComponent(id)}/pause`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function stopSequence(id: string) {
+  const res = await fetch(`${API_BASE}/sequences/${encodeURIComponent(id)}/stop`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function seekSequence(id: string, req: SequenceSeekRequest) {
+  const res = await fetch(`${API_BASE}/sequences/${encodeURIComponent(id)}/seek`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function setSequenceSpeed(id: string, req: SequenceSpeedRequest) {
+  const res = await fetch(`${API_BASE}/sequences/${encodeURIComponent(id)}/speed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchSequenceStates(): Promise<SequenceStatesResponse> {
+  const res = await fetch(`${API_BASE}/sequences/state`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
 }
 
 export async function fetchSchemaPacks(): Promise<SchemaPacksResponse> {
