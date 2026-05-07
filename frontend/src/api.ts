@@ -1,4 +1,11 @@
-import type { Mock, MocksResponse, SocketClientsResponse, SocketDispatchRequest, UpdateInfo } from './types'
+import type {
+  Mock,
+  MocksResponse,
+  SocketClientsResponse,
+  SocketDispatchRequest,
+  SocketDispatchResult,
+  UpdateInfo,
+} from './types'
 
 const API_BASE = '/__ditto__/api'
 
@@ -121,7 +128,7 @@ export async function fetchSocketClients(): Promise<SocketClientsResponse> {
   return res.json()
 }
 
-export async function dispatchSocketEvent(req: SocketDispatchRequest): Promise<{ delivered: number }> {
+export async function dispatchSocketEvent(req: SocketDispatchRequest): Promise<SocketDispatchResult> {
   const res = await fetch(`${API_BASE}/socket/dispatch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -143,6 +143,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return
 		}
 		if IsWebSocketRequest(r) {
+			if shouldProxyWebSocket(r) && proxyMgr.Target() != "" {
+				proxyMgr.ServeHTTP(w, r)
+				return
+			}
 			socketHub.ServeHTTP(w, r)
 			return
 		}

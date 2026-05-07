@@ -94,3 +94,9 @@ export interface SocketDispatchRequest {
   payload: unknown
   adapter?: 'raw' | 'appsync' | ''
 }
+
+export interface SocketDispatchResult {
+  delivered: number
+  dropped?: string[]
+  errors?: string[]
+}

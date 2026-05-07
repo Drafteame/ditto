@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,8 +59,8 @@ func TestRawAdapterSubscribeAndDispatchPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeServerMessage() error = %v", err)
 	}
-	if string(encoded) != string(payload) {
-		t.Fatalf("EncodeServerMessage() = %s, want %s", encoded, payload)
+	if string(encoded.Data) != string(payload) {
+		t.Fatalf("EncodeServerMessage() = %s, want %s", encoded.Data, payload)
 	}
 }
 
@@ -91,11 +92,11 @@ func TestAppSyncAdapterEnvelope(t *testing.T) {
 			Data map[string]any `json:"data"`
 		} `json:"payload"`
 	}
-	if err := json.Unmarshal(encoded, &env); err != nil {
+	if err := json.Unmarshal(encoded.Data, &env); err != nil {
 		t.Fatalf("encoded AppSync message is invalid JSON: %v", err)
 	}
 	if env.Type != "data" || env.ID != "sub-1" || env.Payload.Data["score"].(float64) != 7 {
-		t.Fatalf("encoded AppSync message = %s", encoded)
+		t.Fatalf("encoded AppSync message = %s", encoded.Data)
 	}
 }
 
@@ -140,9 +141,9 @@ func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	delivered := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
-	if delivered != 1 {
-		t.Fatalf("Dispatch() delivered %d clients, want 1", delivered)
+	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+	if result.Delivered != 1 {
+		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
 	}
 
 	_, data, err := conn.Read(ctx)
@@ -151,5 +152,96 @@ func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 	}
 	if string(data) != `{"score":7}` {
 		t.Fatalf("dispatch payload = %s, want {\"score\":7}", data)
+	}
+}
+
+func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", hub.ServeHTTP)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/?adapter=raw", nil)
+	if err != nil {
+		t.Fatalf("websocket.Dial() error = %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"subscribe","channel":"/scores"}`)); err != nil {
+		t.Fatalf("subscribe write error = %v", err)
+	}
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatalf("subscribe ack read error = %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+		}
+	}()
+
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+	wg.Wait()
+}
+
+func TestSocketHubDispatchAdapterFilter(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false)
+	rawClient := &SocketClient{
+		id:            "raw-1",
+		adapter:       "raw",
+		protocol:      RawAdapter{},
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{"/scores": "raw-sub"},
+	}
+	appSyncClient := &SocketClient{
+		id:            "appsync-1",
+		adapter:       "appsync",
+		protocol:      AppSyncAdapter{},
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{"/scores": "appsync-sub"},
+	}
+	hub.addClient(rawClient)
+	hub.addClient(appSyncClient)
+	hub.registry.Subscribe("/scores", rawClient.id)
+	hub.registry.Subscribe("/scores", appSyncClient.id)
+
+	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "appsync")
+	if result.Delivered != 1 {
+		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
+	}
+	if len(rawClient.send) != 0 {
+		t.Fatalf("raw client received a frame despite appsync filter")
+	}
+	select {
+	case msg := <-appSyncClient.send:
+		if !strings.Contains(string(msg.Data), `"id":"appsync-sub"`) {
+			t.Fatalf("appsync frame = %s, want subscription id", msg.Data)
+		}
+	default:
+		t.Fatalf("appsync client did not receive a frame")
+	}
+}
+
+func TestSocketAPIRejectsCrossOriginTextPlainDispatch(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false)
+	mux := http.NewServeMux()
+	RegisterSocketRoutes(mux, hub)
+
+	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/socket/dispatch", strings.NewReader(`{"channel":"/scores","payload":{}}`))
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("dispatch status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }

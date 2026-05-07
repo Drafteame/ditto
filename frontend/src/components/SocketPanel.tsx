@@ -39,7 +39,10 @@ export function SocketPanel({
   const [dispatching, setDispatching] = useState(false)
   const [jsonError, setJsonError] = useState('')
 
-  const socketEntries = entries.filter(entry => entry.type === 'SOCKET').slice(-200).reverse()
+  const socketEntries = useMemo(
+    () => entries.filter(entry => entry.type === 'SOCKET').slice(-200).reverse(),
+    [entries],
+  )
   const scheme = serverInfo?.https ? 'wss' : 'ws'
   const wsUrl = serverInfo ? `${scheme}://localhost:${serverInfo.port}` : ''
 
@@ -66,7 +69,10 @@ export function SocketPanel({
         payload: parsed,
         adapter: adapter as 'raw' | 'appsync' | '',
       })
-      showToast(`Dispatched to ${result.delivered} client${result.delivered === 1 ? '' : 's'}`)
+      const dropped = result.dropped?.length ?? 0
+      const errors = result.errors?.length ?? 0
+      const suffix = dropped || errors ? `, ${dropped} dropped, ${errors} errors` : ''
+      showToast(`Dispatched to ${result.delivered} client${result.delivered === 1 ? '' : 's'}${suffix}`)
     } catch (err) {
       showToast(`Dispatch failed: ${(err as Error).message}`, 'warn')
     } finally {

@@ -6,7 +6,6 @@ interface SocketStore {
   connectedClients: SocketClient[]
   loading: boolean
   error: string
-  setConnectedClients: (clients: SocketClient[]) => void
   loadClients: () => Promise<void>
 }
 
@@ -14,7 +13,6 @@ export const useSocketStore = create<SocketStore>((set) => ({
   connectedClients: [],
   loading: false,
   error: '',
-  setConnectedClients: (connectedClients) => set({ connectedClients }),
   loadClients: async () => {
     set({ loading: true, error: '' })
     try {

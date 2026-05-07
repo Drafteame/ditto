@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -30,10 +32,15 @@ type ServerMsg struct {
 	Payload json.RawMessage
 }
 
+type EncodedServerMessage struct {
+	Data []byte
+	Kind websocket.MessageType
+}
+
 type ProtocolAdapter interface {
 	ParseClientMessage(b []byte) (ClientMsg, error)
-	EncodeServerMessage(msg ServerMsg) ([]byte, error)
-	Heartbeat() ([]byte, time.Duration)
+	EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error)
+	Heartbeat() (EncodedServerMessage, time.Duration)
 }
 
 type SubscriptionRegistry struct {
@@ -114,7 +121,9 @@ type SocketClient struct {
 	remoteAddr string
 	connected  time.Time
 	conn       *websocket.Conn
-	send       chan []byte
+	send       chan EncodedServerMessage
+	done       chan struct{}
+	closeOnce  sync.Once
 
 	mu            sync.RWMutex
 	subscriptions map[string]string
@@ -132,6 +141,12 @@ type socketDispatchRequest struct {
 	Channel string          `json:"channel"`
 	Payload json.RawMessage `json:"payload"`
 	Adapter string          `json:"adapter,omitempty"`
+}
+
+type SocketDispatchResult struct {
+	Delivered int      `json:"delivered"`
+	Dropped   []string `json:"dropped,omitempty"`
+	Errors    []string `json:"errors,omitempty"`
 }
 
 func NewSocketHub(bus *EventBus, jsonLogs bool) *SocketHub {
@@ -159,6 +174,14 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !isAllowedAPIRequest(r) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+		if !hasJSONContentType(r) {
+			http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
+			return
+		}
 		var req socketDispatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -171,14 +194,49 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
 		if len(req.Payload) == 0 {
 			req.Payload = json.RawMessage(`{}`)
 		}
-		delivered := hub.Dispatch(req.Channel, req.Payload, req.Adapter)
+		result := hub.Dispatch(req.Channel, req.Payload, req.Adapter)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"delivered": delivered})
+		json.NewEncoder(w).Encode(result)
 	})
 }
 
 func IsWebSocketRequest(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
+func shouldProxyWebSocket(r *http.Request) bool {
+	mode := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Ditto-WS-Mode")))
+	queryMode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("__ditto_ws")))
+	return mode == "proxy" || mode == "live" || queryMode == "proxy" || queryMode == "live"
+}
+
+func hasJSONContentType(r *http.Request) bool {
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	return contentType == "application/json" || strings.HasPrefix(contentType, "application/json;")
+}
+
+func isAllowedAPIRequest(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = r.Header.Get("Referer")
+	}
+	if origin == "" {
+		return true
+	}
+	return isAllowedOriginForHost(origin, r.Host)
+}
+
+func isAllowedOriginForHost(raw, requestHost string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	reqHost := strings.ToLower(requestHost)
+	if h, _, err := net.SplitHostPort(reqHost); err == nil {
+		reqHost = h
+	}
+	return host == reqHost || host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -193,8 +251,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-		CompressionMode:    websocket.CompressionDisabled,
+		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return
@@ -208,7 +265,8 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		remoteAddr:    r.RemoteAddr,
 		connected:     time.Now(),
 		conn:          conn,
-		send:          make(chan []byte, 64),
+		send:          make(chan EncodedServerMessage, 64),
+		done:          make(chan struct{}),
 		subscriptions: make(map[string]string),
 	}
 	h.addClient(client)
@@ -222,21 +280,22 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	h.readLoop(ctx, client)
+	client.close()
 	h.removeClient(client)
-	close(client.send)
 	<-done
 	_ = conn.Close(websocket.StatusNormalClosure, "")
 	h.publishSocketEvent("DISCONNECT", id, 0, "", 0)
 }
 
-func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFilter string) int {
+func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFilter string) SocketDispatchResult {
 	channel = strings.TrimSpace(channel)
 	adapterFilter = normalizeAdapter(adapterFilter)
 	ids := h.registry.Clients(channel)
-	delivered := 0
+	result := SocketDispatchResult{}
 	for _, id := range ids {
 		client := h.client(id)
 		if client == nil {
+			result.Dropped = append(result.Dropped, id)
 			continue
 		}
 		if adapterFilter != "" && client.adapter != adapterFilter {
@@ -250,16 +309,17 @@ func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFil
 			Payload: payload,
 		})
 		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", client.id, err))
 			continue
 		}
-		select {
-		case client.send <- data:
-			delivered++
-		default:
+		if client.enqueue(data, 0) {
+			result.Delivered++
+		} else {
+			result.Dropped = append(result.Dropped, client.id)
 		}
 	}
-	h.publishSocketEvent("DISPATCH", channel, http.StatusOK, string(payload), 0)
-	return delivered
+	h.publishSocketEvent("DISPATCH", channel, http.StatusOK, dispatchSummary(result), 0)
+	return result
 }
 
 func (h *SocketHub) Snapshot() []SocketClientSnapshot {
@@ -328,6 +388,7 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 			channel := strings.TrimSpace(msg.Channel)
 			if channel == "" {
 				h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, "subscribe message missing channel", 0)
+				h.enqueueControl(client, ServerMsg{Type: "error", ID: msg.ID, Payload: json.RawMessage(`{"error":"subscribe message missing channel"}`)})
 				continue
 			}
 			subID := msg.SubscriptionID
@@ -360,40 +421,46 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 
 func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
 	heartbeat, heartbeatEvery := client.protocol.Heartbeat()
-	if heartbeatEvery <= 0 {
-		heartbeatEvery = 30 * time.Second
+	var heartbeatC <-chan time.Time
+	var heartbeatTicker *time.Ticker
+	if len(heartbeat.Data) > 0 {
+		if heartbeatEvery <= 0 {
+			heartbeatEvery = 30 * time.Second
+		}
+		heartbeatTicker = time.NewTicker(heartbeatEvery)
+		heartbeatC = heartbeatTicker.C
+		defer heartbeatTicker.Stop()
 	}
-	heartbeatTicker := time.NewTicker(heartbeatEvery)
-	defer heartbeatTicker.Stop()
 
-	pingTicker := time.NewTicker(30 * time.Second)
-	defer pingTicker.Stop()
+	var pingC <-chan time.Time
+	var pingTicker *time.Ticker
+	if len(heartbeat.Data) == 0 {
+		pingTicker = time.NewTicker(30 * time.Second)
+		pingC = pingTicker.C
+		defer pingTicker.Stop()
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case data, ok := <-client.send:
-			if !ok {
-				return
-			}
+		case <-client.done:
+			return
+		case msg := <-client.send:
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := client.conn.Write(writeCtx, websocket.MessageText, data)
+			err := client.conn.Write(writeCtx, msg.Kind, msg.Data)
 			cancel()
 			if err != nil {
 				return
 			}
-		case <-heartbeatTicker.C:
-			if len(heartbeat) == 0 {
-				continue
-			}
+		case <-heartbeatC:
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := client.conn.Write(writeCtx, websocket.MessageText, heartbeat)
+			err := client.conn.Write(writeCtx, heartbeat.Kind, heartbeat.Data)
 			cancel()
 			if err != nil {
 				return
 			}
-		case <-pingTicker.C:
+		case <-pingC:
 			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			err := client.conn.Ping(pingCtx)
 			cancel()
@@ -407,11 +474,11 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
 func (h *SocketHub) enqueueControl(client *SocketClient, msg ServerMsg) {
 	data, err := client.protocol.EncodeServerMessage(msg)
 	if err != nil {
+		h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, err.Error(), 0)
 		return
 	}
-	select {
-	case client.send <- data:
-	default:
+	if !client.enqueue(data, 2*time.Second) {
+		h.publishSocketEvent("ERROR", client.id, http.StatusServiceUnavailable, "control message dropped", 0)
 	}
 }
 
@@ -427,6 +494,18 @@ func (h *SocketHub) publishSocketEvent(method, path string, status int, body str
 	}
 	logRequest(h.jsonLogs, event)
 	h.bus.Publish(event)
+}
+
+func dispatchSummary(result SocketDispatchResult) string {
+	data, err := json.Marshal(map[string]any{
+		"delivered": result.Delivered,
+		"dropped":   len(result.Dropped),
+		"errors":    len(result.Errors),
+	})
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func (c *SocketClient) addSubscription(channel, subID string) {
@@ -467,6 +546,62 @@ func (c *SocketClient) subscriptionList() []string {
 	}
 	sort.Strings(channels)
 	return channels
+}
+
+func (c *SocketClient) close() {
+	c.closeOnce.Do(func() {
+		close(c.done)
+	})
+}
+
+func (c *SocketClient) enqueue(msg EncodedServerMessage, timeout time.Duration) bool {
+	if msg.Kind == 0 {
+		msg.Kind = websocket.MessageText
+	}
+	if timeout <= 0 {
+		select {
+		case <-c.done:
+			return false
+		case c.send <- msg:
+			return true
+		default:
+			return false
+		}
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-c.done:
+		return false
+	case c.send <- msg:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func textMessage(data []byte) EncodedServerMessage {
+	return EncodedServerMessage{Data: data, Kind: websocket.MessageText}
+}
+
+func marshalTextMessage(v any) (EncodedServerMessage, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return EncodedServerMessage{}, err
+	}
+	return textMessage(data), nil
+}
+
+func rawPayload(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw)
+	}
+	return value
 }
 
 func NewProtocolAdapter(name string) (ProtocolAdapter, error) {
@@ -515,26 +650,28 @@ func (RawAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
 	}, nil
 }
 
-func (RawAdapter) EncodeServerMessage(msg ServerMsg) ([]byte, error) {
+func (RawAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
 	switch msg.Type {
 	case "data", "":
 		if len(msg.Payload) == 0 {
-			return []byte(`{}`), nil
+			return textMessage([]byte(`{}`)), nil
 		}
-		return msg.Payload, nil
+		return textMessage(msg.Payload), nil
 	case "connection_ack":
-		return json.Marshal(map[string]any{"type": "connection_ack"})
+		return marshalTextMessage(map[string]any{"type": "connection_ack"})
 	case "subscribe_ack":
-		return json.Marshal(map[string]any{"type": "subscribe_ack", "channel": msg.Channel})
+		return marshalTextMessage(map[string]any{"type": "subscribe_ack", "channel": msg.Channel})
 	case "pong":
-		return json.Marshal(map[string]any{"type": "pong"})
+		return marshalTextMessage(map[string]any{"type": "pong"})
+	case "error":
+		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "payload": rawPayload(msg.Payload)})
 	default:
-		return json.Marshal(map[string]any{"type": msg.Type})
+		return marshalTextMessage(map[string]any{"type": msg.Type})
 	}
 }
 
-func (RawAdapter) Heartbeat() ([]byte, time.Duration) {
-	return []byte(`{"type":"ping"}`), 30 * time.Second
+func (RawAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
+	return textMessage([]byte(`{"type":"ping"}`)), 30 * time.Second
 }
 
 type AppSyncAdapter struct{}
@@ -569,17 +706,19 @@ func (AppSyncAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
 	}, nil
 }
 
-func (AppSyncAdapter) EncodeServerMessage(msg ServerMsg) ([]byte, error) {
+func (AppSyncAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
 	switch msg.Type {
 	case "connection_ack":
-		return json.Marshal(map[string]any{
+		return marshalTextMessage(map[string]any{
 			"type":    "connection_ack",
 			"payload": map[string]any{"connectionTimeoutMs": 300000},
 		})
 	case "subscribe_ack":
-		return json.Marshal(map[string]any{"type": "subscribe_success", "id": msg.ID})
+		return marshalTextMessage(map[string]any{"type": "subscribe_success", "id": msg.ID})
 	case "pong":
-		return json.Marshal(map[string]any{"type": "pong"})
+		return marshalTextMessage(map[string]any{"type": "pong"})
+	case "error":
+		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "payload": rawPayload(msg.Payload)})
 	case "data", "":
 		var payload any = map[string]any{}
 		if len(msg.Payload) > 0 {
@@ -587,7 +726,7 @@ func (AppSyncAdapter) EncodeServerMessage(msg ServerMsg) ([]byte, error) {
 				payload = string(msg.Payload)
 			}
 		}
-		return json.Marshal(map[string]any{
+		return marshalTextMessage(map[string]any{
 			"type": "data",
 			"id":   msg.ID,
 			"payload": map[string]any{
@@ -595,12 +734,12 @@ func (AppSyncAdapter) EncodeServerMessage(msg ServerMsg) ([]byte, error) {
 			},
 		})
 	default:
-		return json.Marshal(map[string]any{"type": msg.Type, "id": msg.ID})
+		return marshalTextMessage(map[string]any{"type": msg.Type, "id": msg.ID})
 	}
 }
 
-func (AppSyncAdapter) Heartbeat() ([]byte, time.Duration) {
-	return []byte(`{"type":"ka"}`), 5 * time.Second
+func (AppSyncAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
+	return textMessage([]byte(`{"type":"ka"}`)), 5 * time.Second
 }
 
 func normalizeClientMessageType(t string) string {

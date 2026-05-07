@@ -102,15 +102,26 @@ export default function App() {
 
   const isDesktop = useRef(isInsideWails()).current
   const isMobile = useRef(isMobileDevice()).current
+  const socketRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const scheduleSocketClientRefresh = useCallback(() => {
+    if (socketRefreshTimer.current) {
+      clearTimeout(socketRefreshTimer.current)
+    }
+    socketRefreshTimer.current = setTimeout(() => {
+      loadSocketClients()
+      socketRefreshTimer.current = null
+    }, 250)
+  }, [loadSocketClients])
 
   useSSE(
     useCallback((event) => {
       appendLogEvent(event)
       advanceSequenceCursor(event)
       if (event.type === 'SOCKET') {
-        loadSocketClients()
+        scheduleSocketClientRefresh()
       }
-    }, [advanceSequenceCursor, appendLogEvent, loadSocketClients]),
+    }, [advanceSequenceCursor, appendLogEvent, scheduleSocketClientRefresh]),
     useCallback(() => {
       setConnected(true)
       loadMocks()
@@ -130,6 +141,14 @@ export default function App() {
       if (data.available) setUpdateInfo(data)
     }).catch(() => {})
   }, [loadMocks, loadSocketClients, setUpdateInfo])
+
+  useEffect(() => {
+    return () => {
+      if (socketRefreshTimer.current) {
+        clearTimeout(socketRefreshTimer.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
