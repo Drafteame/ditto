@@ -253,6 +253,7 @@ Implementation notes:
 
 - Activation: disables conflicting mocks/channels, enables the scenario's, arms triggers.
 - HTTP→Socket triggers: when an HTTP request matches, Ditto fires a sequence. This solves the common pattern "the backend emits a socket event when it receives request X".
+- Design decision before implementation: triggers need fire-and-forget sequence runs so concurrent HTTP requests can launch independent snapshots of the same sequence ID without colliding with the UI-tracked `SequencePlayer.Play` runner.
 - Frontend: scenario cards in the sidebar (aligned with ROADMAP v1.6 spec), active-scenario visual indicator, "Stop scenario" button.
 
 **Done when:** activate a scenario → relevant HTTP mocks load, relevant channels switch to `mock` mode, the sequence is armed. Exercise the app: trigger fires the sequence on the matching HTTP call. Everything choreographed.
@@ -273,6 +274,7 @@ This milestone delivers **"simulate a full session"** without any session-specif
   - Individual mock / sequence
 - Import with conflict resolution UI: per conflicting item, show a `git`-style diff + skip / overwrite / rename / merge options.
 - Persist manifest format with `schemaVersion` for future compatibility.
+- Design decision before implementation: artifact references need stable identity across renames. Current template/sequence IDs are generated as `slug-shortHash`; M8 should either introduce immutable IDs with separate display slugs or define a migration/conflict policy for renamed artifacts.
 
 **Done when:** export a scenario as `match-day-v1.dittopack`, share with a teammate, they import with a click, see conflicts (if any), resolve, activate the scenario, it works identically.
 
@@ -283,6 +285,7 @@ This milestone delivers **"simulate a full session"** without any session-specif
 - **Tests:** every milestone adds Go unit tests for its slice (protocol adapter, registry, sequence player engine). E2E: a Go-based test WS client that masquerades as the app and verifies events. Defer client-side integration testing until M5+.
 - **Documentation:** every milestone updates ROADMAP.md and adds a doc in `docs/` describing the format of any new artifacts (templates, sequences, recordings, scenarios). These docs are part of DoD.
 - **Backward compatibility:** Protobuf schemas evolve. Recordings and sequences depending on them must tolerate added fields (Protobuf's forward compat helps) and warn when a referenced field disappears. Schema packs are versioned (`pack-v1`, `pack-v2`); allow coexistence.
+- **Channel modes:** M5 should keep sequence runners agnostic by putting mock/live/record/mixed decisions behind a `ChannelModeRegistry` consulted by `dispatchRendered`, which remains the single WebSocket exit point.
 - **Performance:** the `SequencePlayer` should run dozens of concurrent sequences without saturation. Benchmark from M4.
 
 ---

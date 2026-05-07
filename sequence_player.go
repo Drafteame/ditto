@@ -160,6 +160,8 @@ func NewSequencePlayer(reg *EventSequenceRegistry, templates *EventTemplateRegis
 }
 
 func (p *SequencePlayer) Play(id string, opts PlayOptions) (PlayerState, error) {
+	// TODO: M7 — support fire-and-forget runs for HTTP triggers so concurrent
+	// trigger hits can launch independent snapshots of the same sequence ID.
 	if !isSafeEventTemplateID(id) {
 		return PlayerState{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
