@@ -79,13 +79,12 @@ type FieldInfo struct {
 }
 
 type schemaPackManifest struct {
-	ManifestVersion int      `json:"manifest_version"`
-	ID              string   `json:"id,omitempty"`
-	Name            string   `json:"name,omitempty"`
-	Description     string   `json:"description,omitempty"`
-	Version         string   `json:"version,omitempty"`
-	DittoMinVersion string   `json:"ditto_min_version,omitempty"`
-	Artifacts       struct{} `json:"artifacts,omitempty"`
+	ManifestVersion int    `json:"manifest_version"`
+	ID              string `json:"id,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Description     string `json:"description,omitempty"`
+	Version         string `json:"version,omitempty"`
+	DittoMinVersion string `json:"ditto_min_version,omitempty"`
 }
 
 type schemaPacksResponse struct {
@@ -97,11 +96,15 @@ type schemaTypesResponse struct {
 }
 
 func NewSchemaRegistry(dir string) (*SchemaRegistry, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
 		return nil, err
 	}
 	reg := &SchemaRegistry{
-		dir:   dir,
+		dir:   absDir,
 		packs: make(map[string]SchemaPack),
 		types: make(map[string]protoreflect.MessageDescriptor),
 	}
@@ -262,7 +265,7 @@ func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (
 	if baseName == "" {
 		baseName = "schema-pack"
 	}
-	tmpDir, err := os.MkdirTemp(s.dir, ".upload-"+baseName+"-*")
+	tmpDir, err := os.MkdirTemp("", "ditto-schema-upload-"+baseName+"-*")
 	if err != nil {
 		return SchemaPack{}, err
 	}
@@ -303,7 +306,7 @@ func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (
 			return SchemaPack{}, err
 		}
 		os.Remove(tmpPath)
-		if err := flattenSingleWrapperDir(tmpDir); err != nil {
+		if err := normalizeExtractedPackLayout(tmpDir); err != nil {
 			return SchemaPack{}, err
 		}
 	default:
@@ -320,7 +323,7 @@ func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (
 	} else if !os.IsNotExist(err) {
 		return SchemaPack{}, err
 	}
-	if err := os.Rename(tmpDir, dest); err != nil {
+	if err := moveDir(tmpDir, dest); err != nil {
 		return SchemaPack{}, err
 	}
 	cleanupTmp = false
@@ -334,6 +337,12 @@ func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (
 }
 
 func (s *SchemaRegistry) registerPackLocked(packPath string) (SchemaPack, error) {
+	managedPath, err := s.managedPackPath(packPath)
+	if err != nil {
+		return SchemaPack{}, err
+	}
+	packPath = managedPath
+
 	protos, err := protoFiles(packPath)
 	if err != nil {
 		return SchemaPack{}, err
@@ -398,6 +407,27 @@ func (s *SchemaRegistry) registerPackLocked(packPath string) (SchemaPack, error)
 	return pack, nil
 }
 
+func (s *SchemaRegistry) managedPackPath(packPath string) (string, error) {
+	absPath, err := filepath.Abs(packPath)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(s.dir, absPath)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("schema pack path %q must be inside %s", packPath, s.dir)
+	}
+	if strings.Contains(rel, string(os.PathSeparator)) {
+		return "", fmt.Errorf("schema pack path %q must be a direct child of %s", packPath, s.dir)
+	}
+	if isTransientSchemaDir(filepath.Base(absPath)) {
+		return "", fmt.Errorf("schema pack path %q is reserved for temporary data", packPath)
+	}
+	return absPath, nil
+}
+
 func (s *SchemaRegistry) resetDescriptorsLocked() {
 	s.files = &protoregistry.Files{}
 	s.resolver = dynamicpb.NewTypes(s.files)
@@ -420,7 +450,11 @@ func registerFileRecursive(files *protoregistry.Files, file protoreflect.FileDes
 }
 
 func fileDescriptorEqual(a, b protoreflect.FileDescriptor) bool {
-	return proto.Equal(protodesc.ToFileDescriptorProto(a), protodesc.ToFileDescriptorProto(b))
+	ap := protodesc.ToFileDescriptorProto(a)
+	bp := protodesc.ToFileDescriptorProto(b)
+	ap.SourceCodeInfo = nil
+	bp.SourceCodeInfo = nil
+	return proto.Equal(ap, bp)
 }
 
 func RegisterSchemaRoutes(mux *http.ServeMux, schemas *SchemaRegistry) {
@@ -519,8 +553,11 @@ func schemaPackMetadataFromManifest(root string) (schemaPackManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return schemaPackManifest{}, fmt.Errorf("invalid manifest.json: %w", err)
 	}
+	if manifest.ManifestVersion == 0 {
+		return schemaPackManifest{}, fmt.Errorf("manifest.json requires manifest_version: 1")
+	}
 	if manifest.ManifestVersion != 1 {
-		return schemaPackManifest{}, fmt.Errorf("unsupported manifest_version %d", manifest.ManifestVersion)
+		return schemaPackManifest{}, fmt.Errorf("unsupported manifest_version %d (expected 1)", manifest.ManifestVersion)
 	}
 	return manifest, nil
 }
@@ -636,6 +673,43 @@ func copyLimited(dst io.Writer, src io.Reader, limit int64, label string) (int64
 
 func isTransientSchemaDir(name string) bool {
 	return strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
+}
+
+func moveDir(src, dest string) error {
+	if err := os.Rename(src, dest); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(dest); err == nil {
+		return fmt.Errorf("destination %q already exists", dest)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := copyDir(src, dest); err != nil {
+		os.RemoveAll(dest)
+		return err
+	}
+	return os.RemoveAll(src)
+}
+
+func copyDir(src, dest string) error {
+	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
 }
 
 func protoFiles(root string) ([]string, error) {
@@ -763,6 +837,10 @@ func exampleForScalarOrMessage(field protoreflect.FieldDescriptor, depth int) an
 }
 
 func extractZip(zipPath, dest string) error {
+	return extractZipWithLimit(zipPath, dest, maxSchemaUnpackBytes)
+}
+
+func extractZipWithLimit(zipPath, dest string, maxUnpackBytes int64) error {
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
@@ -809,8 +887,8 @@ func extractZip(zipPath, dest string) error {
 			return closeErr
 		}
 		unpacked += int64(len(data))
-		if unpacked > maxSchemaUnpackBytes {
-			return fmt.Errorf("schema pack exceeds %dMB unpacked limit", maxSchemaUnpackBytes/(1<<20))
+		if unpacked > maxUnpackBytes {
+			return fmt.Errorf("schema pack exceeds %dMB unpacked limit", maxUnpackBytes/(1<<20))
 		}
 		if err := os.WriteFile(targetClean, data, 0o644); err != nil {
 			return err
@@ -829,25 +907,60 @@ func allowedSchemaZipEntry(name string) (bool, int64) {
 	return false, 0
 }
 
-func flattenSingleWrapperDir(root string) error {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return err
-	}
-	if len(entries) != 1 || !entries[0].IsDir() {
-		return nil
-	}
-	wrapper := filepath.Join(root, entries[0].Name())
-	children, err := os.ReadDir(wrapper)
-	if err != nil {
-		return err
-	}
-	for _, child := range children {
-		if err := os.Rename(filepath.Join(wrapper, child.Name()), filepath.Join(root, child.Name())); err != nil {
+func normalizeExtractedPackLayout(root string) error {
+	for {
+		hasRootArtifact, err := hasSchemaRootArtifact(root)
+		if err != nil {
+			return err
+		}
+		if hasRootArtifact {
+			return nil
+		}
+
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return err
+		}
+		var dirs []os.DirEntry
+		for _, entry := range entries {
+			if entry.IsDir() {
+				dirs = append(dirs, entry)
+			}
+		}
+		if len(dirs) != 1 || len(entries) != 1 {
+			return fmt.Errorf("schema pack zip must contain .proto files or manifest.json at its root, or a single wrapper directory")
+		}
+
+		wrapper := filepath.Join(root, dirs[0].Name())
+		children, err := os.ReadDir(wrapper)
+		if err != nil {
+			return err
+		}
+		for _, child := range children {
+			if err := os.Rename(filepath.Join(wrapper, child.Name()), filepath.Join(root, child.Name())); err != nil {
+				return err
+			}
+		}
+		if err := os.Remove(wrapper); err != nil {
 			return err
 		}
 	}
-	return os.Remove(wrapper)
+}
+
+func hasSchemaRootArtifact(root string) (bool, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if allowed, _ := allowedSchemaZipEntry(entry.Name()); allowed {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func sanitizePackName(name string) string {

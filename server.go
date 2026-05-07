@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -103,6 +102,13 @@ type Server struct {
 
 // NewServer creates and configures the HTTP server with all routes.
 func NewServer(cfg ServerConfig) (*Server, error) {
+	if cfg.MocksDir == "" {
+		return nil, fmt.Errorf("server config mocks dir is required")
+	}
+	if cfg.Layout.DescriptorsDir == "" {
+		return nil, fmt.Errorf("server config layout with descriptors dir is required")
+	}
+
 	store := NewMockStore(cfg.MocksDir)
 	if err := store.Load(); err != nil {
 		return nil, fmt.Errorf("failed to load mocks: %w", err)
@@ -113,9 +119,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	jsonLogs := cfg.JSONLogs
 	socketHub := NewSocketHub(bus, jsonLogs)
 	descriptorsDir := cfg.Layout.DescriptorsDir
-	if descriptorsDir == "" {
-		descriptorsDir = NewDataLayout(filepath.Dir(cfg.MocksDir)).DescriptorsDir
-	}
 	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)

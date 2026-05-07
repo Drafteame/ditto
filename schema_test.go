@@ -120,15 +120,15 @@ func TestSchemaRegistryFailedPackDoesNotPoisonRegistry(t *testing.T) {
 
 func TestSchemaRegistryRejectsDifferentDescriptorsWithSamePath(t *testing.T) {
 	root := t.TempDir()
-	first := writeProto(t, filepath.Join(root, "a-pack"), "event.proto", `syntax = "proto3"; package ditto.a; message Event { string id = 1; }`)
-	second := writeProto(t, filepath.Join(root, "b-pack"), "event.proto", `syntax = "proto3"; package ditto.b; message Event { string id = 1; }`)
-
 	reg, err := NewSchemaRegistry(root)
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	if _, err := reg.RegisterPack(first); err == nil {
-		t.Fatalf("RegisterPack(first) unexpectedly succeeded for duplicate pack id")
+	first := writeProto(t, filepath.Join(root, "a-pack"), "event.proto", `syntax = "proto3"; package ditto.a; message Event { string id = 1; }`)
+	second := writeProto(t, filepath.Join(root, "b-pack"), "event.proto", `syntax = "proto3"; package ditto.b; message Event { string id = 1; }`)
+
+	if _, err := reg.RegisterPack(first); err != nil {
+		t.Fatalf("RegisterPack(first) error = %v", err)
 	}
 	if _, err := reg.RegisterPack(second); err == nil || !strings.Contains(err.Error(), "already registered with different contents") {
 		t.Fatalf("RegisterPack(second) error = %v, want path collision", err)
@@ -164,17 +164,109 @@ func TestSchemaRegistryZipUploadPreservesManifest(t *testing.T) {
 
 func TestSchemaRegistryRejectsUnsupportedManifestVersion(t *testing.T) {
 	root := t.TempDir()
+	reg, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
 	dir := writeProto(t, filepath.Join(root, "bad-version"), "event.proto", `syntax = "proto3"; package ditto.badversion; message Event { string id = 1; }`)
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"manifest_version":2,"name":"bad"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	reg, err := NewSchemaRegistry(t.TempDir())
+	if _, err := reg.RegisterPack(dir); err == nil || !strings.Contains(err.Error(), "unsupported manifest_version 2 (expected 1)") {
+		t.Fatalf("RegisterPack() error = %v, want manifest version rejection", err)
+	}
+}
+
+func TestSchemaRegistryRejectsManifestWithoutVersion(t *testing.T) {
+	root := t.TempDir()
+	reg, err := NewSchemaRegistry(root)
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	if _, err := reg.RegisterPack(dir); err == nil || !strings.Contains(err.Error(), "unsupported manifest_version") {
-		t.Fatalf("RegisterPack() error = %v, want manifest version rejection", err)
+	dir := writeProto(t, filepath.Join(root, "missing-version"), "event.proto", `syntax = "proto3"; package ditto.missingversion; message Event { string id = 1; }`)
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"missing"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := reg.RegisterPack(dir); err == nil || !strings.Contains(err.Error(), "manifest.json requires manifest_version: 1") {
+		t.Fatalf("RegisterPack() error = %v, want missing manifest_version message", err)
+	}
+}
+
+func TestSchemaRegistryRejectsPackOutsideRegistryDir(t *testing.T) {
+	root := t.TempDir()
+	reg, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+	outside := writeProto(t, filepath.Join(t.TempDir(), "outside"), "event.proto", `syntax = "proto3"; package ditto.outside; message Event { string id = 1; }`)
+
+	if _, err := reg.RegisterPack(outside); err == nil || !strings.Contains(err.Error(), "must be inside") {
+		t.Fatalf("RegisterPack(outside) error = %v, want managed path rejection", err)
+	}
+}
+
+func TestSchemaRegistryLoadSkipsHiddenUploadDir(t *testing.T) {
+	root := t.TempDir()
+	writeProto(t, filepath.Join(root, ".upload-events"), "event.proto", `syntax = "proto3"; package ditto.hidden; message Event { string id = 1; }`)
+
+	reg, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+	if got := reg.Types(); len(got) != 0 {
+		t.Fatalf("Types() = %#v, want hidden upload dir skipped", got)
+	}
+}
+
+func TestNormalizeExtractedPackLayoutFlattensNestedSingleWrapper(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "outer", "inner")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"manifest_version":1,"name":"nested"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "event.proto"), []byte(`syntax = "proto3"; package ditto.nested; message Event { string id = 1; }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := normalizeExtractedPackLayout(root); err != nil {
+		t.Fatalf("normalizeExtractedPackLayout() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "manifest.json")); err != nil {
+		t.Fatalf("manifest not flattened: %v", err)
+	}
+}
+
+func TestNormalizeExtractedPackLayoutRejectsAmbiguousNestedRoots(t *testing.T) {
+	root := t.TempDir()
+	writeProto(t, filepath.Join(root, "a"), "event.proto", `syntax = "proto3"; package ditto.a; message Event { string id = 1; }`)
+	writeProto(t, filepath.Join(root, "b"), "event.proto", `syntax = "proto3"; package ditto.b; message Event { string id = 1; }`)
+
+	if err := normalizeExtractedPackLayout(root); err == nil || !strings.Contains(err.Error(), "single wrapper directory") {
+		t.Fatalf("normalizeExtractedPackLayout() error = %v, want ambiguous layout rejection", err)
+	}
+}
+
+func TestExtractZipRejectsUnpackedLimit(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	addZipFile(t, zw, "a.proto", `syntax = "proto3"; package ditto.limit; message A { string id = 1; }`)
+	addZipFile(t, zw, "b.proto", `syntax = "proto3"; package ditto.limit; message B { string id = 1; }`)
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zipPath := filepath.Join(t.TempDir(), "pack.zip")
+	if err := os.WriteFile(zipPath, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := extractZipWithLimit(zipPath, t.TempDir(), 10)
+	if err == nil || !strings.Contains(err.Error(), "unpacked limit") {
+		t.Fatalf("extractZipWithLimit() error = %v, want unpacked limit", err)
 	}
 }
 
