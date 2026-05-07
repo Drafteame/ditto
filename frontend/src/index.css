@@ -95,6 +95,81 @@ body {
   @apply text-left px-3 py-2 bg-dt-surface text-dt-muted text-[11px] uppercase tracking-wider font-semibold border-b border-dt-border;
 }
 
+/* JSON search/view/edit */
+.json-search-bar {
+  @apply flex items-center gap-1 px-2 py-1 border-b border-dt-border text-dt-muted bg-dt-surface;
+}
+
+.json-search-icon {
+  @apply text-xs leading-none;
+}
+
+.json-search-input {
+  @apply flex-1 min-w-0 bg-transparent border-0 outline-none text-dt-text text-[11px] font-sans px-1 py-0.5 placeholder:text-dt-muted;
+}
+
+.json-search-button {
+  @apply w-[22px] h-[22px] inline-flex items-center justify-center bg-transparent border border-transparent rounded text-dt-muted text-xs cursor-pointer hover:text-dt-text hover:bg-dt-border disabled:opacity-35 disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-dt-muted;
+}
+
+.json-search-counter {
+  @apply min-w-[36px] text-center text-[10px] font-mono text-dt-muted whitespace-nowrap;
+}
+
+.json-search-counter.no-matches {
+  @apply text-dt-red;
+}
+
+.json-search-separator {
+  @apply w-px h-3 bg-dt-border mx-1;
+}
+
+.json-match {
+  @apply rounded-sm bg-[rgba(88,166,255,0.25)];
+}
+
+.json-match.active {
+  @apply bg-[rgba(88,166,255,0.62)] text-dt-text;
+}
+
+.json-viewer {
+  @apply bg-dt-surface border border-dt-border rounded-md overflow-hidden flex flex-col max-h-[360px];
+}
+
+.json-viewer-pre {
+  @apply p-3 text-xs font-mono text-dt-text overflow-auto whitespace-pre-wrap break-words flex-1 min-h-[180px] m-0 leading-relaxed;
+}
+
+.json-editor {
+  @apply bg-dt-bg border border-dt-border rounded-md overflow-hidden flex flex-col;
+}
+
+.json-editor-overlay {
+  @apply relative min-h-[220px];
+}
+
+.json-editor-pre {
+  @apply absolute inset-0 z-0 pointer-events-none select-none overflow-hidden p-3 text-[13px] font-mono leading-relaxed whitespace-pre-wrap break-words text-dt-text m-0;
+  tab-size: 2;
+}
+
+.json-editor-textarea {
+  @apply relative z-[1] block w-full min-h-[220px] max-h-[420px] resize-y overflow-auto bg-transparent border-0 outline-none p-3 text-[13px] font-mono leading-relaxed text-transparent caret-dt-text;
+  tab-size: 2;
+}
+
+.json-editor-status {
+  @apply border-t border-dt-border bg-dt-surface px-3 py-2 text-[11px] font-sans;
+}
+
+.json-editor-status.ok {
+  @apply text-dt-green;
+}
+
+.json-editor-status.err {
+  @apply text-dt-red bg-[rgba(248,81,73,0.08)];
+}
+
 /* Scrollbar styling for dark theme */
 ::-webkit-scrollbar {
   width: 8px;

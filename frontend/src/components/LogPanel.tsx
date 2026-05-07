@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { LogEntry } from '../types'
+import { JsonViewer } from './JsonSearch'
 
 interface LogPanelProps {
   entries: LogEntry[]
@@ -243,9 +244,7 @@ function LogRow({
               <div className="flex justify-between items-center mb-2">
                 <span className="text-[11px] uppercase text-dt-muted tracking-wider">Response Body</span>
               </div>
-              <pre className="bg-dt-surface border border-dt-border rounded-md p-3 text-xs font-mono text-dt-text overflow-x-auto max-h-[300px] overflow-y-auto whitespace-pre-wrap break-words">
-                {prettyBody}
-              </pre>
+              <JsonViewer text={prettyBody} />
             </div>
           </td>
         </tr>

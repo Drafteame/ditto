@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Mock } from '../types'
 import * as api from '../api'
+import { JsonEditor } from './JsonSearch'
 
 export interface MockEditorState {
   editingIndex: number | null // null = creating new
@@ -258,12 +259,10 @@ export function MockEditorModal({ state: initial, onClose, onSaved, showToast }:
           {/* Response body */}
           <div className="flex flex-col gap-2">
             <label className="form-label">Response Body (JSON)</label>
-            <textarea
+            <JsonEditor
               value={body}
-              onChange={e => setBody(e.target.value)}
-              rows={12}
-              spellCheck={false}
-              className="form-input resize-y min-h-[200px]"
+              onChange={setBody}
+              minRows={12}
             />
           </div>
 
