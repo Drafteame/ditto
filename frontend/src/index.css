@@ -1100,12 +1100,31 @@ svg {
   padding: 9px 0;
   border-top: 1px solid color-mix(in oklch, var(--line) 65%, transparent);
 }
+.schema-pack-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.schema-pack-main .btn {
+  margin-left: auto;
+}
 .schema-pack-name,
 .schema-type-row span {
   display: block;
+  min-width: 0;
   color: var(--fg-0);
   font-family: var(--font-mono);
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schema-pack-id {
+  display: block;
+  margin-top: 3px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

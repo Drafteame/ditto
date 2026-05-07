@@ -176,6 +176,16 @@ export async function uploadSchemaPack(file: File): Promise<SchemaPack> {
   return res.json()
 }
 
+export async function deleteSchemaPack(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/schemas/packs/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+}
+
 export async function waitForPort(port: number, maxAttempts = 30): Promise<void> {
   for (let i = 0; i < maxAttempts; i++) {
     try {

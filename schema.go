@@ -2,11 +2,15 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +29,11 @@ import (
 	"nhooyr.io/websocket"
 )
 
+const (
+	maxSchemaUploadBytes = 128 << 20
+	maxProtoFileBytes    = 32 << 20
+)
+
 type SchemaRegistry struct {
 	mu       sync.RWMutex
 	dir      string
@@ -37,6 +46,7 @@ type SchemaRegistry struct {
 type SchemaPack struct {
 	ID       string           `json:"id"`
 	Name     string           `json:"name"`
+	Version  string           `json:"version,omitempty"`
 	Path     string           `json:"path"`
 	LoadedAt string           `json:"loaded_at"`
 	Types    []TypeDescriptor `json:"types"`
@@ -57,11 +67,21 @@ type FieldInfo struct {
 	Name        string `json:"name"`
 	JSONName    string `json:"json_name"`
 	Type        string `json:"type"`
+	Number      int32  `json:"number"`
 	Repeated    bool   `json:"repeated"`
 	Map         bool   `json:"map"`
-	Required    bool   `json:"required"`
+	Optional    bool   `json:"optional"`
+	Oneof       string `json:"oneof,omitempty"`
 	MessageType string `json:"message_type,omitempty"`
 	EnumType    string `json:"enum_type,omitempty"`
+}
+
+type schemaPackManifest struct {
+	ManifestVersion int    `json:"manifest_version"`
+	ID              string `json:"id,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Description     string `json:"description,omitempty"`
+	Version         string `json:"version,omitempty"`
 }
 
 type schemaPacksResponse struct {
@@ -106,7 +126,8 @@ func (s *SchemaRegistry) Load() error {
 		}
 		packPath := filepath.Join(s.dir, entry.Name())
 		if _, err := s.registerPackLocked(packPath); err != nil {
-			return fmt.Errorf("loading schema pack %s: %w", entry.Name(), err)
+			log.Printf("schema pack %s skipped: %v", entry.Name(), err)
+			continue
 		}
 	}
 	return nil
@@ -146,6 +167,30 @@ func (s *SchemaRegistry) RegisterPack(path string) (SchemaPack, error) {
 	return s.registerPackLocked(path)
 }
 
+func (s *SchemaRegistry) DeletePack(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("schema pack id is required")
+	}
+
+	s.mu.RLock()
+	pack, ok := s.packs[id]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("schema pack %q not found", id)
+	}
+	if err := os.RemoveAll(pack.Path); err != nil {
+		return err
+	}
+	return s.Load()
+}
+
+func (s *SchemaRegistry) Descriptor(typeName string) protoreflect.MessageDescriptor {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.types[strings.TrimSpace(typeName)]
+}
+
 func (s *SchemaRegistry) Encode(typeName string, payload json.RawMessage) (EncodedPayload, error) {
 	typeName = strings.TrimSpace(typeName)
 	if typeName == "" {
@@ -180,57 +225,95 @@ func (s *SchemaRegistry) Encode(typeName string, payload json.RawMessage) (Encod
 	}, nil
 }
 
-func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (SchemaPack, error) {
-	name := sanitizePackName(strings.TrimSuffix(filename, filepath.Ext(filename)))
-	if name == "" {
-		name = fmt.Sprintf("schema-pack-%d", time.Now().Unix())
+func (s *SchemaRegistry) Decode(typeName string, data []byte) (json.RawMessage, error) {
+	typeName = strings.TrimSpace(typeName)
+	if typeName == "" {
+		return nil, fmt.Errorf("type name is required")
 	}
-	packID := uniquePackID(name)
-	dest := filepath.Join(s.dir, packID)
-	if err := os.MkdirAll(dest, 0o755); err != nil {
+
+	s.mu.RLock()
+	desc := s.types[typeName]
+	resolver := s.resolver
+	s.mu.RUnlock()
+	if desc == nil {
+		return nil, fmt.Errorf("schema type %q is not loaded", typeName)
+	}
+
+	msg := dynamicpb.NewMessage(desc)
+	if err := proto.Unmarshal(data, msg); err != nil {
+		return nil, err
+	}
+	out, err := (protojson.MarshalOptions{Resolver: resolver}).Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (SchemaPack, error) {
+	baseName := sanitizePackName(strings.TrimSuffix(filename, filepath.Ext(filename)))
+	if baseName == "" {
+		baseName = "schema-pack"
+	}
+	tmpDir, err := os.MkdirTemp(s.dir, ".upload-"+baseName+"-*")
+	if err != nil {
 		return SchemaPack{}, err
 	}
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			os.RemoveAll(tmpDir)
+		}
+	}()
 
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
 	case ".proto":
-		data, err := io.ReadAll(io.LimitReader(reader, 32<<20))
+		data, err := readLimited(reader, maxProtoFileBytes, filename)
 		if err != nil {
-			os.RemoveAll(dest)
 			return SchemaPack{}, err
 		}
-		if err := os.WriteFile(filepath.Join(dest, filepath.Base(filename)), data, 0o644); err != nil {
-			os.RemoveAll(dest)
+		if err := os.WriteFile(filepath.Join(tmpDir, filepath.Base(filename)), data, 0o644); err != nil {
 			return SchemaPack{}, err
 		}
 	case ".zip":
 		tmp, err := os.CreateTemp("", "ditto-schema-*.zip")
 		if err != nil {
-			os.RemoveAll(dest)
 			return SchemaPack{}, err
 		}
 		tmpPath := tmp.Name()
-		if _, err := io.Copy(tmp, io.LimitReader(reader, 128<<20)); err != nil {
+		if _, err := copyLimited(tmp, reader, maxSchemaUploadBytes, filename); err != nil {
 			tmp.Close()
 			os.Remove(tmpPath)
-			os.RemoveAll(dest)
 			return SchemaPack{}, err
 		}
 		if err := tmp.Close(); err != nil {
 			os.Remove(tmpPath)
-			os.RemoveAll(dest)
 			return SchemaPack{}, err
 		}
-		if err := extractZip(tmpPath, dest); err != nil {
+		if err := extractZip(tmpPath, tmpDir); err != nil {
 			os.Remove(tmpPath)
-			os.RemoveAll(dest)
 			return SchemaPack{}, err
 		}
 		os.Remove(tmpPath)
 	default:
-		os.RemoveAll(dest)
 		return SchemaPack{}, fmt.Errorf("upload a .proto file or a .zip schema pack")
 	}
+
+	metadata, err := schemaPackMetadata(tmpDir, baseName)
+	if err != nil {
+		return SchemaPack{}, err
+	}
+	dest := filepath.Join(s.dir, metadata.ID)
+	if _, err := os.Stat(dest); err == nil {
+		return SchemaPack{}, fmt.Errorf("schema pack %q already exists", metadata.ID)
+	} else if !os.IsNotExist(err) {
+		return SchemaPack{}, err
+	}
+	if err := os.Rename(tmpDir, dest); err != nil {
+		return SchemaPack{}, err
+	}
+	cleanupTmp = false
 
 	pack, err := s.RegisterPack(dest)
 	if err != nil {
@@ -249,9 +332,17 @@ func (s *SchemaRegistry) registerPackLocked(packPath string) (SchemaPack, error)
 		return SchemaPack{}, fmt.Errorf("no .proto files found")
 	}
 
+	metadata, err := schemaPackMetadata(packPath, filepath.Base(packPath))
+	if err != nil {
+		return SchemaPack{}, err
+	}
+	if _, exists := s.packs[metadata.ID]; exists {
+		return SchemaPack{}, fmt.Errorf("schema pack id %q is already loaded", metadata.ID)
+	}
+
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
-			ImportPaths: []string{packPath, s.dir},
+			ImportPaths: []string{packPath},
 		}),
 	}
 	files, err := compiler.Compile(context.Background(), protos...)
@@ -259,28 +350,41 @@ func (s *SchemaRegistry) registerPackLocked(packPath string) (SchemaPack, error)
 		return SchemaPack{}, err
 	}
 
-	packID := filepath.Base(packPath)
+	candidateFiles := &protoregistry.Files{}
+	if err := copyFiles(s.files, candidateFiles); err != nil {
+		return SchemaPack{}, err
+	}
+	candidateTypes := copyTypeMap(s.types)
+	candidatePacks := copyPackMap(s.packs)
+
 	pack := SchemaPack{
-		ID:       packID,
-		Name:     packID,
+		ID:       metadata.ID,
+		Name:     metadata.Name,
+		Version:  metadata.Version,
 		Path:     packPath,
 		LoadedAt: time.Now().Format(time.RFC3339),
 		Types:    make([]TypeDescriptor, 0),
 	}
 	for _, file := range files {
-		if err := s.registerFileRecursiveLocked(file); err != nil {
+		if err := registerFileRecursive(candidateFiles, file); err != nil {
 			return SchemaPack{}, err
 		}
 	}
-	s.resolver = dynamicpb.NewTypes(s.files)
 
 	for _, file := range files {
-		collectMessageTypes(file.Messages(), file, packID, &pack.Types, s.types)
+		if err := collectMessageTypes(file.Messages(), file, metadata.ID, &pack.Types, candidateTypes); err != nil {
+			return SchemaPack{}, err
+		}
 	}
 	sort.Slice(pack.Types, func(i, j int) bool {
 		return pack.Types[i].FullName < pack.Types[j].FullName
 	})
-	s.packs[pack.ID] = pack
+	candidatePacks[pack.ID] = pack
+
+	s.files = candidateFiles
+	s.types = candidateTypes
+	s.packs = candidatePacks
+	s.resolver = dynamicpb.NewTypes(s.files)
 	return pack, nil
 }
 
@@ -289,17 +393,17 @@ func (s *SchemaRegistry) resetDescriptorsLocked() {
 	s.resolver = dynamicpb.NewTypes(s.files)
 }
 
-func (s *SchemaRegistry) registerFileRecursiveLocked(file protoreflect.FileDescriptor) error {
-	if _, err := s.files.FindFileByPath(file.Path()); err == nil {
+func registerFileRecursive(files *protoregistry.Files, file protoreflect.FileDescriptor) error {
+	if _, err := files.FindFileByPath(file.Path()); err == nil {
 		return nil
 	}
 	imports := file.Imports()
 	for i := 0; i < imports.Len(); i++ {
-		if err := s.registerFileRecursiveLocked(imports.Get(i)); err != nil {
+		if err := registerFileRecursive(files, imports.Get(i)); err != nil {
 			return err
 		}
 	}
-	return s.files.RegisterFile(file)
+	return files.RegisterFile(file)
 }
 
 func RegisterSchemaRoutes(mux *http.ServeMux, schemas *SchemaRegistry) {
@@ -316,7 +420,8 @@ func RegisterSchemaRoutes(mux *http.ServeMux, schemas *SchemaRegistry) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(schemaPacksResponse{Packs: schemas.Packs()})
 		case http.MethodPost:
-			if err := r.ParseMultipartForm(128 << 20); err != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxSchemaUploadBytes)
+			if err := r.ParseMultipartForm(maxSchemaUploadBytes); err != nil {
 				http.Error(w, "invalid multipart upload: "+err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -339,6 +444,26 @@ func RegisterSchemaRoutes(mux *http.ServeMux, schemas *SchemaRegistry) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/__ditto__/api/schemas/packs/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !isAllowedSocketAPIRequest(r) {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+		id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/__ditto__/api/schemas/packs/"))
+		if id == "" || strings.Contains(id, "/") || strings.Contains(id, string(os.PathSeparator)) {
+			http.NotFound(w, r)
+			return
+		}
+		if err := schemas.DeletePack(id); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("/__ditto__/api/schemas/types", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -351,6 +476,120 @@ func RegisterSchemaRoutes(mux *http.ServeMux, schemas *SchemaRegistry) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(schemaTypesResponse{Types: schemas.Types()})
 	})
+}
+
+type schemaPackMeta struct {
+	ID      string
+	Name    string
+	Version string
+}
+
+func schemaPackMetadataFromManifest(root string) (schemaPackManifest, error) {
+	path := filepath.Join(root, "manifest.json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return schemaPackManifest{}, nil
+	}
+	if err != nil {
+		return schemaPackManifest{}, err
+	}
+	var manifest schemaPackManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return schemaPackManifest{}, fmt.Errorf("invalid manifest.json: %w", err)
+	}
+	return manifest, nil
+}
+
+func schemaPackMetadata(root, fallbackName string) (schemaPackMeta, error) {
+	manifest, err := schemaPackMetadataFromManifest(root)
+	if err != nil {
+		return schemaPackMeta{}, err
+	}
+	contentID, err := contentHashPackID(root)
+	if err != nil {
+		return schemaPackMeta{}, err
+	}
+
+	name := strings.TrimSpace(manifest.Name)
+	if name == "" {
+		name = fallbackName
+	}
+	name = sanitizePackName(name)
+	if name == "" {
+		name = "schema-pack"
+	}
+
+	id := sanitizePackName(manifest.ID)
+	if id == "" {
+		id = fmt.Sprintf("%s-%s", name, contentID[:12])
+	}
+	return schemaPackMeta{ID: id, Name: name, Version: manifest.Version}, nil
+}
+
+func contentHashPackID(root string) (string, error) {
+	protos, err := protoFiles(root)
+	if err != nil {
+		return "", err
+	}
+	if len(protos) == 0 {
+		return "", fmt.Errorf("no .proto files found")
+	}
+	hash := sha256.New()
+	for _, rel := range protos {
+		hash.Write([]byte(rel))
+		hash.Write([]byte{0})
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			return "", err
+		}
+		hash.Write(data)
+		hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func copyFiles(src, dest *protoregistry.Files) error {
+	var err error
+	src.RangeFiles(func(file protoreflect.FileDescriptor) bool {
+		err = registerFileRecursive(dest, file)
+		return err == nil
+	})
+	return err
+}
+
+func copyTypeMap(src map[string]protoreflect.MessageDescriptor) map[string]protoreflect.MessageDescriptor {
+	dest := make(map[string]protoreflect.MessageDescriptor, len(src))
+	for key, value := range src {
+		dest[key] = value
+	}
+	return dest
+}
+
+func copyPackMap(src map[string]SchemaPack) map[string]SchemaPack {
+	dest := make(map[string]SchemaPack, len(src))
+	for key, value := range src {
+		dest[key] = value
+	}
+	return dest
+}
+
+func readLimited(reader io.Reader, limit int64, label string) ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := copyLimited(&buf, reader, limit, label); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func copyLimited(dst io.Writer, src io.Reader, limit int64, label string) (int64, error) {
+	written, err := io.Copy(dst, io.LimitReader(src, limit+1))
+	if err != nil {
+		return written, err
+	}
+	if written > limit {
+		return written, fmt.Errorf("%s exceeds %dMB limit", label, limit/(1<<20))
+	}
+	return written, nil
 }
 
 func protoFiles(root string) ([]string, error) {
@@ -373,10 +612,13 @@ func protoFiles(root string) ([]string, error) {
 	return files, err
 }
 
-func collectMessageTypes(messages protoreflect.MessageDescriptors, file protoreflect.FileDescriptor, packID string, out *[]TypeDescriptor, index map[string]protoreflect.MessageDescriptor) {
+func collectMessageTypes(messages protoreflect.MessageDescriptors, file protoreflect.FileDescriptor, packID string, out *[]TypeDescriptor, index map[string]protoreflect.MessageDescriptor) error {
 	for i := 0; i < messages.Len(); i++ {
 		msg := messages.Get(i)
 		fullName := string(msg.FullName())
+		if _, exists := index[fullName]; exists {
+			return fmt.Errorf("schema type %q is already loaded", fullName)
+		}
 		index[fullName] = msg
 		example, _ := json.MarshalIndent(exampleForMessage(msg, 0), "", "  ")
 		*out = append(*out, TypeDescriptor{
@@ -389,8 +631,11 @@ func collectMessageTypes(messages protoreflect.MessageDescriptors, file protoref
 			JSONSchema:  schemaForMessage(msg, 0),
 			ExampleJSON: example,
 		})
-		collectMessageTypes(msg.Messages(), file, packID, out, index)
+		if err := collectMessageTypes(msg.Messages(), file, packID, out, index); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func fieldInfos(msg protoreflect.MessageDescriptor) []FieldInfo {
@@ -402,9 +647,13 @@ func fieldInfos(msg protoreflect.MessageDescriptor) []FieldInfo {
 			Name:     string(field.Name()),
 			JSONName: field.JSONName(),
 			Type:     field.Kind().String(),
+			Number:   int32(field.Number()),
 			Repeated: field.IsList(),
 			Map:      field.IsMap(),
-			Required: field.Cardinality() == protoreflect.Required,
+			Optional: field.HasPresence() && field.Cardinality() == protoreflect.Optional,
+		}
+		if oneof := field.ContainingOneof(); oneof != nil {
+			info.Oneof = string(oneof.Name())
 		}
 		if field.Message() != nil {
 			info.MessageType = string(field.Message().FullName())
@@ -566,7 +815,7 @@ func extractZip(zipPath, dest string) error {
 		if err != nil {
 			return err
 		}
-		data, readErr := io.ReadAll(io.LimitReader(src, 32<<20))
+		data, readErr := readLimited(src, maxProtoFileBytes, file.Name)
 		closeErr := src.Close()
 		if readErr != nil {
 			return readErr
@@ -598,8 +847,4 @@ func sanitizePackName(name string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
-}
-
-func uniquePackID(name string) string {
-	return fmt.Sprintf("%s-%d", name, time.Now().UnixNano())
 }

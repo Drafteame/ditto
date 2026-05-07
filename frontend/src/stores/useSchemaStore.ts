@@ -9,6 +9,7 @@ interface SchemaStore {
   error: string
   loadSchemas: () => Promise<void>
   uploadPack: (file: File) => Promise<void>
+  deletePack: (id: string) => Promise<void>
 }
 
 export const useSchemaStore = create<SchemaStore>((set) => ({
@@ -32,6 +33,20 @@ export const useSchemaStore = create<SchemaStore>((set) => ({
     set({ loading: true, error: '' })
     try {
       await api.uploadSchemaPack(file)
+      const [packs, types] = await Promise.all([
+        api.fetchSchemaPacks(),
+        api.fetchSchemaTypes(),
+      ])
+      set({ packs: packs.packs, types: types.types, loading: false })
+    } catch (err) {
+      set({ loading: false, error: (err as Error).message })
+      throw err
+    }
+  },
+  deletePack: async (id) => {
+    set({ loading: true, error: '' })
+    try {
+      await api.deleteSchemaPack(id)
       const [packs, types] = await Promise.all([
         api.fetchSchemaPacks(),
         api.fetchSchemaTypes(),

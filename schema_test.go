@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -52,7 +53,7 @@ message ScoreEvent {
 		t.Fatalf("Encode() metadata = %#v", encoded)
 	}
 
-	desc := reg.types["ditto.test.ScoreEvent"]
+	desc := reg.Descriptor("ditto.test.ScoreEvent")
 	msg := dynamicpb.NewMessage(desc)
 	if err := proto.Unmarshal(encoded.Data, msg); err != nil {
 		t.Fatalf("encoded payload is not valid protobuf: %v", err)
@@ -62,6 +63,56 @@ message ScoreEvent {
 	}
 	if got := msg.Get(desc.Fields().ByName("home_score")).Int(); got != 2 {
 		t.Fatalf("home_score = %d, want 2", got)
+	}
+
+	decoded, err := reg.Decode("ditto.test.ScoreEvent", encoded.Data)
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if !strings.Contains(string(decoded), `"matchId":"abc"`) {
+		t.Fatalf("Decode() = %s, want matchId", decoded)
+	}
+}
+
+func TestSchemaRegistrySkipsBrokenPackOnLoad(t *testing.T) {
+	root := t.TempDir()
+	writeProto(t, filepath.Join(root, "good"), "good.proto", `syntax = "proto3"; package ditto.good; message Event { string id = 1; }`)
+	writeProto(t, filepath.Join(root, "bad"), "bad.proto", `syntax = "proto3"; package ditto.bad; message Broken { string id = 1;`)
+
+	reg, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+	types := reg.Types()
+	if len(types) != 1 || types[0].FullName != "ditto.good.Event" {
+		t.Fatalf("Types() = %#v, want only good pack", types)
+	}
+}
+
+func TestSchemaRegistryFailedPackDoesNotPoisonRegistry(t *testing.T) {
+	root := t.TempDir()
+	first := writeProto(t, filepath.Join(root, "first"), "event.proto", `syntax = "proto3"; package ditto.same; message Event { string id = 1; }`)
+	second := writeProto(t, filepath.Join(root, "second"), "event.proto", `syntax = "proto3"; package ditto.same; message Event { int32 id = 1; }`)
+
+	reg, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+	before := reg.Types()
+	if len(before) != 1 {
+		t.Fatalf("Types() len = %d, want 1", len(before))
+	}
+
+	if _, err := reg.RegisterPack(second); err == nil {
+		t.Fatalf("RegisterPack(second) unexpectedly succeeded")
+	}
+	after := reg.Types()
+	if len(after) != 1 || after[0].FullName != before[0].FullName {
+		t.Fatalf("Types() after failed register = %#v, want unchanged %#v", after, before)
+	}
+
+	if _, err := reg.RegisterPack(first); err == nil {
+		t.Fatalf("RegisterPack(first) unexpectedly succeeded for duplicate pack id")
 	}
 }
 
@@ -94,4 +145,15 @@ func TestAppSyncWrapsBinaryPayloadAsBase64(t *testing.T) {
 	if env.Payload.Data.ContentType != "application/x-protobuf" || env.Payload.Data.TypeName != "ditto.test.ScoreEvent" {
 		t.Fatalf("metadata = %#v", env.Payload.Data)
 	}
+}
+
+func writeProto(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

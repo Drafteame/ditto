@@ -106,9 +106,11 @@ export interface SchemaField {
   name: string
   json_name: string
   type: string
+  number: number
   repeated: boolean
   map: boolean
-  required: boolean
+  optional: boolean
+  oneof?: string
   message_type?: string
   enum_type?: string
 }

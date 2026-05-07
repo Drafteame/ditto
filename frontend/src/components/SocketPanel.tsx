@@ -17,8 +17,11 @@ interface SocketPanelProps {
   onRefresh: () => void
   onRefreshSchemas: () => void
   onUploadSchemaPack: (file: File) => Promise<void>
+  onDeleteSchemaPack: (id: string) => Promise<void>
   showToast: (message: string, kind?: 'warn') => void
 }
+
+type SocketAdapter = '' | 'raw' | 'appsync'
 
 const DEFAULT_PAYLOAD = `{
   "type": "example.event",
@@ -38,6 +41,7 @@ export function SocketPanel({
   onRefresh,
   onRefreshSchemas,
   onUploadSchemaPack,
+  onDeleteSchemaPack,
   showToast,
 }: SocketPanelProps) {
   const channels = useMemo(() => {
@@ -47,7 +51,7 @@ export function SocketPanel({
   }, [clients])
 
   const [channel, setChannel] = useState('')
-  const [adapter, setAdapter] = useState('')
+  const [adapter, setAdapter] = useState<SocketAdapter>('')
   const [typeName, setTypeName] = useState('')
   const [payload, setPayload] = useState(DEFAULT_PAYLOAD)
   const [dispatching, setDispatching] = useState(false)
@@ -87,7 +91,7 @@ export function SocketPanel({
       const result = await api.dispatchSocketEvent({
         channel: selectedChannel,
         payload: parsed,
-        adapter: adapter as 'raw' | 'appsync' | '',
+        adapter,
         type_name: typeName || undefined,
       })
       const dropped = result.dropped?.length ?? 0
@@ -112,15 +116,18 @@ export function SocketPanel({
   }
 
   function insertField(fieldName: string) {
-    const line = `  "${fieldName}": `
     setPayload(current => {
-      const trimmed = current.trim()
-      if (!trimmed || trimmed === '{}') {
-        return `{\n${line}null\n}`
+      try {
+        const parsed = JSON.parse(current || '{}')
+        if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
+          setJsonError('Payload must be a JSON object to insert a field')
+          return current
+        }
+        return JSON.stringify({ ...parsed, [fieldName]: null }, null, 2)
+      } catch (err) {
+        setJsonError(`Invalid JSON: ${(err as Error).message}`)
+        return current
       }
-      const withoutClose = current.replace(/\s*}\s*$/, '')
-      const needsComma = /:\s*[^,\s]\s*$/.test(withoutClose)
-      return `${withoutClose}${needsComma ? ',' : ''}\n${line}null\n}`
     })
   }
 
@@ -174,7 +181,7 @@ export function SocketPanel({
             </label>
             <label>
               <span>Adapter</span>
-              <select className="select" value={adapter} onChange={e => setAdapter(e.target.value)}>
+              <select className="select" value={adapter} onChange={e => setAdapter(e.target.value as SocketAdapter)}>
                 <option value="">Client default</option>
                 <option value="raw">Raw</option>
                 <option value="appsync">AppSync</option>
@@ -261,6 +268,7 @@ export function SocketPanel({
           onClose={() => setSchemaModalOpen(false)}
           onRefresh={onRefreshSchemas}
           onUpload={onUploadSchemaPack}
+          onDelete={onDeleteSchemaPack}
           showToast={showToast}
         />
       )}
@@ -297,6 +305,7 @@ function SchemaPacksModal({
   onClose,
   onRefresh,
   onUpload,
+  onDelete,
   showToast,
 }: {
   packs: SchemaPack[]
@@ -306,6 +315,7 @@ function SchemaPacksModal({
   onClose: () => void
   onRefresh: () => void
   onUpload: (file: File) => Promise<void>
+  onDelete: (id: string) => Promise<void>
   showToast: (message: string, kind?: 'warn') => void
 }) {
   const [uploading, setUploading] = useState(false)
@@ -322,6 +332,15 @@ function SchemaPacksModal({
       showToast(`Schema upload failed: ${(err as Error).message}`, 'warn')
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function handleDelete(pack: SchemaPack) {
+    try {
+      await onDelete(pack.id)
+      showToast(`Deleted schema pack ${pack.name}`)
+    } catch (err) {
+      showToast(`Delete failed: ${(err as Error).message}`, 'warn')
     }
   }
 
@@ -356,7 +375,13 @@ function SchemaPacksModal({
               ) : (
                 packs.map(pack => (
                   <div key={pack.id} className="schema-pack-row">
-                    <div className="schema-pack-name">{pack.name}</div>
+                    <div className="schema-pack-main">
+                      <div className="schema-pack-name">{pack.name}</div>
+                      <button type="button" className="btn icon ghost" onClick={() => handleDelete(pack)} aria-label={`Delete ${pack.name}`}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <div className="schema-pack-id" title={pack.id}>{pack.id}</div>
                     <div className="schema-pack-path" title={pack.path}>{pack.path}</div>
                     <div className="schema-pack-count">{pack.types.length} types</div>
                   </div>

@@ -106,6 +106,7 @@ export default function App() {
     schemasError,
     loadSchemas,
     uploadSchemaPack,
+    deleteSchemaPack,
   } = useSchemaStore(useShallow(state => ({
     schemaPacks: state.packs,
     schemaTypes: state.types,
@@ -113,6 +114,7 @@ export default function App() {
     schemasError: state.error,
     loadSchemas: state.loadSchemas,
     uploadSchemaPack: state.uploadPack,
+    deleteSchemaPack: state.deletePack,
   })))
   const { toasts, showToast } = useToast()
 
@@ -313,6 +315,7 @@ export default function App() {
               onRefresh={loadSocketClients}
               onRefreshSchemas={loadSchemas}
               onUploadSchemaPack={uploadSchemaPack}
+              onDeleteSchemaPack={deleteSchemaPack}
               showToast={showToast}
             />
           )}
