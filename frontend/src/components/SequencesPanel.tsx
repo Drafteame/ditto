@@ -119,7 +119,12 @@ export function SequencesPanel({
       await onDelete(sequence.id)
       showToast('Sequence deleted')
     } catch (err) {
-      showToast(`Delete failed: ${(err as Error).message}`, 'warn')
+      const message = (err as Error).message
+      if (message.toLowerCase().includes('active player')) {
+        showToast('Delete failed: stop the sequence player first.', 'warn')
+      } else {
+        showToast(`Delete failed: ${message}`, 'warn')
+      }
     }
   }
 

@@ -387,7 +387,7 @@ func newSequenceRunner(player *SequencePlayer, seq EventSequence, opts PlayOptio
 
 func (r *sequenceRunner) start() {
 	go r.loop()
-	r.publish("state", "", 0, "", "")
+	r.publishState("state")
 }
 
 func (r *sequenceRunner) State() PlayerState {
@@ -526,7 +526,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 				s.Speed = opts.Speed
 			}
 		})
-		r.publish("state", "", 0, "", "")
+		r.publishState("state")
 		reply(state, nil)
 		return nextRemaining > 0, nextRemaining, false
 	case playerCommandPause:
@@ -547,7 +547,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 				s.Status = PlayerPaused
 			}
 		})
-		r.publish("state", "", 0, "", "")
+		r.publishState("state")
 		reply(state, nil)
 		return false, remaining, false
 	case playerCommandStop:
@@ -562,7 +562,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 		state := r.setState(func(s *PlayerState) {
 			s.Status = PlayerStopped
 		})
-		r.publish("stopped", "", 0, "", "")
+		r.publishState("stopped")
 		reply(state, nil)
 		return false, 0, false
 	case playerCommandSeek:
@@ -574,7 +574,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 			s.CurrentStep = step
 			s.LastError = ""
 		})
-		r.publish("state", "", 0, "", "")
+		r.publishState("state")
 		reply(state, nil)
 		return false, 0, false
 	case playerCommandSpeed:
@@ -603,7 +603,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 		state := r.setState(func(s *PlayerState) {
 			s.Speed = cmd.speed
 		})
-		r.publish("state", "", 0, "", "")
+		r.publishState("state")
 		reply(state, nil)
 		return waiting && nextRemaining > 0, nextRemaining, false
 	case playerCommandShutdown:
@@ -616,7 +616,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 			}
 		})
 		if state.Status == PlayerStopped {
-			r.publish("stopped", "", 0, "", "")
+			r.publishState("stopped")
 		}
 		reply(state, nil)
 		return false, 0, true
@@ -653,7 +653,7 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 		s.CurrentStep = index + 1
 		s.LastDispatchSummary = summary
 	})
-	r.publish("step", step.ID, index, summary, "")
+	r.publishStep(step.ID, index, summary)
 	_ = next
 }
 
@@ -686,13 +686,7 @@ func (r *sequenceRunner) fail(err error) {
 		s.Status = PlayerError
 		s.LastError = err.Error()
 	})
-	r.player.broadcaster.Publish(PlayerEvent{
-		Type:       "error",
-		State:      state,
-		SequenceID: r.seq.ID,
-		Error:      err.Error(),
-		At:         time.Now().UTC(),
-	})
+	r.publishError(state, err)
 }
 
 func (r *sequenceRunner) complete() {
@@ -702,33 +696,54 @@ func (r *sequenceRunner) complete() {
 			s.CurrentStep = 0
 			s.Status = PlayerPlaying
 		})
-		r.player.broadcaster.Publish(PlayerEvent{Type: "looped", State: state, SequenceID: r.seq.ID, At: time.Now().UTC()})
+		r.publishStateSnapshot("looped", state)
 	case "reset":
 		state := r.setState(func(s *PlayerState) {
 			s.CurrentStep = 0
 			s.Status = PlayerCompleted
 		})
-		r.player.broadcaster.Publish(PlayerEvent{Type: "completed", State: state, SequenceID: r.seq.ID, At: time.Now().UTC()})
+		r.publishStateSnapshot("completed", state)
 	default:
 		state := r.setState(func(s *PlayerState) {
 			s.CurrentStep = maxInt(0, len(r.seq.Steps)-1)
 			s.Status = PlayerCompleted
 		})
-		r.player.broadcaster.Publish(PlayerEvent{Type: "completed", State: state, SequenceID: r.seq.ID, At: time.Now().UTC()})
+		r.publishStateSnapshot("completed", state)
 	}
 }
 
-func (r *sequenceRunner) publish(kind string, stepID string, stepIndex int, summary string, message string) {
-	state := r.State()
+func (r *sequenceRunner) publishState(kind string) {
+	r.publishStateSnapshot(kind, r.State())
+}
+
+func (r *sequenceRunner) publishStateSnapshot(kind string, state PlayerState) {
 	r.player.broadcaster.Publish(PlayerEvent{
-		Type:            kind,
-		State:           state,
+		Type:       kind,
+		State:      state,
+		SequenceID: r.seq.ID,
+		At:         time.Now().UTC(),
+	})
+}
+
+func (r *sequenceRunner) publishStep(stepID string, stepIndex int, summary string) {
+	r.player.broadcaster.Publish(PlayerEvent{
+		Type:            "step",
+		State:           r.State(),
 		SequenceID:      r.seq.ID,
 		StepID:          stepID,
 		StepIndex:       stepIndex,
 		DispatchSummary: summary,
-		Error:           message,
 		At:              time.Now().UTC(),
+	})
+}
+
+func (r *sequenceRunner) publishError(state PlayerState, err error) {
+	r.player.broadcaster.Publish(PlayerEvent{
+		Type:       "error",
+		State:      state,
+		SequenceID: r.seq.ID,
+		Error:      err.Error(),
+		At:         time.Now().UTC(),
 	})
 }
 

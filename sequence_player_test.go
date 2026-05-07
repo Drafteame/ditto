@@ -1,11 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"nhooyr.io/websocket"
 )
 
 func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
@@ -286,7 +294,7 @@ func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	done := make(chan error, 1)
 	start := time.Now()
@@ -386,6 +394,304 @@ func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 	waitForPlayerEvent(t, ch, "step", 200*time.Millisecond)
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
 		t.Fatalf("paused remaining was not scaled, elapsed %s", elapsed)
+	}
+}
+
+func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Wait Speed",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 500, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster)
+	defer player.Shutdown(t.Context())
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	start := time.Now()
+	if _, err := player.SetSpeed(seq.ID, 10); err != nil {
+		t.Fatal(err)
+	}
+	waitForPlayerEvent(t, ch, "step", 200*time.Millisecond)
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("wait remaining was not scaled, elapsed %s", elapsed)
+	}
+}
+
+func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl, err := templates.Create(EventTemplate{
+		Name:    "Gone",
+		Channel: "tickets",
+		Payload: json.RawMessage(`{"ok":true}`),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Template Error",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 50, TemplateRef: tmpl.ID},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster)
+	defer player.Shutdown(t.Context())
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := templates.Delete(tmpl.ID); err != nil {
+		t.Fatal(err)
+	}
+	event := waitForPlayerEvent(t, ch, "error", 500*time.Millisecond)
+	if !strings.Contains(event.Error, "event template not found") {
+		t.Fatalf("unexpected error event: %#v", event)
+	}
+}
+
+func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	okSeq, err := reg.Create(EventSequence{
+		Name:  "Broadcast OK",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"ok":true}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errSeq, err := reg.Create(EventSequence{
+		Name:  "Broadcast Error",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"bad":"{{missing}}"}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster)
+	defer player.Shutdown(t.Context())
+
+	if _, err := player.Play(okSeq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForPlayerEvent(t, ch, "state", 500*time.Millisecond)
+	waitForPlayerEvent(t, ch, "step", 500*time.Millisecond)
+	waitForPlayerEvent(t, ch, "completed", 500*time.Millisecond)
+
+	longSeq, err := reg.Create(EventSequence{
+		Name:  "Broadcast Stopped",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"ok":true}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := player.Play(longSeq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := player.Stop(longSeq.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForPlayerEvent(t, ch, "stopped", 500*time.Millisecond)
+
+	if _, err := player.Play(errSeq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForPlayerEvent(t, ch, "error", 500*time.Millisecond)
+}
+
+func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Concurrent",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"ok":true}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), NewPlayerBroadcaster())
+	defer player.Shutdown(t.Context())
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if states := player.States(); len(states) != 1 || states[0].Status != PlayerPlaying {
+		t.Fatalf("expected one playing runner, got %#v", states)
+	}
+}
+
+func TestSequencePlayerShutdownPublishesStoppedAndReleasesRunner(t *testing.T) {
+	before := runtime.NumGoroutine()
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Shutdown",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"ok":true}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster)
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := player.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	waitForPlayerEvent(t, ch, "stopped", 500*time.Millisecond)
+	time.Sleep(25 * time.Millisecond)
+	if after := runtime.NumGoroutine(); after > before+8 {
+		t.Fatalf("goroutines grew unexpectedly: before=%d after=%d", before, after)
+	}
+}
+
+func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "WS E2E",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 0, Channel: "/scores", Payload: json.RawMessage(`{"score":1}`)},
+			{DelayMs: 0, Channel: "/scores", Payload: json.RawMessage(`{"score":2}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := NewSocketHub(NewEventBus(), false)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", hub.ServeHTTP)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/?adapter=raw", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"subscribe","channel":"/scores"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		if clients := hub.registry.Clients("/scores"); len(clients) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	player := NewSequencePlayer(reg, templates, nil, hub, NewPlayerBroadcaster())
+	defer player.Shutdown(t.Context())
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, first, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(first), `"score":1`) || !strings.Contains(string(second), `"score":2`) {
+		t.Fatalf("unexpected sequence payloads: %s / %s", first, second)
 	}
 }
 
