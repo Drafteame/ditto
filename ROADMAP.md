@@ -119,7 +119,7 @@ Return different responses on subsequent calls to the same endpoint. Essential f
 
 The unit that ties everything together: a single named bundle that atomically activates **HTTP mocks, WebSocket channel modes, WebSocket sequences, and HTTP→Socket triggers**. One toggle, one consistent stage for the app.
 
-Implementation lands as M7 of the WebSocket plan — see [docs/WEBSOCKET_MOCKING_PLAN.md](docs/WEBSOCKET_MOCKING_PLAN.md). Pre-requisites: v1.5 (HTTP sequences) and the WS milestones up to M4 (already done) plus M5 (per-channel modes).
+Implementation lands as M7 of the WebSocket plan — see [WEBSOCKET_MOCKING_PLAN.md](WEBSOCKET_MOCKING_PLAN.md). Pre-requisites: v1.5 (HTTP sequences) and the WS milestones up to M4 (already done) plus M5 (per-channel modes).
 
 A scenario can carry any combination of:
 

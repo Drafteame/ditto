@@ -219,11 +219,16 @@ Implementation notes:
 - Per-channel modes (config persisted): `mock` (default), `live`, `record`, `mixed` (live + permits additional injection).
 - `Recorder`: when a channel is in `record` mode, persist each incoming event with relative timestamp to `recordings/{name}/{channel}.jsonl`.
 - Decode to JSON using schema registry if a descriptor exists; otherwise store raw bytes + base64.
+- **Throttling for high-volume traffic.** Until M4 the user was the rate limiter (manual dispatch, sequences). Live mode and recording introduce uncontrolled upstream rates, so this milestone owns the throttling story:
+  - **UI log coalescing.** SOCKET frames in the live event log coalesce per channel when they exceed a threshold (default 20/sec) into a single `LogEvent` summarising the burst (e.g. `"42 frames in 1s"`). Individual frames remain inspectable on demand from the recording or a per-channel detail view.
+  - **Visible downstream backpressure.** When a connected client's `send` queue overflows in `enqueue` (`socket.go`), drops surface in the Sockets tab as a per-client counter instead of being silently discarded.
+  - **Recording rate cap per channel.** Configurable max events/sec (default off, opt-in per channel). Excess events are dropped with a counter persisted alongside the recording so a pathological channel cannot silently fill disk during a long QA session.
 - Frontend:
   - In the channel view: 4-mode selector.
   - "Recordings" view: list of recordings, metadata (duration, # events, channels involved), stop button if active.
+  - Throttling indicators: coalesced-frames badge in the log, dropped-frames counter on each client row.
 
-**Done when:** point Ditto at a real backend, configure target channels in `record` mode, exercise the app, stop recording. A navigable recording exists on disk.
+**Done when:** point Ditto at a real backend, configure target channels in `record` mode, exercise the app, stop recording. A navigable recording exists on disk. Under sustained >100 frames/sec on a channel, the dashboard remains responsive (coalesced log) and any dropped downstream frames are visible to the user, not silent.
 
 ---
 
@@ -265,7 +270,7 @@ Implementation notes:
 
 - Activation: disables conflicting mocks/channels, enables the scenario's, arms triggers.
 - HTTP→Socket triggers: when an HTTP request matches, Ditto fires a sequence. This solves the common pattern "the backend emits a socket event when it receives request X".
-- ADR: [Fire And Forget For HTTP Triggers](adr/0002-fire-and-forget-for-http-triggers.md).
+- ADR: [Fire And Forget For HTTP Triggers](docs/adr/0002-fire-and-forget-for-http-triggers.md).
 - Frontend: scenario cards in the sidebar (aligned with ROADMAP v1.6 spec), active-scenario visual indicator, "Stop scenario" button.
 
 **Done when:** activate a scenario → relevant HTTP mocks load, relevant channels switch to `mock` mode, the sequence is armed. Exercise the app: trigger fires the sequence on the matching HTTP call. Everything choreographed.
@@ -286,7 +291,7 @@ This milestone delivers **"simulate a full session"** without any session-specif
   - Individual mock / sequence
 - Import with conflict resolution UI: per conflicting item, show a `git`-style diff + skip / overwrite / rename / merge options.
 - Persist manifest format with `schemaVersion` for future compatibility.
-- ADR: [Bundle ID Stability Policy](adr/0003-bundle-id-stability-policy.md).
+- ADR: [Bundle ID Stability Policy](docs/adr/0003-bundle-id-stability-policy.md).
 
 **Done when:** export a scenario as `match-day-v1.dittopack`, share with a teammate, they import with a click, see conflicts (if any), resolve, activate the scenario, it works identically.
 
@@ -297,7 +302,7 @@ This milestone delivers **"simulate a full session"** without any session-specif
 - **Tests:** every milestone adds Go unit tests for its slice (protocol adapter, registry, sequence player engine). E2E: a Go-based test WS client that masquerades as the app and verifies events. Defer client-side integration testing until M5+.
 - **Documentation:** every milestone updates ROADMAP.md and adds a doc in `docs/` describing the format of any new artifacts (templates, sequences, recordings, scenarios). These docs are part of DoD.
 - **Backward compatibility:** Protobuf schemas evolve. Recordings and sequences depending on them must tolerate added fields (Protobuf's forward compat helps) and warn when a referenced field disappears. Schema packs are versioned (`pack-v1`, `pack-v2`); allow coexistence.
-- **Channel modes:** see [Channel Modes Via Dispatch Rendered](adr/0001-channel-modes-via-dispatch-rendered.md).
+- **Channel modes:** see [Channel Modes Via Dispatch Rendered](docs/adr/0001-channel-modes-via-dispatch-rendered.md).
 - **Performance:** the `SequencePlayer` should run dozens of concurrent sequences without saturation. Benchmark from M4.
 
 ---

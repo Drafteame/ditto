@@ -63,7 +63,7 @@ That's enough to send arbitrary events to a connected app. The features below ar
 - **Reusable events** — save a composed event as a template with `{{vars}}` substitution. See [docs/EVENT_TEMPLATES.md](docs/EVENT_TEMPLATES.md).
 - **Timed sequences** — chain templates into a timeline with delays and play/pause/scrub/speed transport controls. See [docs/EVENT_SEQUENCES.md](docs/EVENT_SEQUENCES.md).
 
-Full plan and milestone-by-milestone breakdown: [docs/WEBSOCKET_MOCKING_PLAN.md](docs/WEBSOCKET_MOCKING_PLAN.md).
+Full plan and milestone-by-milestone breakdown: [WEBSOCKET_MOCKING_PLAN.md](WEBSOCKET_MOCKING_PLAN.md).
 
 ## Headless mode
 
