@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -21,7 +22,11 @@ import (
 //go:embed defaults/adapter_profiles/*.json
 var defaultAdapterProfilesFS embed.FS
 
-const adapterProfilesDirName = "adapter_profiles"
+const (
+	adapterProfilesDirName          = "adapter_profiles"
+	adapterProfilesSeededFile       = ".seeded"
+	maxAdapterProfileBytes    int64 = 1 << 20
+)
 
 var adapterProfileNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 
@@ -69,24 +74,24 @@ var adapterProfileRegistry = struct {
 
 func ValidateAdapterProfile(profile AdapterProfile) error {
 	if profile.ManifestVersion != 1 {
-		return fmt.Errorf("manifest_version must be 1")
+		return fmt.Errorf("manifest_version must be 1, got %d", profile.ManifestVersion)
 	}
 	name := normalizeAdapter(profile.Name)
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
 	if name != profile.Name || !adapterProfileNamePattern.MatchString(name) {
-		return fmt.Errorf("name must match [a-z0-9-]+")
+		return fmt.Errorf("name %q must match [a-z0-9-]+", profile.Name)
 	}
 	if _, ok := builtinAdapterNames[name]; ok {
 		return fmt.Errorf("name %q collides with a built-in adapter", name)
 	}
 	base := normalizeAdapter(profile.BaseAdapter)
 	if _, ok := builtinAdapterNames[base]; !ok {
-		return fmt.Errorf("base_adapter must be one of raw, appsync")
+		return fmt.Errorf("base_adapter must be one of raw, appsync, got %q", profile.BaseAdapter)
 	}
 	if profile.BaseAdapter != base {
-		return fmt.Errorf("base_adapter must be lowercase")
+		return fmt.Errorf("base_adapter must be lowercase, got %q", profile.BaseAdapter)
 	}
 	if strings.TrimSpace(profile.Envelope.Outer) == "" {
 		return fmt.Errorf("envelope.outer is required")
@@ -134,12 +139,16 @@ func (a ProfileAdapter) Subprotocols() []string {
 	return append([]string(nil), a.profile.Subprotocols...)
 }
 
-func (a ProfileAdapter) WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error) {
-	innerTemplate := a.profile.Envelope.InnerJSON
-	innerVars, err := a.innerJSONVars(payload)
+func (a ProfileAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
+	var innerTemplate string
+	var innerVars map[string]adapterTemplateValue
+	var err error
 	if payload.Kind == websocket.MessageBinary {
 		innerTemplate = a.profile.Envelope.InnerBinary
 		innerVars, err = a.innerBinaryVars(payload)
+	} else {
+		innerTemplate = a.profile.Envelope.InnerJSON
+		innerVars, err = a.innerJSONVars(payload)
 	}
 	if err != nil {
 		return EncodedServerMessage{}, err
@@ -154,10 +163,10 @@ func (a ProfileAdapter) WrapData(payload EncodedPayload, subID string) (EncodedS
 		return EncodedServerMessage{}, err
 	}
 	outerVars := map[string]adapterTemplateValue{
-		"sub_id":            {value: subID},
-		"inner_string":      {value: string(innerString), raw: true},
-		"inner_json":        {value: string(inner), raw: true},
-		"inner_json_string": {value: string(inner)},
+		"sub_id":       {value: subID},
+		"channel":      {value: channel},
+		"inner_object": {value: string(inner), raw: true},
+		"inner_string": {value: string(innerString), raw: true},
 	}
 	outer, err := renderAdapterJSONTemplate(a.profile.Envelope.Outer, outerVars)
 	if err != nil {
@@ -270,6 +279,74 @@ func SeedDefaultAdapterProfiles(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	seeded, err := readSeededAdapterProfiles(dir)
+	if err != nil {
+		return err
+	}
+	if len(seeded) == 0 {
+		hasProfiles, err := hasAdapterProfileFiles(dir)
+		if err != nil {
+			return err
+		}
+		if hasProfiles {
+			if err := markEmbeddedAdapterProfilesSeeded(dir, seeded); err != nil {
+				return err
+			}
+			return writeSeededAdapterProfiles(dir, seeded)
+		}
+	}
+	changed := false
+	if err := fs.WalkDir(defaultAdapterProfilesFS, "defaults/adapter_profiles", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			return nil
+		}
+		if seeded[entry.Name()] {
+			return nil
+		}
+		target := filepath.Join(dir, entry.Name())
+		if _, err := os.Stat(target); err == nil {
+			seeded[entry.Name()] = true
+			changed = true
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		data, err := readEmbeddedAdapterProfile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			return err
+		}
+		seeded[entry.Name()] = true
+		changed = true
+		return nil
+	}); err != nil {
+		return err
+	}
+	if changed {
+		return writeSeededAdapterProfiles(dir, seeded)
+	}
+	return nil
+}
+
+func hasAdapterProfileFiles(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func markEmbeddedAdapterProfilesSeeded(dir string, seeded map[string]bool) error {
 	return fs.WalkDir(defaultAdapterProfilesFS, "defaults/adapter_profiles", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -277,18 +354,65 @@ func SeedDefaultAdapterProfiles(dir string) error {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			return nil
 		}
-		target := filepath.Join(dir, entry.Name())
-		if _, err := os.Stat(target); err == nil {
-			return nil
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		data, err := defaultAdapterProfilesFS.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0o644)
+		seeded[entry.Name()] = true
+		return nil
 	})
+}
+
+func readSeededAdapterProfiles(dir string) (map[string]bool, error) {
+	seeded := map[string]bool{}
+	data, err := os.ReadFile(filepath.Join(dir, adapterProfilesSeededFile))
+	if os.IsNotExist(err) {
+		return seeded, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		name := strings.TrimSpace(line)
+		if name != "" {
+			seeded[name] = true
+		}
+	}
+	return seeded, nil
+}
+
+func writeSeededAdapterProfiles(dir string, seeded map[string]bool) error {
+	names := make([]string, 0, len(seeded))
+	for name := range seeded {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return os.WriteFile(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
+}
+
+func readEmbeddedAdapterProfile(path string) ([]byte, error) {
+	file, err := defaultAdapterProfilesFS.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readLimitedAdapterProfile(file)
+}
+
+func readLimitedAdapterProfile(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxAdapterProfileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxAdapterProfileBytes {
+		return nil, fmt.Errorf("adapter profile exceeds 1 MB")
+	}
+	return data, nil
+}
+
+func readAdapterProfileFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readLimitedAdapterProfile(file)
 }
 
 func LoadAdapterProfiles(dir string) error {
@@ -321,7 +445,7 @@ func LoadAdapterProfiles(dir string) error {
 }
 
 func readAdapterProfile(path string) (AdapterProfile, error) {
-	data, err := os.ReadFile(path)
+	data, err := readAdapterProfileFile(path)
 	if err != nil {
 		return AdapterProfile{}, err
 	}

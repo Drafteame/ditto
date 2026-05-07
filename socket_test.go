@@ -590,7 +590,7 @@ func (a *countingAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload
 	return EncodedPayload{Data: append([]byte(nil), payload...), Kind: websocket.MessageText}, nil
 }
 
-func (a *countingAdapter) WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error) {
+func (a *countingAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
 	return textMessage([]byte(fmt.Sprintf(`{"id":%q,"data":%s}`, subID, payload.Data))), nil
 }
 
