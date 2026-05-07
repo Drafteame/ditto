@@ -1,6 +1,9 @@
 import type {
   Mock,
   MocksResponse,
+  SchemaPacksResponse,
+  SchemaPack,
+  SchemaTypesResponse,
   SocketClientsResponse,
   SocketDispatchRequest,
   SocketDispatchResult,
@@ -133,6 +136,38 @@ export async function dispatchSocketEvent(req: SocketDispatchRequest): Promise<S
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchSchemaPacks(): Promise<SchemaPacksResponse> {
+  const res = await fetch(`${API_BASE}/schemas/packs`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchSchemaTypes(): Promise<SchemaTypesResponse> {
+  const res = await fetch(`${API_BASE}/schemas/types`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function uploadSchemaPack(file: File): Promise<SchemaPack> {
+  const body = new FormData()
+  body.append('pack', file)
+  const res = await fetch(`${API_BASE}/schemas/packs`, {
+    method: 'POST',
+    body,
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')

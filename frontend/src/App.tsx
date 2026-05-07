@@ -7,6 +7,7 @@ import * as api from './api'
 import { useAppUiStore } from './stores/useAppUiStore'
 import { useLogStore } from './stores/useLogStore'
 import { useMockStore } from './stores/useMockStore'
+import { useSchemaStore } from './stores/useSchemaStore'
 import { useSocketStore } from './stores/useSocketStore'
 import { Header } from './components/Header'
 import { UpdateBanner } from './components/UpdateBanner'
@@ -98,6 +99,21 @@ export default function App() {
     socketClientsError: state.error,
     loadSocketClients: state.loadClients,
   })))
+  const {
+    schemaPacks,
+    schemaTypes,
+    schemasLoading,
+    schemasError,
+    loadSchemas,
+    uploadSchemaPack,
+  } = useSchemaStore(useShallow(state => ({
+    schemaPacks: state.packs,
+    schemaTypes: state.types,
+    schemasLoading: state.loading,
+    schemasError: state.error,
+    loadSchemas: state.loadSchemas,
+    uploadSchemaPack: state.uploadPack,
+  })))
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
@@ -126,21 +142,24 @@ export default function App() {
       setConnected(true)
       loadMocks()
       loadSocketClients()
-    }, [loadMocks, loadSocketClients, setConnected]),
+      loadSchemas()
+    }, [loadMocks, loadSchemas, loadSocketClients, setConnected]),
     useCallback(() => setConnected(false), [setConnected]),
     useCallback(() => {
       loadMocks()
       loadSocketClients()
-    }, [loadMocks, loadSocketClients]),
+      loadSchemas()
+    }, [loadMocks, loadSchemas, loadSocketClients]),
   )
 
   useEffect(() => {
     loadMocks()
     loadSocketClients()
+    loadSchemas()
     api.fetchUpdateCheck().then(data => {
       if (data.available) setUpdateInfo(data)
     }).catch(() => {})
-  }, [loadMocks, loadSocketClients, setUpdateInfo])
+  }, [loadMocks, loadSchemas, loadSocketClients, setUpdateInfo])
 
   useEffect(() => {
     return () => {
@@ -285,9 +304,15 @@ export default function App() {
               clients={connectedClients}
               entries={logEntries}
               serverInfo={serverInfo}
+              schemaPacks={schemaPacks}
+              schemaTypes={schemaTypes}
+              schemasLoading={schemasLoading}
+              schemasError={schemasError}
               loading={socketClientsLoading}
               error={socketClientsError}
               onRefresh={loadSocketClients}
+              onRefreshSchemas={loadSchemas}
+              onUploadSchemaPack={uploadSchemaPack}
               showToast={showToast}
             />
           )}

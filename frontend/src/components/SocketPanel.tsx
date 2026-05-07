@@ -1,15 +1,22 @@
 import { useMemo, useState } from 'react'
-import type { LogEntry, ServerInfo, SocketClient } from '../types'
+import type { ChangeEvent } from 'react'
+import type { LogEntry, SchemaPack, SchemaTypeDescriptor, ServerInfo, SocketClient } from '../types'
 import * as api from '../api'
-import { Braces, Radio, Refresh, Send } from './icons'
+import { Braces, Download, Radio, Refresh, Send, X } from './icons'
 
 interface SocketPanelProps {
   clients: SocketClient[]
   entries: LogEntry[]
   serverInfo: ServerInfo | null
+  schemaPacks: SchemaPack[]
+  schemaTypes: SchemaTypeDescriptor[]
+  schemasLoading: boolean
+  schemasError: string
   loading: boolean
   error: string
   onRefresh: () => void
+  onRefreshSchemas: () => void
+  onUploadSchemaPack: (file: File) => Promise<void>
   showToast: (message: string, kind?: 'warn') => void
 }
 
@@ -22,9 +29,15 @@ export function SocketPanel({
   clients,
   entries,
   serverInfo,
+  schemaPacks,
+  schemaTypes,
+  schemasLoading,
+  schemasError,
   loading,
   error,
   onRefresh,
+  onRefreshSchemas,
+  onUploadSchemaPack,
   showToast,
 }: SocketPanelProps) {
   const channels = useMemo(() => {
@@ -35,9 +48,16 @@ export function SocketPanel({
 
   const [channel, setChannel] = useState('')
   const [adapter, setAdapter] = useState('')
+  const [typeName, setTypeName] = useState('')
   const [payload, setPayload] = useState(DEFAULT_PAYLOAD)
   const [dispatching, setDispatching] = useState(false)
   const [jsonError, setJsonError] = useState('')
+  const [schemaModalOpen, setSchemaModalOpen] = useState(false)
+
+  const selectedType = useMemo(
+    () => schemaTypes.find(type => type.full_name === typeName) ?? null,
+    [schemaTypes, typeName],
+  )
 
   const socketEntries = useMemo(
     () => entries.filter(entry => entry.type === 'SOCKET').slice(-200).reverse(),
@@ -68,6 +88,7 @@ export function SocketPanel({
         channel: selectedChannel,
         payload: parsed,
         adapter: adapter as 'raw' | 'appsync' | '',
+        type_name: typeName || undefined,
       })
       const dropped = result.dropped?.length ?? 0
       const errors = result.errors?.length ?? 0
@@ -79,6 +100,28 @@ export function SocketPanel({
     } finally {
       setDispatching(false)
     }
+  }
+
+  function handleTypeChange(nextTypeName: string) {
+    setTypeName(nextTypeName)
+    const nextType = schemaTypes.find(type => type.full_name === nextTypeName)
+    if (nextType?.example_json) {
+      setPayload(JSON.stringify(nextType.example_json, null, 2))
+      setJsonError('')
+    }
+  }
+
+  function insertField(fieldName: string) {
+    const line = `  "${fieldName}": `
+    setPayload(current => {
+      const trimmed = current.trim()
+      if (!trimmed || trimmed === '{}') {
+        return `{\n${line}null\n}`
+      }
+      const withoutClose = current.replace(/\s*}\s*$/, '')
+      const needsComma = /:\s*[^,\s]\s*$/.test(withoutClose)
+      return `${withoutClose}${needsComma ? ',' : ''}\n${line}null\n}`
+    })
   }
 
   return (
@@ -94,6 +137,9 @@ export function SocketPanel({
         </div>
         <button type="button" className="btn ghost" onClick={onRefresh} disabled={loading}>
           <Refresh /> Refresh
+        </button>
+        <button type="button" className="btn ghost" onClick={() => setSchemaModalOpen(true)}>
+          <Braces /> Schemas
         </button>
       </div>
 
@@ -135,8 +181,33 @@ export function SocketPanel({
               </select>
             </label>
           </div>
+          <label className="socket-type-label">
+            <span>Payload type</span>
+            <select className="select" value={typeName} onChange={e => handleTypeChange(e.target.value)}>
+              <option value="">Raw JSON</option>
+              {schemaTypes.map(type => (
+                <option key={type.full_name} value={type.full_name}>
+                  {type.full_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedType && (
+            <div className="schema-field-strip">
+              {selectedType.fields.map(field => (
+                <button
+                  key={field.json_name}
+                  type="button"
+                  title={`${field.type}${field.repeated ? ' repeated' : ''}${field.map ? ' map' : ''}`}
+                  onClick={() => insertField(field.json_name)}
+                >
+                  {field.json_name}
+                </button>
+              ))}
+            </div>
+          )}
           <label className="socket-json-label">
-            <span>Payload JSON</span>
+            <span>{selectedType ? 'Payload JSON -> Protobuf' : 'Payload JSON'}</span>
             <textarea
               className="socket-json"
               value={payload}
@@ -180,6 +251,19 @@ export function SocketPanel({
           </div>
         )}
       </section>
+
+      {schemaModalOpen && (
+        <SchemaPacksModal
+          packs={schemaPacks}
+          types={schemaTypes}
+          loading={schemasLoading}
+          error={schemasError}
+          onClose={() => setSchemaModalOpen(false)}
+          onRefresh={onRefreshSchemas}
+          onUpload={onUploadSchemaPack}
+          showToast={showToast}
+        />
+      )}
     </section>
   )
 }
@@ -200,6 +284,98 @@ function ClientRow({ client }: { client: SocketClient }) {
             <span key={channel} className="sub" title={channel}>{channel}</span>
           ))
         )}
+      </div>
+    </div>
+  )
+}
+
+function SchemaPacksModal({
+  packs,
+  types,
+  loading,
+  error,
+  onClose,
+  onRefresh,
+  onUpload,
+  showToast,
+}: {
+  packs: SchemaPack[]
+  types: SchemaTypeDescriptor[]
+  loading: boolean
+  error: string
+  onClose: () => void
+  onRefresh: () => void
+  onUpload: (file: File) => Promise<void>
+  showToast: (message: string, kind?: 'warn') => void
+}) {
+  const [uploading, setUploading] = useState(false)
+
+  async function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUploading(true)
+    try {
+      await onUpload(file)
+      showToast(`Loaded schema pack ${file.name}`)
+    } catch (err) {
+      showToast(`Schema upload failed: ${(err as Error).message}`, 'warn')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div className="modal-scrim" onMouseDown={onClose}>
+      <div className="modal schema-modal" onMouseDown={e => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <h2>Schema Packs</h2>
+            <div className="sub">{packs.length} packs / {types.length} types</div>
+          </div>
+          <button type="button" className="btn icon ghost ml-auto" onClick={onClose} aria-label="Close">
+            <X />
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="schema-upload-row">
+            <label className="btn primary">
+              <Download /> Upload .proto or .zip
+              <input type="file" accept=".proto,.zip" onChange={handleFileChange} disabled={uploading || loading} />
+            </label>
+            <button type="button" className="btn ghost" onClick={onRefresh} disabled={loading}>
+              <Refresh /> Refresh
+            </button>
+          </div>
+          {error && <div className="socket-error">{error}</div>}
+          <div className="schema-modal-grid">
+            <section>
+              <div className="panel-label">Loaded packs</div>
+              {packs.length === 0 ? (
+                <div className="socket-empty compact">No schema packs loaded.</div>
+              ) : (
+                packs.map(pack => (
+                  <div key={pack.id} className="schema-pack-row">
+                    <div className="schema-pack-name">{pack.name}</div>
+                    <div className="schema-pack-path" title={pack.path}>{pack.path}</div>
+                    <div className="schema-pack-count">{pack.types.length} types</div>
+                  </div>
+                ))
+              )}
+            </section>
+            <section>
+              <div className="panel-label">Available types</div>
+              <div className="schema-type-list">
+                {types.map(type => (
+                  <div key={type.full_name} className="schema-type-row">
+                    <span title={type.full_name}>{type.full_name}</span>
+                    <small>{type.file}</small>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
       </div>
     </div>
   )

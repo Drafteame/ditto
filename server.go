@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -89,6 +90,7 @@ type Server struct {
 	Bus       *EventBus
 	ProxyMgr  *ProxyManager
 	SocketHub *SocketHub
+	Schemas   *SchemaRegistry
 	Info      ServerInfo
 	Config    ServerConfig
 	CertPath  string
@@ -109,6 +111,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	proxyMgr := NewProxyManager(cfg.Target)
 	jsonLogs := cfg.JSONLogs
 	socketHub := NewSocketHub(bus, jsonLogs)
+	descriptorsDir := filepath.Join(filepath.Dir(cfg.MocksDir), "descriptors")
+	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load schema registry: %w", err)
+	}
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
@@ -135,7 +142,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	RegisterUI(mux, store, bus, proxyMgr, info, cfg.ServeUI)
-	RegisterSocketRoutes(mux, socketHub)
+	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
+	RegisterSchemaRoutes(mux, schemaRegistry)
 
 	// Main proxy/mock handler
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +264,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Bus:       bus,
 		ProxyMgr:  proxyMgr,
 		SocketHub: socketHub,
+		Schemas:   schemaRegistry,
 		Info:      info,
 		Config:    cfg,
 		CertPath:  certPath,
