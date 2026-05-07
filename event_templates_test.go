@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
@@ -231,7 +232,11 @@ func TestResolveTemplateReportsInvalidCasts(t *testing.T) {
 	if len(missing) != 0 {
 		t.Fatalf("missing = %#v, want none", missing)
 	}
-	if len(invalid) != 2 || invalid[0].Name != "age" || invalid[0].Kind != "int" || invalid[1].Kind != "date" {
+	byName := make(map[string]EventTemplateInvalidCast, len(invalid))
+	for _, cast := range invalid {
+		byName[cast.Name] = cast
+	}
+	if len(byName) != 2 || byName["age"].Kind != "int" || byName["dob"].Kind != "date" {
 		t.Fatalf("invalid casts = %#v", invalid)
 	}
 	if !strings.Contains(string(resolved), "{{int:age}}") || !strings.Contains(string(resolved), "{{date:dob}}") {
@@ -243,6 +248,7 @@ func TestValidateTemplateRejectsUnsupportedAndInlineCasts(t *testing.T) {
 	for name, payload := range map[string]json.RawMessage{
 		"unsupported": json.RawMessage(`{"dob":"{{date:dob}}"}`),
 		"inline":      json.RawMessage(`{"label":"age {{int:age}}"}`),
+		"key":         json.RawMessage(`{"{{int:age}}":"value"}`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := validateEventTemplate(EventTemplate{
@@ -255,6 +261,17 @@ func TestValidateTemplateRejectsUnsupportedAndInlineCasts(t *testing.T) {
 				t.Fatalf("validateEventTemplate() unexpectedly succeeded")
 			}
 		})
+	}
+}
+
+func TestDescribeInvalidCastsDeduplicatesAndSorts(t *testing.T) {
+	got := describeInvalidCasts([]EventTemplateInvalidCast{
+		{Name: "age", Kind: "int"},
+		{Name: "dob", Kind: "date"},
+		{Name: "age", Kind: "int"},
+	})
+	if got != "date:dob, int:age" {
+		t.Fatalf("describeInvalidCasts() = %q", got)
 	}
 }
 
@@ -474,15 +491,19 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 	tmpl, err := reg.Create(EventTemplate{
 		Name:    "Typed",
 		Channel: "tickets",
-		Payload: json.RawMessage(`{"age":"{{int:age}}","obj":"{{json:obj}}"}`),
+		Payload: json.RawMessage(`{"age":"{{int:age}}","obj":"{{json:obj}}","maybe":"{{json:maybe}}"}`),
 	}, nil)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(NewEventBus(), false), nil)
+	bus := NewEventBus()
+	hub := NewSocketHub(bus, false)
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	RegisterEventTemplateRoutes(mux, reg, hub, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"age":"abc","obj":{"score":7}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"age":"abc","obj":{"score":7},"maybe":null}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:12345"
 	rec := httptest.NewRecorder()
@@ -491,7 +512,7 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 		t.Fatalf("invalid cast status/body = %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"age":42,"obj":{"score":7}}}`))
+	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"age":42,"obj":{"score":7},"maybe":null}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:12345"
 	rec = httptest.NewRecorder()
@@ -499,8 +520,16 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 	if rec.Code != http.StatusOK {
 		t.Fatalf("typed JSON variables status/body = %d %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"score":7`) || !strings.Contains(rec.Body.String(), `"age":42`) {
+	if !strings.Contains(rec.Body.String(), `"score":7`) || !strings.Contains(rec.Body.String(), `"age":42`) || !strings.Contains(rec.Body.String(), `"maybe":null`) {
 		t.Fatalf("typed JSON variables response = %s", rec.Body.String())
+	}
+	select {
+	case event := <-events:
+		if event.Source != "template:"+tmpl.ID {
+			t.Fatalf("dispatch event source = %q, want template:%s", event.Source, tmpl.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for template dispatch event")
 	}
 }
 

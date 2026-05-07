@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -273,6 +274,7 @@ func (r *EventTemplateRegistry) Render(id string, vars map[string]string) (Rende
 		Payload:      payload,
 		Missing:      missing,
 		InvalidCasts: invalidCasts,
+		Source:       "template:" + tmpl.ID,
 	}, nil
 }
 
@@ -665,6 +667,11 @@ func eventTemplateVariablesToStrings(vars map[string]json.RawMessage) (map[strin
 			out[name] = ""
 			continue
 		}
+		trimmed := bytes.TrimSpace(raw)
+		if bytes.Equal(trimmed, []byte("null")) {
+			out[name] = "null"
+			continue
+		}
 		var text string
 		if err := json.Unmarshal(raw, &text); err == nil {
 			out[name] = text
@@ -679,10 +686,17 @@ func eventTemplateVariablesToStrings(vars map[string]json.RawMessage) (map[strin
 }
 
 func describeInvalidCasts(casts []EventTemplateInvalidCast) string {
+	seen := make(map[string]struct{}, len(casts))
 	parts := make([]string, 0, len(casts))
 	for _, cast := range casts {
-		parts = append(parts, fmt.Sprintf("%s:%s", cast.Kind, cast.Name))
+		part := fmt.Sprintf("%s:%s", cast.Kind, cast.Name)
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		parts = append(parts, part)
 	}
+	sort.Strings(parts)
 	return strings.Join(parts, ", ")
 }
 
@@ -761,7 +775,10 @@ func validateTemplateCasts(payload json.RawMessage) error {
 func validateTemplateCastsInValue(value any) error {
 	switch typed := value.(type) {
 	case map[string]any:
-		for _, child := range typed {
+		for key, child := range typed {
+			if strings.Contains(key, "{{") || strings.Contains(key, "}}") {
+				return fmt.Errorf("template variables in keys are not supported")
+			}
 			if err := validateTemplateCastsInValue(child); err != nil {
 				return err
 			}
