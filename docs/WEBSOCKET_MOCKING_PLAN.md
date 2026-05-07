@@ -62,6 +62,40 @@ Domain-specific data (Protobuf schemas, mocks, recordings, scenarios) lives in *
   scenarios/           ← HTTP mocks + sequences + triggers, atomic activation
 ```
 
+## `.dittopack` manifest format (stub)
+
+Future import/export work will package user-loadable artifacts as a zip with a
+manifest at the root and paths matching the filesystem layout above. M0 only
+defines the compatibility contract; it does not implement bundle import/export.
+
+```json
+{
+  "manifest_version": 1,
+  "name": "Example pack",
+  "description": "Optional human-readable notes",
+  "created_at": "2026-05-06T00:00:00Z",
+  "ditto_min_version": "1.0.0",
+  "artifacts": {
+    "mocks": ["mocks/users.json"],
+    "descriptors": ["descriptors/events/manifest.json"],
+    "event_templates": ["event_templates/ticket_created.json"],
+    "sequences": ["sequences/happy_path.json"],
+    "recordings": ["recordings/session/channel.jsonl"],
+    "scenarios": ["scenarios/match_day.json"]
+  }
+}
+```
+
+Rules:
+
+- `manifest_version` is required and starts at `1`.
+- Artifact paths are relative to the bundle root and must stay inside the
+  bundle.
+- Unknown top-level fields are allowed so future Ditto versions can add
+  metadata without breaking older packs.
+- Domain-specific schemas, mocks, recordings, and scenarios belong in these
+  artifacts, not in Ditto source.
+
 ---
 
 ## Milestones

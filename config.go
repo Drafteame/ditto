@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -31,14 +30,14 @@ type ConfigStore struct {
 
 // NewConfigStore creates a store that reads/writes to the data directory.
 func NewConfigStore() (*ConfigStore, error) {
-	dataDir, err := DataDir()
+	layout, err := DataDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolving data dir: %w", err)
 	}
 
 	cs := &ConfigStore{
 		config:   DefaultConfig(),
-		filePath: filepath.Join(dataDir, "config.json"),
+		filePath: layout.ConfigPath,
 	}
 
 	// Load existing config if present

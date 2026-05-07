@@ -1,20 +1,20 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import type { LogEntry, Mock, ServerInfo, UpdateInfo } from './types'
-import { nextCursor } from './sequence'
+import { useCallback, useEffect, useRef, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
+import type { LogEntry } from './types'
 import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
 import * as api from './api'
+import { useAppUiStore } from './stores/useAppUiStore'
+import { useLogStore } from './stores/useLogStore'
+import { useMockStore } from './stores/useMockStore'
 import { Header } from './components/Header'
 import { UpdateBanner } from './components/UpdateBanner'
 import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
 import { LogPanel, LOG_SEARCH_INPUT_ID } from './components/LogPanel'
 import { Drawer } from './components/Drawer'
 import { MockEditorModal, createNewMockState, createEditMockState } from './components/MockEditorModal'
-import type { MockEditorState } from './components/MockEditorModal'
 import { QRModal } from './components/QRModal'
 import { ToastContainer } from './components/ToastContainer'
-
-let nextLogId = 0
 
 function isInsideWails(): boolean {
   return new URLSearchParams(window.location.search).get('desktop') === '1'
@@ -25,67 +25,77 @@ function isMobileDevice(): boolean {
 }
 
 export default function App() {
-  const [mocks, setMocks] = useState<Mock[]>([])
-  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([])
-  const [connected, setConnected] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [drawerWidth, setDrawerWidth] = useState(480)
-  const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
-  const [modalState, setModalState] = useState<MockEditorState | null>(null)
-  const [qrOpen, setQrOpen] = useState(false)
+  const { mocks, serverInfo, loadMocks, reloadMocks, advanceSequenceCursor } =
+    useMockStore(useShallow(state => ({
+      mocks: state.mocks,
+      serverInfo: state.serverInfo,
+      loadMocks: state.loadMocks,
+      reloadMocks: state.reloadMocks,
+      advanceSequenceCursor: state.advanceSequenceCursor,
+    })))
+  const {
+    logEntries,
+    connected,
+    selectedLogId,
+    setConnected,
+    appendLogEvent,
+    clearLog,
+    selectLog,
+  } = useLogStore(useShallow(state => ({
+    logEntries: state.logEntries,
+    connected: state.connected,
+    selectedLogId: state.selectedLogId,
+    setConnected: state.setConnected,
+    appendLogEvent: state.appendLogEvent,
+    clearLog: state.clearLog,
+    selectLog: state.selectLog,
+  })))
+  const {
+    sidebarOpen,
+    sidebarCollapsed,
+    drawerWidth,
+    updateInfo,
+    modalState,
+    qrOpen,
+    setSidebarOpen,
+    toggleSidebarOpen,
+    setSidebarCollapsed,
+    toggleSidebarCollapsed,
+    setDrawerWidth,
+    setUpdateInfo,
+    setModalState,
+    setQrOpen,
+  } = useAppUiStore(useShallow(state => ({
+    sidebarOpen: state.sidebarOpen,
+    sidebarCollapsed: state.sidebarCollapsed,
+    drawerWidth: state.drawerWidth,
+    updateInfo: state.updateInfo,
+    modalState: state.modalState,
+    qrOpen: state.qrOpen,
+    setSidebarOpen: state.setSidebarOpen,
+    toggleSidebarOpen: state.toggleSidebarOpen,
+    setSidebarCollapsed: state.setSidebarCollapsed,
+    toggleSidebarCollapsed: state.toggleSidebarCollapsed,
+    setDrawerWidth: state.setDrawerWidth,
+    setUpdateInfo: state.setUpdateInfo,
+    setModalState: state.setModalState,
+    setQrOpen: state.setQrOpen,
+  })))
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
   const isMobile = useRef(isMobileDevice()).current
 
-  const loadMocks = useCallback(async () => {
-    try {
-      const data = await api.fetchMocks()
-      setMocks(data.mocks)
-      setServerInfo(data.info)
-    } catch (err) {
-      console.error('Failed to load mocks:', err)
-    }
-  }, [])
-
   useSSE(
     useCallback((event) => {
-      const entry: LogEntry = { ...event, id: String(++nextLogId) }
-      setLogEntries(prev => [...prev, entry])
-
-      // Advance the local sequence counter so the sidebar badge stays in sync
-      // with the backend's in-memory cursor without a full refetch per request.
-      if (
-        event.type === 'MOCK' &&
-        event.sequence_step &&
-        event.sequence_len &&
-        typeof event.mock_index === 'number'
-      ) {
-        const idx = event.mock_index
-        const served = event.sequence_step
-        const len = event.sequence_len
-        setMocks(prev => {
-          const target = prev[idx]
-          if (!target?.sequence) return prev
-          const next = nextCursor(served, len, target.sequence.on_end)
-          if (target.sequence.current_step === next) return prev
-          const copy = prev.slice()
-          copy[idx] = {
-            ...target,
-            sequence: { ...target.sequence, current_step: next },
-          }
-          return copy
-        })
-      }
-    }, []),
+      appendLogEvent(event)
+      advanceSequenceCursor(event)
+    }, [advanceSequenceCursor, appendLogEvent]),
     useCallback(() => {
       setConnected(true)
       loadMocks()
-    }, [loadMocks]),
-    useCallback(() => setConnected(false), []),
+    }, [loadMocks, setConnected]),
+    useCallback(() => setConnected(false), [setConnected]),
     useCallback(() => loadMocks(), [loadMocks]),
   )
 
@@ -94,14 +104,14 @@ export default function App() {
     api.fetchUpdateCheck().then(data => {
       if (data.available) setUpdateInfo(data)
     }).catch(() => {})
-  }, [loadMocks])
+  }, [loadMocks, setUpdateInfo])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setModalState(null)
         setQrOpen(false)
-        setSelectedLogId(null)
+        selectLog(null)
         return
       }
 
@@ -118,37 +128,41 @@ export default function App() {
         e.preventDefault()
         const isDesktopViewport = window.matchMedia('(min-width: 768px)').matches
         if (isDesktopViewport) {
-          setSidebarCollapsed(c => !c)
+          toggleSidebarCollapsed()
         } else {
-          setSidebarOpen(o => !o)
+          toggleSidebarOpen()
         }
       } else if (key === 'l') {
         e.preventDefault()
-        setLogEntries([])
-        setSelectedLogId(null)
+        clearLog()
       }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [])
+  }, [
+    clearLog,
+    selectLog,
+    setModalState,
+    setQrOpen,
+    toggleSidebarCollapsed,
+    toggleSidebarOpen,
+  ])
 
   const handleReloadMocks = useCallback(async () => {
-    await api.reloadMocks()
-    await loadMocks()
-  }, [loadMocks])
+    await reloadMocks()
+  }, [reloadMocks])
 
   const handleClearLog = useCallback(() => {
-    setLogEntries([])
-    setSelectedLogId(null)
-  }, [])
+    clearLog()
+  }, [clearLog])
 
   const handleSaveAsMock = useCallback((entry: LogEntry) => {
     setModalState(createNewMockState(entry.method, entry.path, entry.status, entry.response_body))
-  }, [])
+  }, [setModalState])
 
   const handleCreateMock = useCallback(() => {
     setModalState(createNewMockState('GET', '', 200))
-  }, [])
+  }, [setModalState])
 
   const handleEditMock = useCallback(async (index: number) => {
     try {
@@ -158,7 +172,7 @@ export default function App() {
     } catch (err) {
       console.error('Failed to load mock for editing:', err)
     }
-  }, [])
+  }, [setModalState])
 
   const selectedEntry = useMemo(
     () => (selectedLogId ? logEntries.find(e => e.id === selectedLogId) ?? null : null),
@@ -175,7 +189,7 @@ export default function App() {
         onReloadMocks={handleReloadMocks}
         onClearLog={handleClearLog}
         onShowQR={() => setQrOpen(true)}
-        onToggleSidebar={() => setSidebarOpen(prev => !prev)}
+        onToggleSidebar={toggleSidebarOpen}
       />
 
       {updateInfo && (
@@ -200,7 +214,7 @@ export default function App() {
           entries={logEntries}
           serverInfo={serverInfo}
           selectedId={selectedLogId}
-          onSelect={setSelectedLogId}
+          onSelect={selectLog}
           onSaveAsMock={handleSaveAsMock}
         />
         {selectedEntry && (
@@ -209,7 +223,7 @@ export default function App() {
             serverInfo={serverInfo}
             width={drawerWidth}
             onResize={setDrawerWidth}
-            onClose={() => setSelectedLogId(null)}
+            onClose={() => selectLog(null)}
             onSaveAsMock={handleSaveAsMock}
           />
         )}

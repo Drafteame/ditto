@@ -6,20 +6,82 @@ import (
 	"runtime"
 )
 
-// DataDir returns the platform-appropriate directory for persistent Ditto data.
-// The directory is created if it doesn't exist.
+// DataLayout contains Ditto's bundle-compatible persistence paths.
+type DataLayout struct {
+	Root              string
+	ConfigPath        string
+	MocksDir          string
+	DescriptorsDir    string
+	EventTemplatesDir string
+	SequencesDir      string
+	RecordingsDir     string
+	ScenariosDir      string
+}
+
+type dataSubdir struct {
+	name   string
+	assign func(*DataLayout, string)
+}
+
+var dataSubdirs = []dataSubdir{
+	{"mocks", func(layout *DataLayout, path string) { layout.MocksDir = path }},
+	{"descriptors", func(layout *DataLayout, path string) { layout.DescriptorsDir = path }},
+	{"event_templates", func(layout *DataLayout, path string) { layout.EventTemplatesDir = path }},
+	{"sequences", func(layout *DataLayout, path string) { layout.SequencesDir = path }},
+	{"recordings", func(layout *DataLayout, path string) { layout.RecordingsDir = path }},
+	{"scenarios", func(layout *DataLayout, path string) { layout.ScenariosDir = path }},
+}
+
+// NewDataLayout resolves every path in the persistent data layout from root.
+func NewDataLayout(root string) DataLayout {
+	layout := DataLayout{
+		Root:       root,
+		ConfigPath: filepath.Join(root, "config.json"),
+	}
+	for _, subdir := range dataSubdirs {
+		subdir.assign(&layout, filepath.Join(root, subdir.name))
+	}
+	return layout
+}
+
+// ArtifactDirs returns the directories that can contain user-loadable artifacts.
+func (layout DataLayout) ArtifactDirs() []string {
+	dirs := make([]string, len(dataSubdirs))
+	for i, subdir := range dataSubdirs {
+		dirs[i] = filepath.Join(layout.Root, subdir.name)
+	}
+	return dirs
+}
+
+// EnsureDataLayout creates Ditto's persistent root and known artifact folders.
+func EnsureDataLayout(root string) (DataLayout, error) {
+	layout := NewDataLayout(root)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return layout, err
+	}
+	for _, dir := range layout.ArtifactDirs() {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return layout, err
+		}
+	}
+	return layout, nil
+}
+
+// DataDir returns the platform-appropriate layout for persistent Ditto data.
+// The directory and the standard artifact subdirectories are created if they
+// don't exist.
 //
 //   - macOS:   ~/Library/Application Support/Ditto/
 //   - Linux:   ~/.config/ditto/
 //   - Windows: %APPDATA%\Ditto\
-func DataDir() (string, error) {
+func DataDir() (DataLayout, error) {
 	var base string
 
 	switch runtime.GOOS {
 	case "darwin":
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", err
+			return DataLayout{}, err
 		}
 		base = filepath.Join(home, "Library", "Application Support", "Ditto")
 	case "windows":
@@ -27,7 +89,7 @@ func DataDir() (string, error) {
 		if appData == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				return "", err
+				return DataLayout{}, err
 			}
 			appData = filepath.Join(home, "AppData", "Roaming")
 		}
@@ -37,31 +99,25 @@ func DataDir() (string, error) {
 		if configDir == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				return "", err
+				return DataLayout{}, err
 			}
 			configDir = filepath.Join(home, ".config")
 		}
 		base = filepath.Join(configDir, "ditto")
 	}
 
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return "", err
-	}
-	return base, nil
+	return EnsureDataLayout(base)
 }
 
 // DefaultMocksDir returns the persistent mocks directory inside DataDir.
 // Creates it with an example mock if it doesn't exist yet.
 func DefaultMocksDir() (string, error) {
-	dataDir, err := DataDir()
+	layout, err := DataDir()
 	if err != nil {
 		return "", err
 	}
 
-	mocksDir := filepath.Join(dataDir, "mocks")
-	if err := os.MkdirAll(mocksDir, 0o755); err != nil {
-		return "", err
-	}
+	mocksDir := layout.MocksDir
 
 	// Seed with example mock on first run
 	examplePath := filepath.Join(mocksDir, "example.json")
