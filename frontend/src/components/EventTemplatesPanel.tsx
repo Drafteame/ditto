@@ -43,7 +43,7 @@ function draftFromTemplate(template?: EventTemplate): TemplateDraft {
     payload: template ? JSON.stringify(template.payload, null, 2) : DEFAULT_TEMPLATE_PAYLOAD,
     variables: template?.variables?.length
       ? template.variables.map(variable => ({ ...variable }))
-      : [{ name: 'ticketId', default: '', description: '' }],
+      : [{ name: 'ticketId', description: '' }],
   }
 }
 
@@ -183,7 +183,7 @@ function TemplateEditorModal({
       const next = [...current.variables]
       detectedVariables.forEach(name => {
         if (!names.has(name) && !isBuiltinVariable(name)) {
-          next.push({ name, default: '', description: '' })
+          next.push({ name, description: '' })
         }
       })
       return { ...current, variables: next }
@@ -207,11 +207,14 @@ function TemplateEditorModal({
       return
     }
     const variables = state.variables
-      .map(variable => ({
-        name: variable.name.trim(),
-        default: variable.default ?? '',
-        description: variable.description?.trim() || undefined,
-      }))
+      .map(variable => {
+        const next: EventTemplateVariable = {
+          name: variable.name.trim(),
+          description: variable.description?.trim() || undefined,
+        }
+        if (variable.default !== undefined) next.default = variable.default
+        return next
+      })
       .filter(variable => variable.name)
     setSaving(true)
     setJsonError('')
@@ -290,7 +293,7 @@ function TemplateEditorModal({
             <button type="button" className="btn ghost" onClick={addDetectedVariables}>
               <Braces /> Detect
             </button>
-            <button type="button" className="btn ghost" onClick={() => setState({ ...state, variables: [...state.variables, { name: '', default: '', description: '' }] })}>
+            <button type="button" className="btn ghost" onClick={() => setState({ ...state, variables: [...state.variables, { name: '', description: '' }] })}>
               <Plus /> Add
             </button>
           </div>
@@ -323,8 +326,35 @@ function TemplateEditorModal({
 }
 
 export function detectTemplateVariables(payloadText: string): string[] {
+  try {
+    return detectTemplateVariablesInValue(JSON.parse(payloadText))
+  } catch {
+    return detectTemplateVariablesInString(payloadText)
+  }
+}
+
+export function detectTemplateVariablesInValue(value: unknown): string[] {
   const names = new Set<string>()
-  const re = /\{\{\s*(\w+)\s*\}\}/g
+  const visit = (current: unknown) => {
+    if (typeof current === 'string') {
+      detectTemplateVariablesInString(current).forEach(name => names.add(name))
+      return
+    }
+    if (Array.isArray(current)) {
+      current.forEach(visit)
+      return
+    }
+    if (current && typeof current === 'object') {
+      Object.values(current as Record<string, unknown>).forEach(visit)
+    }
+  }
+  visit(value)
+  return [...names].sort((a, b) => a.localeCompare(b))
+}
+
+function detectTemplateVariablesInString(payloadText: string): string[] {
+  const names = new Set<string>()
+  const re = /\{\{\s*(?:(?:str|json|int|float|bool):)?([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
   let match: RegExpExecArray | null
   while ((match = re.exec(payloadText)) !== null) {
     names.add(match[1])

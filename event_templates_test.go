@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -76,25 +77,92 @@ func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
 	}
 }
 
+func TestEventTemplateRegistryCreateAvoidsOrphanedFileCollision(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := NewEventTemplateRegistry(dir)
+	if err != nil {
+		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+	}
+	orphanID := eventTemplateID("Ticket Created", 0)
+	if err := os.WriteFile(filepath.Join(dir, orphanID+".json"), []byte(`{"stale":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":"x"}`)}, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if created.ID == orphanID {
+		t.Fatalf("Create() reused orphaned file id %q", orphanID)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, orphanID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"stale":true}` {
+		t.Fatalf("orphaned file was overwritten: %s", data)
+	}
+}
+
+func TestEventTemplateRegistryGetReturnsSnapshot(t *testing.T) {
+	defaultValue := "fallback"
+	reg, err := NewEventTemplateRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+	}
+	tmpl, err := reg.Create(EventTemplate{
+		Name:    "Snapshot",
+		Channel: "tickets",
+		Payload: json.RawMessage(`{"id":"{{ticketId}}"}`),
+		Variables: []EventTemplateVariable{{
+			Name:    "ticketId",
+			Default: &defaultValue,
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	got, err := reg.Get(tmpl.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Variables[0].Default == nil {
+		t.Fatalf("default missing in snapshot: %#v", got.Variables)
+	}
+	got.Payload[0] = '['
+	*got.Variables[0].Default = "mutated"
+
+	again, err := reg.Get(tmpl.ID)
+	if err != nil {
+		t.Fatalf("Get() again error = %v", err)
+	}
+	if string(again.Payload) != `{"id":"{{ticketId}}"}` || *again.Variables[0].Default != "fallback" {
+		t.Fatalf("Get() did not return a snapshot: %#v payload=%s", again.Variables, again.Payload)
+	}
+}
+
 func TestResolveTemplateValuesDefaultsBuiltinsAndMissing(t *testing.T) {
 	payload := json.RawMessage(`{
 		"id": "{{ticketId}}",
+		"typedId": "{{int:ticketId}}",
 		"message": "hello {{name}}",
 		"empty": "{{empty}}",
 		"createdAt": "{{now}}",
 		"createdMs": "{{now_unix_ms}}",
 		"key {{name}}": "not in key",
-		"nested": [{"flag": "{{flag}}", "obj": "{{obj}}", "unresolved": "{{missing}}"}],
+		"nested": [{"flag": "{{bool:flag}}", "obj": "{{json:obj}}", "unresolved": "{{missing}}"}],
 		"noRecursive": "{{chain}}"
 	}`)
+	emptyDefault := ""
 	resolved, missing, err := resolveTemplate(payload, map[string]string{
 		"ticketId": "123",
 		"name":     `Ada "quoted"`,
 		"flag":     "true",
 		"obj":      `{"score":7}`,
 		"chain":    "{{other}}",
-	}, map[string]string{
-		"empty": "",
+	}, map[string]*string{
+		"empty": &emptyDefault,
 	})
 	if err != nil {
 		t.Fatalf("resolveTemplate() error = %v", err)
@@ -107,8 +175,11 @@ func TestResolveTemplateValuesDefaultsBuiltinsAndMissing(t *testing.T) {
 	if err := json.Unmarshal(resolved, &got); err != nil {
 		t.Fatalf("resolved payload invalid JSON: %v", err)
 	}
-	if got["id"].(float64) != 123 {
-		t.Fatalf("id = %#v, want typed number 123", got["id"])
+	if got["id"] != "123" {
+		t.Fatalf("id = %#v, want string 123", got["id"])
+	}
+	if got["typedId"].(float64) != 123 {
+		t.Fatalf("typedId = %#v, want typed number 123", got["typedId"])
 	}
 	if got["message"] != `hello Ada "quoted"` {
 		t.Fatalf("message = %#v", got["message"])
@@ -129,7 +200,7 @@ func TestResolveTemplateValuesDefaultsBuiltinsAndMissing(t *testing.T) {
 	if nested["obj"].(map[string]any)["score"].(float64) != 7 {
 		t.Fatalf("obj = %#v, want typed object", nested["obj"])
 	}
-	if got["createdAt"] == "" || got["createdMs"].(float64) <= 0 {
+	if got["createdAt"] == "" || got["createdMs"] == "" {
 		t.Fatalf("builtins not resolved: %#v", got)
 	}
 }
@@ -145,6 +216,43 @@ func TestResolveTemplateRejectsInvalidJSONAndDeepPayload(t *testing.T) {
 	}
 	if _, _, err := ResolveTemplate(json.RawMessage(value), map[string]string{"x": "1"}); err == nil {
 		t.Fatalf("ResolveTemplate(deep payload) unexpectedly succeeded")
+	}
+}
+
+func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T) {
+	schemaRoot := t.TempDir()
+	writeProto(t, filepath.Join(schemaRoot, "events"), "event.proto", `syntax = "proto3"; package ditto.events; message Ticket { string ticket_id = 1; int32 attempt = 2; }`)
+	schemas, err := NewSchemaRegistry(schemaRoot)
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+	reg, err := NewEventTemplateRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+	}
+	tmpl, err := reg.Create(EventTemplate{
+		Name:     "Ticket",
+		Channel:  "tickets",
+		TypeName: "ditto.events.Ticket",
+		Payload:  json.RawMessage(`{"ticketId":"{{ticketId}}","attempt":"{{int:attempt}}"}`),
+	}, schemas)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	rendered, err := reg.Render(tmpl.ID, map[string]string{"ticketId": "123", "attempt": "2"})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	if _, err := schemas.Encode(rendered.TypeName, rendered.Payload); err != nil {
+		t.Fatalf("Encode() error = %v; payload=%s", err, rendered.Payload)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rendered.Payload, &got); err != nil {
+		t.Fatalf("rendered payload invalid JSON: %v", err)
+	}
+	if got["ticketId"] != "123" || got["attempt"].(float64) != 2 {
+		t.Fatalf("rendered payload = %#v, want string ticketId and typed attempt", got)
 	}
 }
 
@@ -171,6 +279,64 @@ func TestEventTemplateRoutesRejectInvalidPayloadAndPathTraversal(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("path traversal status = %d, want 404", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad","channel":"x\nx","payload":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "channel cannot contain newlines") {
+		t.Fatalf("newline channel status/body = %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad Channel Var","channel":"/games/{{matchId}}","payload":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "channel variables are not supported") {
+		t.Fatalf("channel vars status/body = %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", strings.NewReader(`{"name":"Too Big","channel":"x","payload":"`+strings.Repeat("x", maxEventTemplateBodyBytes)+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body status = %d, want 413", rec.Code)
+	}
+}
+
+func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
+	schemas, err := NewSchemaRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSchemaRegistry() error = %v", err)
+	}
+	reg, err := NewEventTemplateRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+	}
+	mux := http.NewServeMux()
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(NewEventBus(), false), schemas)
+
+	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad Type","channel":"x","type_name":"ditto.Missing","payload":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `schema type "ditto.Missing" is not loaded`) {
+		t.Fatalf("missing type status/body = %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/__ditto__/api/event-templates/missing-template", bytes.NewBufferString(`{"name":"Missing","channel":"x","payload":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing update status = %d, want 404", rec.Code)
 	}
 }
 
@@ -225,6 +391,9 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 		Name:    "Missing",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"id":"{{ticketId}}"}`),
+		Variables: []EventTemplateVariable{
+			{Name: "ticketId"},
+		},
 	}, nil)
 	if err != nil {
 		t.Fatalf("Create(missing) error = %v", err)
@@ -249,8 +418,7 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 		t.Fatalf("missing variable status/body = %d %s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+builtins.ID+"/dispatch", bytes.NewBufferString(`{}`))
-	req.Header.Set("Content-Type", "application/json")
+	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+builtins.ID+"/dispatch", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -270,7 +438,7 @@ func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for i := 1; i <= 2; i++ {
+	for i := 1; i <= 32; i++ {
 		i := i
 		wg.Add(1)
 		go func() {
@@ -278,7 +446,7 @@ func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
 			_, err := reg.Update(tmpl.ID, EventTemplate{
 				Name:    "Race",
 				Channel: "tickets",
-				Payload: json.RawMessage(`{"v":` + string(rune('0'+i)) + `}`),
+				Payload: json.RawMessage(`{"v":` + strconv.Itoa(i) + `}`),
 			}, nil)
 			if err != nil {
 				t.Errorf("Update(%d) error = %v", i, err)
@@ -291,7 +459,13 @@ func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if string(got.Payload) != `{"v":1}` && string(got.Payload) != `{"v":2}` {
+	var parsed struct {
+		V int `json:"v"`
+	}
+	if err := json.Unmarshal(got.Payload, &parsed); err != nil {
+		t.Fatalf("final payload invalid JSON: %v", err)
+	}
+	if parsed.V < 1 || parsed.V > 32 {
 		t.Fatalf("payload = %s, want one of the concurrent updates", got.Payload)
 	}
 }

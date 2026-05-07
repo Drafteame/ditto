@@ -11,7 +11,7 @@ import type {
 } from '../types'
 import * as api from '../api'
 import { Braces, Download, Radio, Refresh, Send, X } from './icons'
-import { detectTemplateVariables, isBuiltinVariable } from './EventTemplatesPanel'
+import { detectTemplateVariablesInValue, isBuiltinVariable } from './EventTemplatesPanel'
 
 interface SocketPanelProps {
   clients: SocketClient[]
@@ -99,7 +99,7 @@ export function SocketPanel({
     selectedTemplate.variables?.forEach(variable => {
       if (variable.name && !isBuiltinVariable(variable.name)) names.add(variable.name)
     })
-    detectTemplateVariables(JSON.stringify(selectedTemplate.payload)).forEach(name => {
+    detectTemplateVariablesInValue(selectedTemplate.payload).forEach(name => {
       if (!isBuiltinVariable(name)) names.add(name)
     })
     return [...names].sort((a, b) => a.localeCompare(b))
@@ -154,21 +154,16 @@ export function SocketPanel({
 
   function selectTemplate(template: EventTemplate) {
     setSelectedTemplateId(template.id)
-    setChannel(template.channel)
-    setAdapter((template.adapter || '') as SocketAdapter)
-    setTypeName(template.type_name || '')
-    setPayload(JSON.stringify(template.payload, null, 2))
-    setJsonError('')
     setTemplateVars(current => {
-      const next = { ...current }
+      const next: Record<string, string> = {}
       template.variables?.forEach(variable => {
-        if (!isBuiltinVariable(variable.name) && next[variable.name] === undefined) {
-          next[variable.name] = variable.default ?? ''
+        if (!isBuiltinVariable(variable.name)) {
+          next[variable.name] = current[variable.name] ?? variable.default ?? ''
         }
       })
-      detectTemplateVariables(JSON.stringify(template.payload)).forEach(name => {
+      detectTemplateVariablesInValue(template.payload).forEach(name => {
         if (!isBuiltinVariable(name) && next[name] === undefined) {
-          next[name] = ''
+          next[name] = current[name] ?? ''
         }
       })
       return next
@@ -344,6 +339,9 @@ export function SocketPanel({
           {selectedTemplate && (
             <div className="quick-template-form">
               <div className="quick-template-title">{selectedTemplate.name}</div>
+              <div className="template-detected" title={selectedTemplate.channel}>
+                {selectedTemplate.channel} / {selectedTemplate.adapter || 'client default'}
+              </div>
               {selectedTemplateVars.length === 0 ? (
                 <div className="template-detected">Only built-ins or no variables.</div>
               ) : (

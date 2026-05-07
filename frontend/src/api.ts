@@ -201,14 +201,20 @@ export async function dispatchEventTemplate(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   })
-  const data = await res.json().catch(() => null)
+  const text = await res.text().catch(() => '')
+  let data: EventTemplateDispatchResult | null = null
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch {
+    data = null
+  }
   if (!res.ok) {
     const missing = data?.missing_variables?.length
       ? `Missing variables: ${data.missing_variables.join(', ')}`
       : ''
-    const text = missing || await res.text().catch(() => '')
-    throw new Error(text || `HTTP ${res.status}`)
+    throw new Error(missing || text || `HTTP ${res.status}`)
   }
+  if (!data) throw new Error(`HTTP ${res.status}`)
   return data
 }
 
