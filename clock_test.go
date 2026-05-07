@@ -15,14 +15,13 @@ type fakeClock struct {
 }
 
 type fakeTimer struct {
-	clock      *fakeClock
-	id         int
-	ch         chan time.Time
-	deadline   time.Time
-	active     bool
-	firedAt    time.Time
-	firedSeq   int
-	generation int
+	clock    *fakeClock
+	id       int
+	ch       chan time.Time
+	deadline time.Time
+	active   bool
+	firedAt  time.Time
+	firedSeq int
 }
 
 func newFakeClock(start time.Time) *fakeClock {
@@ -91,7 +90,6 @@ func (t *fakeTimer) Stop() bool {
 	defer t.clock.mu.Unlock()
 	wasActive := t.active
 	t.active = false
-	t.generation++
 	return wasActive
 }
 
@@ -101,7 +99,6 @@ func (t *fakeTimer) Reset(d time.Duration) bool {
 	wasActive := t.active
 	t.active = true
 	t.deadline = t.clock.now.Add(d)
-	t.generation++
 	t.firedAt = time.Time{}
 	t.firedSeq = 0
 	select {

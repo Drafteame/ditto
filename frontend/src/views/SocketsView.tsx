@@ -19,7 +19,7 @@ export const SocketsView = memo(function SocketsView({
   serverInfo,
   showToast,
 }: SocketsViewProps) {
-  const logEntries = useLogStore(useShallow(state => state.logEntries))
+  const logEntries = useLogStore(state => state.logEntries)
   const {
     connectedClients,
     socketClientsLoading,

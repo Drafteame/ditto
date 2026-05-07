@@ -17,8 +17,8 @@ interface SequencesViewProps {
 export const SequencesView = memo(function SequencesView({
   showToast,
 }: SequencesViewProps) {
-  const eventTemplates = useEventTemplateStore(useShallow(state => state.templates))
-  const schemaTypes = useSchemaStore(useShallow(state => state.types))
+  const eventTemplates = useEventTemplateStore(state => state.templates)
+  const schemaTypes = useSchemaStore(state => state.types)
   const {
     sequences,
     playerStates,

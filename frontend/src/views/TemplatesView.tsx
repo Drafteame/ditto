@@ -16,7 +16,7 @@ interface TemplatesViewProps {
 export const TemplatesView = memo(function TemplatesView({
   showToast,
 }: TemplatesViewProps) {
-  const schemaTypes = useSchemaStore(useShallow(state => state.types))
+  const schemaTypes = useSchemaStore(state => state.types)
   const {
     eventTemplates,
     eventTemplatesLoading,

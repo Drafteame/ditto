@@ -23,7 +23,7 @@ export function useAppShellState() {
     clearLog: state.clearLog,
     selectLog: state.selectLog,
   })))
-  const uiState = useAppUiStore(useShallow(state => ({
+  const ui = useAppUiStore(useShallow(state => ({
     sidebarOpen: state.sidebarOpen,
     sidebarCollapsed: state.sidebarCollapsed,
     activeView: state.activeView,
@@ -31,8 +31,6 @@ export function useAppShellState() {
     updateInfo: state.updateInfo,
     modalState: state.modalState,
     qrOpen: state.qrOpen,
-  })))
-  const uiActions = useAppUiStore(useShallow(state => ({
     setSidebarOpen: state.setSidebarOpen,
     toggleSidebarOpen: state.toggleSidebarOpen,
     setSidebarCollapsed: state.setSidebarCollapsed,
@@ -47,7 +45,7 @@ export function useAppShellState() {
   return {
     mock,
     log,
-    ui: { ...uiState, ...uiActions },
+    ui,
     counts: {
       connectedClientCount: useSocketStore(state => state.connectedClients.length),
       eventTemplateCount: useEventTemplateStore(state => state.templates.length),

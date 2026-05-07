@@ -1,5 +1,4 @@
 import { memo } from 'react'
-import { useShallow } from 'zustand/react/shallow'
 import type { LogEntry, ServerInfo } from '../types'
 import { useLogStore } from '../stores/useLogStore'
 import { LogPanel } from '../components/LogPanel'
@@ -18,7 +17,7 @@ export const RequestsView = memo(function RequestsView({
   onSelectLog,
   onSaveAsMock,
 }: RequestsViewProps) {
-  const logEntries = useLogStore(useShallow(state => state.logEntries))
+  const logEntries = useLogStore(state => state.logEntries)
 
   return (
     <LogPanel

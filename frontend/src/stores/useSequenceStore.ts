@@ -119,7 +119,7 @@ export const useSequenceStore = create<SequenceStore>((set) => ({
       const waitingEvents = { ...current.waitingEvents }
       if (event.type === 'waiting') {
         waitingEvents[event.sequence_id] = event
-      } else if (event.type === 'step' || event.type === 'completed' || event.type === 'stopped' || event.type === 'error') {
+      } else if (event.type === 'step' || event.type === 'looped' || event.type === 'completed' || event.type === 'stopped' || event.type === 'error') {
         delete waitingEvents[event.sequence_id]
       }
       return {

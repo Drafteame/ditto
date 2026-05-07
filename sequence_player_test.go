@@ -102,7 +102,7 @@ func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	waitForActiveFakeTimers(t, clock, 1)
+	waitForRunnerArmed(t, ch, 500*time.Millisecond)
 	clock.Advance(10 * time.Millisecond)
 	event := waitForPlayerEvent(t, ch, "looped", 500*time.Millisecond)
 	if event.State.Status != PlayerPlaying {
@@ -242,14 +242,17 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), NewPlayerBroadcaster(), clock)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster, clock)
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	waitForActiveFakeTimers(t, clock, 1)
+	waitForRunnerArmed(t, ch, 500*time.Millisecond)
 	state, err := player.Pause(seq.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +360,7 @@ func TestSequencePlayerSpeedZeroDuringWaitDispatchesImmediately(t *testing.T) {
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	waitForActiveFakeTimers(t, clock, 1)
+	waitForRunnerArmed(t, ch, 500*time.Millisecond)
 	if _, err := player.SetSpeed(seq.ID, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +396,7 @@ func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	waitForActiveFakeTimers(t, clock, 1)
+	waitForRunnerArmed(t, ch, 500*time.Millisecond)
 	clock.Advance(100 * time.Millisecond)
 	if _, err := player.Pause(seq.ID); err != nil {
 		t.Fatal(err)
@@ -439,7 +442,7 @@ func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	waitForActiveFakeTimers(t, clock, 1)
+	waitForRunnerArmed(t, ch, 500*time.Millisecond)
 	clock.Advance(100 * time.Millisecond)
 	if _, err := player.Pause(seq.ID); err != nil {
 		t.Fatal(err)
@@ -482,7 +485,7 @@ func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	waitForActiveFakeTimers(t, clock, 1)
+	waitForRunnerArmed(t, ch, 500*time.Millisecond)
 	clock.Advance(100 * time.Millisecond)
 	if _, err := player.SetSpeed(seq.ID, 10); err != nil {
 		t.Fatal(err)
@@ -522,7 +525,7 @@ func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	waitForActiveFakeTimers(t, clock, 1)
+	waitForRunnerArmed(t, ch, 500*time.Millisecond)
 	if _, err := player.Stop(seq.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -935,6 +938,11 @@ func waitForPlayerEvent(t *testing.T, ch <-chan PlayerEvent, eventType string, t
 	}
 }
 
+func waitForRunnerArmed(t *testing.T, ch <-chan PlayerEvent, timeout time.Duration) PlayerEvent {
+	t.Helper()
+	return waitForPlayerEvent(t, ch, "waiting", timeout)
+}
+
 func assertNoPlayerEvent(t *testing.T, ch <-chan PlayerEvent, eventType string) {
 	t.Helper()
 	timer := time.NewTimer(20 * time.Millisecond)
@@ -949,29 +957,4 @@ func assertNoPlayerEvent(t *testing.T, ch <-chan PlayerEvent, eventType string) 
 			return
 		}
 	}
-}
-
-func waitForActiveFakeTimers(t *testing.T, clock *fakeClock, count int) {
-	t.Helper()
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if activeFakeTimerCount(clock) >= count {
-			return
-		}
-		runtime.Gosched()
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d active fake timers, got %d", count, activeFakeTimerCount(clock))
-}
-
-func activeFakeTimerCount(clock *fakeClock) int {
-	clock.mu.Lock()
-	defer clock.mu.Unlock()
-	active := 0
-	for _, timer := range clock.timers {
-		if timer.active {
-			active++
-		}
-	}
-	return active
 }
