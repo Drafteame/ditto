@@ -81,6 +81,7 @@ func (b *PlayerBroadcaster) Subscribe() chan PlayerEvent {
 func (b *PlayerBroadcaster) Unsubscribe(ch chan PlayerEvent) {
 	b.mu.Lock()
 	delete(b.clients, ch)
+	close(ch)
 	b.mu.Unlock()
 }
 
@@ -129,7 +130,10 @@ func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case <-heartbeat.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
-		case event := <-ch:
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
 			data, _ := json.Marshal(event)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
@@ -470,6 +474,7 @@ func (r *sequenceRunner) loop() {
 			remaining = delay
 			waitUntil = time.Now().Add(delay)
 			resetTimer(timer, delay)
+			// TODO: emit a "waiting" player event with the armed step and delay.
 		}
 
 		if waiting {
@@ -518,6 +523,9 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 		}
 		opts := normalizePlayOptions(cmd.opts)
 		nextRemaining := remaining
+		if opts.SpeedSet && opts.Speed != current.Speed && nextRemaining > 0 {
+			nextRemaining = rescaleRemaining(nextRemaining, current.Speed, opts.Speed)
+		}
 		if nextRemaining > 0 {
 			resetTimer(timer, nextRemaining)
 		}

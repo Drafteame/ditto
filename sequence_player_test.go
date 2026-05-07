@@ -101,12 +101,33 @@ func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
-	event := waitForPlayerEvent(t, ch, "looped", 500*time.Millisecond)
-	if event.State.Status != PlayerPlaying {
-		t.Fatalf("looped event should keep playing status, got %s", event.State.Status)
-	}
-	if _, err := player.Stop(seq.ID); err != nil {
-		t.Fatal(err)
+	var looped int
+	var completed int
+	deadline := time.After(50 * time.Millisecond)
+	for {
+		select {
+		case event := <-ch:
+			switch event.Type {
+			case "looped":
+				looped++
+				if event.State.Status != PlayerPlaying {
+					t.Fatalf("looped event should keep playing status, got %s", event.State.Status)
+				}
+			case "completed":
+				completed++
+			}
+		case <-deadline:
+			if looped == 0 {
+				t.Fatal("expected at least one looped event")
+			}
+			if completed != 0 {
+				t.Fatalf("loop emitted %d completed events", completed)
+			}
+			if _, err := player.Stop(seq.ID); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
 	}
 }
 
@@ -394,6 +415,48 @@ func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 	waitForPlayerEvent(t, ch, "step", 200*time.Millisecond)
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
 		t.Fatalf("paused remaining was not scaled, elapsed %s", elapsed)
+	}
+}
+
+func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Resume Speed",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 500, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster)
+	defer player.Shutdown(t.Context())
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	if _, err := player.Pause(seq.ID); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 10, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForPlayerEvent(t, ch, "step", 120*time.Millisecond)
+	if elapsed := time.Since(start); elapsed > 120*time.Millisecond {
+		t.Fatalf("resume speed did not rescale remaining, elapsed %s", elapsed)
 	}
 }
 

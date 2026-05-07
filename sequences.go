@@ -176,6 +176,8 @@ func (r *EventSequenceRegistry) Get(id string) (EventSequence, error) {
 }
 
 func (r *EventSequenceRegistry) Create(seq EventSequence) (EventSequence, error) {
+	// validateSequenceVariableKeyCollisions runs against the raw input
+	// before normalize trims keys, so "foo" and " foo " are caught.
 	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
 		return EventSequence{}, err
 	}
@@ -210,6 +212,8 @@ func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSeque
 	if !isSafeEventTemplateID(id) {
 		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
+	// validateSequenceVariableKeyCollisions runs against the raw input
+	// before normalize trims keys, so "foo" and " foo " are caught.
 	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
 		return EventSequence{}, err
 	}
@@ -391,14 +395,8 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 		if _, err := eventTemplateVariablesToStrings(step.VarsOverride); err != nil {
 			return err
 		}
-		if err := validateSequenceVariableKeys(step.VarsOverride, fmt.Sprintf("step %d vars_override", i+1)); err != nil {
-			return err
-		}
 	}
 	if _, err := eventTemplateVariablesToStrings(seq.Vars); err != nil {
-		return err
-	}
-	if err := validateSequenceVariableKeys(seq.Vars, "sequence vars"); err != nil {
 		return err
 	}
 	return nil

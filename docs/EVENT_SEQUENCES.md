@@ -76,6 +76,11 @@ Variables resolve with this precedence, from strongest to weakest:
 - template variable defaults
 - built-ins such as `{{now}}`, `{{now_unix_ms}}`, and `{{uuid}}`
 
+Built-ins are regenerated for each step. A sequence with three `{{uuid}}`
+placeholders in three different steps dispatches three different UUIDs. Use a
+sequence variable such as `runId` when the same value must be shared across
+steps.
+
 Inline payloads use the same resolver and typed casts as event templates:
 `{{int:x}}`, `{{float:x}}`, `{{bool:x}}`, and `{{json:x}}` must occupy the whole
 JSON string.
