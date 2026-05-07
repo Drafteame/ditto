@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 )
 
-const githubReleasesAPI = "https://api.github.com/repos/dtlucho/ditto/releases/latest"
+const githubReleasesAPI = "https://api.github.com/repos/Drafteame/ditto/releases/latest"
 
 // checkForUpdate queries GitHub Releases and returns the latest version tag
 // and a download URL for the current platform.
@@ -60,4 +62,47 @@ func searchString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// isNewerVersion returns true if `latest` is strictly newer than `current`.
+// Accepts versions in the format "v1.2.3" (the leading "v" is optional, extra
+// pre-release suffixes are ignored). Returns false if either version can't be
+// parsed or they're equal.
+func isNewerVersion(latest, current string) bool {
+	lp := parseVersion(latest)
+	cp := parseVersion(current)
+	if lp == nil || cp == nil {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if lp[i] != cp[i] {
+			return lp[i] > cp[i]
+		}
+	}
+	return false
+}
+
+// parseVersion extracts major, minor, patch from a semver string.
+// Returns nil if it can't parse.
+func parseVersion(v string) []int {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	// Drop any pre-release/build suffix (everything after "-" or "+")
+	for _, sep := range []string{"-", "+"} {
+		if idx := strings.Index(v, sep); idx >= 0 {
+			v = v[:idx]
+		}
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) < 3 {
+		return nil
+	}
+	out := make([]int, 3)
+	for i := 0; i < 3; i++ {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil {
+			return nil
+		}
+		out[i] = n
+	}
+	return out
 }

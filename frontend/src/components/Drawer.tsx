@@ -1,0 +1,234 @@
+import { useCallback, useEffect, useState } from 'react'
+import type { LogEntry, ServerInfo } from '../types'
+import { statusClass } from '../status'
+import { CodeBlock } from './CodeBlock'
+import { Alert, Bookmark, Check, Globe, X } from './icons'
+
+export const DRAWER_MIN_WIDTH = 340
+export const DRAWER_MAX_WIDTH = 720
+
+interface DrawerProps {
+  entry: LogEntry
+  serverInfo: ServerInfo | null
+  width: number
+  onResize: (next: number) => void
+  onClose: () => void
+  onSaveAsMock: (entry: LogEntry) => void
+}
+
+type Tab = 'response' | 'request' | 'headers'
+
+function StatusCell({ status }: { status: number }) {
+  return <span className={`st ${statusClass(status)} font-mono text-[12px]`}>{status || '-'}</span>
+}
+
+function prettyJson(raw: string | undefined): string {
+  if (!raw) return ''
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
+
+function formatHeaders(headers: Record<string, string[]> | undefined): string {
+  if (!headers) return ''
+  const names = Object.keys(headers).sort((a, b) => a.localeCompare(b))
+  const lines: string[] = []
+  for (const name of names) {
+    for (const value of headers[name]) {
+      lines.push(`${name}: ${value}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+function MatchBanner({ entry, target }: { entry: LogEntry; target: string }) {
+  if (entry.type === 'MOCK') {
+    return (
+      <div className="match-banner">
+        <Check />
+        <div className="flex-1 min-w-0">
+          <div className="title">Served from a mock</div>
+          <div className="detail">
+            <code>
+              {entry.method.toUpperCase()} {entry.path}
+            </code>{' '}
+            matched a configured mock.
+          </div>
+        </div>
+      </div>
+    )
+  }
+  if (entry.type === 'PROXY') {
+    return (
+      <div className="match-banner proxy">
+        <Globe />
+        <div className="flex-1 min-w-0">
+          <div className="title">Forwarded to target</div>
+          <div className="detail">
+            No mock matched — response came from{' '}
+            <code>{target || 'the configured target'}</code>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="match-banner miss">
+      <Alert />
+      <div className="flex-1 min-w-0">
+        <div className="title">No mock, no target</div>
+        <div className="detail">
+          Add a mock or configure a target URL to handle <code>{entry.path}</code>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function Drawer({
+  entry,
+  serverInfo,
+  width,
+  onResize,
+  onClose,
+  onSaveAsMock,
+}: DrawerProps) {
+  const [tab, setTab] = useState<Tab>('response')
+
+  useEffect(() => {
+    setTab('response')
+  }, [entry.id])
+
+  const handleDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startW = width
+      const onMove = (ev: MouseEvent) => {
+        const next = Math.max(
+          DRAWER_MIN_WIDTH,
+          Math.min(DRAWER_MAX_WIDTH, startW - (ev.clientX - startX)),
+        )
+        onResize(next)
+      }
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    },
+    [width, onResize],
+  )
+
+  const method = entry.method.toUpperCase()
+  const hasResponse = !!entry.response_body?.trim()
+  const target = serverInfo?.target ?? ''
+  const headersText = formatHeaders(entry.request_headers)
+
+  return (
+    <aside className="drawer" style={{ width }}>
+      <div
+        className="resize-handle left"
+        onMouseDown={handleDragStart}
+        title="Drag to resize"
+      />
+      <div className="drawer-head">
+        <div className="row">
+          <span className={`tag-type ${entry.type}`}>{entry.type}</span>
+          <span className={`method ${method}`}>{method}</span>
+          <StatusCell status={entry.status} />
+          <div className="flex-1" />
+          {entry.type === 'PROXY' && (
+            <button
+              type="button"
+              className="btn ghost"
+              style={{ height: 24, padding: '0 8px', fontSize: 11 }}
+              onClick={() => onSaveAsMock(entry)}
+              title="Save as mock"
+            >
+              <Bookmark /> Save
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn ghost icon"
+            onClick={onClose}
+            aria-label="Close drawer"
+          >
+            <X />
+          </button>
+        </div>
+        <div className="drawer-path">{entry.path}</div>
+        <div className="drawer-meta">
+          <span className="k">Time</span>
+          <span className="v">{entry.timestamp}</span>
+          <span className="k">Duration</span>
+          <span className="v">{entry.duration_ms}ms</span>
+        </div>
+      </div>
+
+      <div style={{ padding: '12px 14px 0' }}>
+        <MatchBanner entry={entry} target={target} />
+      </div>
+
+      <div className="tabs">
+        <button
+          type="button"
+          className={tab === 'response' ? 'active' : ''}
+          onClick={() => setTab('response')}
+        >
+          Response
+        </button>
+        <button
+          type="button"
+          className={tab === 'request' ? 'active' : ''}
+          onClick={() => setTab('request')}
+        >
+          Request
+        </button>
+        <button
+          type="button"
+          className={tab === 'headers' ? 'active' : ''}
+          onClick={() => setTab('headers')}
+        >
+          Headers
+        </button>
+      </div>
+
+      <div className="drawer-body">
+        {tab === 'response' &&
+          (hasResponse ? (
+            <CodeBlock text={prettyJson(entry.response_body)} />
+          ) : (
+            <div className="text-fg-3 font-sans text-[12px]">
+              No response body captured for this request.
+            </div>
+          ))}
+        {tab === 'request' && (
+          <CodeBlock
+            text={JSON.stringify(
+              { method, path: entry.path, timestamp: entry.timestamp },
+              null,
+              2,
+            )}
+          />
+        )}
+        {tab === 'headers' &&
+          (headersText ? (
+            <CodeBlock text={headersText} />
+          ) : (
+            <div className="text-fg-3 font-sans text-[12px]">
+              No request headers captured for this request.
+            </div>
+          ))}
+      </div>
+    </aside>
+  )
+}

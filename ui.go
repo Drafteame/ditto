@@ -22,13 +22,17 @@ var webFS embed.FS
 
 // LogEvent represents a single request passing through Ditto.
 type LogEvent struct {
-	Timestamp    string `json:"timestamp"`
-	Type         string `json:"type"` // MOCK, PROXY, MISS
-	Method       string `json:"method"`
-	Path         string `json:"path"`
-	Status       int    `json:"status"`
-	DurationMs   int64  `json:"duration_ms"`
-	ResponseBody string `json:"response_body,omitempty"`
+	Timestamp      string              `json:"timestamp"`
+	Type           string              `json:"type"` // MOCK, PROXY, MISS
+	Method         string              `json:"method"`
+	Path           string              `json:"path"`
+	Status         int                 `json:"status"`
+	DurationMs     int64               `json:"duration_ms"`
+	ResponseBody   string              `json:"response_body,omitempty"`
+	RequestHeaders map[string][]string `json:"request_headers,omitempty"`
+	MockIndex      int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
+	SequenceStep   int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
+	SequenceLen    int                 `json:"sequence_len,omitempty"`
 }
 
 // EventBus broadcasts log events to connected SSE clients.
@@ -208,6 +212,16 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 			return
 		}
 
+		// POST /__ditto__/api/mocks/{index}/sequence/reset
+		if r.Method == http.MethodPost && len(parts) == 3 && parts[1] == "sequence" && parts[2] == "reset" {
+			if ok := store.ResetSequence(index); !ok {
+				http.Error(w, "mock not found or not a sequence", http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		// PUT /__ditto__/api/mocks/{index}
 		if r.Method == http.MethodPut && len(parts) == 1 {
 			body, err := io.ReadAll(r.Body)
@@ -294,7 +308,7 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 			})
 			return
 		}
-		available := latest != "" && latest != version && version != "dev"
+		available := latest != "" && version != "dev" && isNewerVersion(latest, version)
 		json.NewEncoder(w).Encode(map[string]any{
 			"current":      version,
 			"latest":       latest,
@@ -338,6 +352,30 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 		}
 		dashURL := fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, info.Port)
 		openBrowser(dashURL)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Open an arbitrary URL in the system browser (used by the desktop app
+	// where target="_blank" doesn't escape the Wails webview).
+	mux.HandleFunc("/__ditto__/api/open-url", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			URL string `json:"url"`
+		}
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &req); err != nil || req.URL == "" {
+			http.Error(w, "url is required", http.StatusBadRequest)
+			return
+		}
+		// Only allow https URLs for safety
+		if !strings.HasPrefix(req.URL, "https://") && !strings.HasPrefix(req.URL, "http://") {
+			http.Error(w, "url must start with http:// or https://", http.StatusBadRequest)
+			return
+		}
+		openBrowser(req.URL)
 		w.WriteHeader(http.StatusOK)
 	})
 }

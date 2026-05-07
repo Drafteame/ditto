@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
 import * as api from '../api'
+import { X } from './icons'
 
 interface QRModalProps {
   onClose: () => void
@@ -10,45 +11,53 @@ export function QRModal({ onClose }: QRModalProps) {
   const urlRef = useRef<HTMLParagraphElement>(null)
 
   useEffect(() => {
-    api.fetchQR().then(async ({ blob, url }) => {
-      const img = await createImageBitmap(blob)
-      const canvas = canvasRef.current
-      if (!canvas) return
-      canvas.width = img.width
-      canvas.height = img.height
-      const ctx = canvas.getContext('2d')
-      ctx?.drawImage(img, 0, 0)
-      if (urlRef.current) urlRef.current.textContent = url
-    }).catch(err => {
-      console.error('Failed to generate QR code:', err)
-    })
+    api
+      .fetchQR()
+      .then(async ({ blob, url }) => {
+        const img = await createImageBitmap(blob)
+        const canvas = canvasRef.current
+        if (!canvas) return
+        canvas.width = img.width
+        canvas.height = img.height
+        const ctx = canvas.getContext('2d')
+        ctx?.drawImage(img, 0, 0)
+        if (urlRef.current) urlRef.current.textContent = url
+      })
+      .catch(err => {
+        console.error('Failed to generate QR code:', err)
+      })
   }, [])
 
-  const handleOverlayClick = useCallback((e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onClose()
-  }, [onClose])
+  const handleOverlayMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target === e.currentTarget) onClose()
+    },
+    [onClose],
+  )
 
   return (
-    <div
-      onClick={handleOverlayClick}
-      className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100]"
-    >
-      <div onClick={e => e.stopPropagation()} className="bg-dt-surface border border-dt-border rounded-xl w-[340px] overflow-hidden">
-        <div className="flex justify-between items-center px-5 py-4 border-b border-dt-border">
-          <h3 className="text-base font-semibold">Open on your phone</h3>
-          <button
-            onClick={onClose}
-            className="bg-transparent border-none text-dt-muted text-[22px] cursor-pointer px-1 hover:text-dt-text"
-          >
-            &times;
+    <div onMouseDown={handleOverlayMouseDown} className="modal-scrim">
+      <div
+        onMouseDown={e => e.stopPropagation()}
+        className="modal"
+        style={{ width: 360 }}
+      >
+        <div className="modal-head">
+          <h2>Open on your phone</h2>
+          <div className="flex-1" />
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">
+            <X />
           </button>
         </div>
-        <div className="p-5 text-center">
-          <p className="text-[13px] text-dt-muted mb-4 leading-relaxed">
+        <div className="modal-body text-center">
+          <p className="text-[12.5px] text-fg-2 mb-4 leading-relaxed">
             Scan this QR code with your phone camera to open the Ditto dashboard.
           </p>
-          <canvas ref={canvasRef} className="rounded-lg bg-white p-3" />
-          <p ref={urlRef} className="font-mono text-[11px] text-dt-accent mt-4 break-all" />
+          <canvas ref={canvasRef} className="rounded-md bg-white p-3 mx-auto" />
+          <p
+            ref={urlRef}
+            className="font-mono text-[11px] text-accent mt-4 break-all"
+          />
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import * as api from '../api'
+import { LogoMark, Refresh, Trash, QR, Globe, Menu } from './icons'
 
 interface HeaderProps {
   version: string
@@ -30,52 +31,79 @@ export function Header({
   const showQRBtn = !isMobile
 
   return (
-    <header className="flex justify-between items-center px-5 py-3 border-b border-dt-border bg-dt-surface">
-      <div className="flex items-center gap-3">
-        <button
-          className="md:hidden bg-transparent border-none text-dt-text text-xl cursor-pointer px-1.5 py-0.5"
-          onClick={onToggleSidebar}
-        >
-          &#9776;
-        </button>
-        <h1 className="text-base font-bold tracking-widest text-dt-accent">DITTO</h1>
+    <header className="h-[52px] flex items-center gap-2.5 px-3.5 border-b border-line bg-bg-1 flex-shrink-0">
+      <button
+        type="button"
+        onClick={onToggleSidebar}
+        data-tip="Toggle sidebar (⌘\)"
+        data-tip-side="bottom"
+        aria-label="Toggle sidebar"
+        className="btn ghost icon md:hidden"
+      >
+        <Menu />
+      </button>
+
+      <div className="flex items-center gap-2.5">
+        <LogoMark size={26} />
+        <span className="font-bold text-[15px] tracking-[0.01em] text-fg-0">Ditto</span>
         {version && (
-          <span className="text-[11px] text-dt-muted font-normal">{version}</span>
+          <span className="font-mono text-[11px] text-fg-3 px-1.5 py-0.5 border border-line rounded-xs">
+            {version}
+          </span>
         )}
-        <span
-          className={`text-xs px-2 py-0.5 rounded-xl font-medium ${
-            connected
-              ? 'bg-[rgba(63,185,80,0.15)] text-dt-green'
-              : 'bg-[rgba(248,81,73,0.15)] text-dt-red'
-          }`}
-        >
-          {connected ? 'Connected' : 'Disconnected'}
-        </span>
       </div>
-      <div className="flex gap-2">
+
+      <span className={`pill ${connected ? 'ok' : 'err'}`}>
+        <span className="dot" />
+        {connected ? 'Connected' : 'Disconnected'}
+      </span>
+
+      <div className="flex-1" />
+
+      <div className="flex items-center gap-1.5">
         {showBrowserBtn && (
           <button
+            type="button"
             onClick={handleOpenBrowser}
-            title="Open dashboard in browser"
-            className="btn"
+            data-tip="Open dashboard in your browser"
+            data-tip-side="bottom"
+            className="btn ghost"
           >
-            Browser
+            <Globe />
+            <span className="max-md:hidden">Browser</span>
           </button>
         )}
         {showQRBtn && (
           <button
+            type="button"
             onClick={onShowQR}
-            title="Scan to open on your phone"
-            className="btn"
+            data-tip="Show QR code to connect your phone"
+            data-tip-side="bottom"
+            className="btn ghost"
           >
-            QR Code
+            <QR />
+            <span className="max-md:hidden">QR</span>
           </button>
         )}
-        <button onClick={onReloadMocks} className="btn">
-          Reload Mocks
+        <button
+          type="button"
+          onClick={onReloadMocks}
+          className="btn ghost"
+          data-tip="Reload mock files from disk"
+          data-tip-side="bottom"
+        >
+          <Refresh />
+          <span className="max-md:hidden">Reload</span>
         </button>
-        <button onClick={onClearLog} className="btn">
-          Clear Log
+        <button
+          type="button"
+          onClick={onClearLog}
+          className="btn ghost"
+          data-tip="Clear request log (⌘L)"
+          data-tip-side="bottom"
+        >
+          <Trash />
+          <span className="max-md:hidden">Clear</span>
         </button>
       </div>
     </header>

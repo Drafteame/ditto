@@ -1,7 +1,19 @@
-import { useState, useEffect, useCallback } from 'react'
-import type { Mock } from '../types'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import type { ReactNode } from 'react'
+import type { Mock, ResponseMode, SequenceStep } from '../types'
 import * as api from '../api'
-import { JsonEditor } from './JsonSearch'
+import { useCopy } from '../hooks/useCopy'
+import { useSearch } from '../hooks/useSearch'
+import { statusClass } from '../status'
+import { Alert, Braces, Check, ChevronRight, Copy, Plus, Refresh, Trash, X } from './icons'
+import { SearchBar } from './SearchBar'
+import { useConfirm } from './ConfirmDialog'
+
+export interface SequenceStepDraft {
+  status: number
+  body: string // JSON as editable text
+  delay: number
+}
 
 export interface MockEditorState {
   editingIndex: number | null // null = creating new
@@ -14,6 +26,38 @@ export interface MockEditorState {
   matchHeaders: string
   matchBody: string
   matchOpen: boolean
+  responseMode: ResponseMode
+  sequenceSteps: SequenceStepDraft[]
+  sequenceOnEnd: 'loop' | 'stay' | 'reset'
+  sequenceCurrentStep: number
+}
+
+function makeDefaultStep(status: number, body: string): SequenceStepDraft {
+  return { status, body, delay: 0 }
+}
+
+function sequenceStepsFromMock(mock: Mock): SequenceStepDraft[] {
+  const steps = mock.sequence?.steps ?? []
+  return steps.map(s => ({
+    status: s.status || 200,
+    body: jsonToText(s.body),
+    delay: s.delay_ms || 0,
+  }))
+}
+
+function jsonToText(v: unknown): string {
+  try {
+    return JSON.stringify(v, null, 2)
+  } catch {
+    return ''
+  }
+}
+
+function truncatePreview(text: string, maxLines = 6): string {
+  if (!text) return ''
+  const lines = text.split('\n')
+  if (lines.length <= maxLines) return text
+  return lines.slice(0, maxLines).join('\n') + '\n…'
 }
 
 interface MockEditorModalProps {
@@ -59,6 +103,10 @@ export function createNewMockState(
     matchHeaders: '',
     matchBody: '',
     matchOpen: !!queryString,
+    responseMode: 'static',
+    sequenceSteps: [],
+    sequenceOnEnd: 'loop',
+    sequenceCurrentStep: 0,
   }
 }
 
@@ -84,12 +132,18 @@ export function createEditMockState(index: number, mock: Mock): MockEditorState 
     matchHeaders: mapToLines(match.headers, ': '),
     matchBody: match.body ? JSON.stringify(match.body, null, 2) : '',
     matchOpen: pills > 0,
+    responseMode: mock.response_mode === 'sequence' ? 'sequence' : 'static',
+    sequenceSteps: sequenceStepsFromMock(mock),
+    sequenceOnEnd: mock.sequence?.on_end ?? 'loop',
+    sequenceCurrentStep: mock.sequence?.current_step ?? 0,
   }
 }
 
 function mapToLines(obj: Record<string, string> | undefined, separator: string): string {
   if (!obj) return ''
-  return Object.entries(obj).map(([k, v]) => `${k}${separator}${v}`).join('\n')
+  return Object.entries(obj)
+    .map(([k, v]) => `${k}${separator}${v}`)
+    .join('\n')
 }
 
 function linesToMap(text: string, separator: string): Record<string, string> | null {
@@ -116,7 +170,206 @@ function getMatchPillCount(match: Mock['match']): number {
   return count
 }
 
-export function MockEditorModal({ state: initial, onClose, onSaved, showToast }: MockEditorModalProps) {
+function syncOverlayScroll(
+  textarea: HTMLTextAreaElement | null,
+  mirror: HTMLPreElement | null,
+) {
+  if (!textarea || !mirror) return
+  mirror.scrollTop = textarea.scrollTop
+  mirror.scrollLeft = textarea.scrollLeft
+}
+
+function scrollMatchInEditableOverlay(
+  textarea: HTMLTextAreaElement | null,
+  mirror: HTMLPreElement | null,
+  match: HTMLElement | null,
+) {
+  if (!textarea || !mirror || !match) return
+
+  const targetTop = Math.max(0, match.offsetTop - textarea.clientHeight / 3)
+  const targetLeft = Math.max(0, match.offsetLeft - textarea.clientWidth / 3)
+
+  textarea.scrollTop = targetTop
+  textarea.scrollLeft = targetLeft
+  mirror.scrollTop = targetTop
+  mirror.scrollLeft = targetLeft
+}
+
+function JsonEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const preRef = useRef<HTMLPreElement>(null)
+  const matchRefs = useRef<Array<HTMLSpanElement | null>>([])
+  // Tracks whether the current idx change was triggered by an explicit go()
+  // call (Enter / arrow buttons) vs. an automatic reset from query change.
+  const explicitNavRef = useRef(false)
+  // Tracks the last query we scrolled to, so we can ignore match recalculations
+  // caused by the textarea value changing (not by the user typing a new query).
+  const lastScrolledQueryRef = useRef('')
+
+  const search = useSearch(value)
+  const { copied, handleCopy } = useCopy(value)
+
+  // Highlighted content rendered in the pre overlay
+  const highlightedContent = useMemo(() => {
+    const q = search.query.trim()
+    if (!q || search.matches.length === 0) return value
+    const parts: ReactNode[] = []
+    let last = 0
+    search.matches.forEach((start, i) => {
+      const end = start + q.length
+      if (start > last) parts.push(value.slice(last, start))
+      parts.push(
+        <span
+          key={`${start}-${i}`}
+          ref={el => {
+            matchRefs.current[i] = el
+          }}
+          className={i === search.idx ? 'match active' : 'match'}
+        >
+          {value.slice(start, end)}
+        </span>,
+      )
+      last = end
+    })
+    if (last < value.length) parts.push(value.slice(last))
+    return parts
+  }, [value, search.query, search.matches, search.idx])
+
+  // Keep the pre scroll in sync with the textarea scroll
+  const syncScroll = useCallback(() => {
+    syncOverlayScroll(textareaRef.current, preRef.current)
+  }, [])
+
+  // Explicit navigation (Enter / ↑↓ buttons): focus + select + scroll.
+  // Only acts when goExplicit() set the flag — ignores changes caused by editing.
+  useEffect(() => {
+    if (!explicitNavRef.current || search.matches.length === 0) return
+    explicitNavRef.current = false
+    const start = search.matches[search.idx]
+    const end = start + search.query.trim().length
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      const activeMatch = matchRefs.current[search.idx]
+      if (!ta) return
+      ta.focus({ preventScroll: true })
+      ta.setSelectionRange(start, end)
+      scrollMatchInEditableOverlay(ta, preRef.current, activeMatch)
+    })
+  }, [search.idx, search.matches, search.query])
+
+  // Query-change navigation: scroll to the first match only when the search
+  // query itself changes. We guard with a ref so that match recalculations
+  // caused by typing in the textarea (same query, different text) are ignored.
+  useEffect(() => {
+    if (lastScrolledQueryRef.current === search.query) return
+    lastScrolledQueryRef.current = search.query
+    if (!search.query.trim() || search.matches.length === 0) return
+    requestAnimationFrame(() => {
+      scrollMatchInEditableOverlay(textareaRef.current, preRef.current, matchRefs.current[0])
+    })
+  }, [search.query, search.matches])
+
+  // Wraps go() so the effect above knows it was an intentional navigation
+  const goExplicit = useCallback(
+    (dir: 1 | -1) => {
+      explicitNavRef.current = true
+      search.go(dir)
+    },
+    [search.go],
+  )
+
+  const { error, lineCount } = useMemo(() => {
+    const lines = value.split('\n').length
+    if (!value.trim()) return { error: null as string | null, lineCount: lines }
+    try {
+      JSON.parse(value)
+      return { error: null, lineCount: lines }
+    } catch (e) {
+      return { error: (e as Error).message, lineCount: lines }
+    }
+  }, [value])
+
+  const handleFormat = useCallback(() => {
+    const text = value.trim()
+    if (!text) return
+    // Save scroll before onChange so the viewport doesn't jump after reformatting.
+    const savedScroll = textareaRef.current?.scrollTop ?? 0
+    const restoreScroll = () =>
+      requestAnimationFrame(() => {
+        if (textareaRef.current) textareaRef.current.scrollTop = savedScroll
+        if (preRef.current) preRef.current.scrollTop = savedScroll
+      })
+    try {
+      onChange(JSON.stringify(JSON.parse(text), null, 2))
+      restoreScroll()
+      return
+    } catch {}
+    try {
+      // Strip trailing commas before } or ] and retry
+      const cleaned = text.replace(/,(\s*[}\]])/g, '$1')
+      onChange(JSON.stringify(JSON.parse(cleaned), null, 2))
+      restoreScroll()
+    } catch {}
+  }, [value, onChange])
+
+  return (
+    <div className="json-editor">
+      <SearchBar {...search} go={goExplicit}>
+        <button
+          type="button"
+          className="btn ghost icon"
+          style={{ width: 22, height: 22 }}
+          disabled={!value.trim()}
+          onClick={handleFormat}
+          title="Format JSON"
+        >
+          <Braces size={12} />
+        </button>
+        <button
+          type="button"
+          className="btn ghost icon"
+          style={{ width: 22, height: 22, color: copied ? 'var(--accent)' : undefined }}
+          onClick={handleCopy}
+          title="Copy JSON"
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+      </SearchBar>
+      <div className="json-editor-overlay">
+        <pre ref={preRef} className="json-editor-pre" aria-hidden="true">
+          {highlightedContent}
+        </pre>
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          onScroll={syncScroll}
+          spellCheck={false}
+        />
+      </div>
+      <div className={`json-status ${error ? 'err' : 'ok'}`}>
+        {error ? (
+          <>
+            <Alert />
+            <span>{error}</span>
+          </>
+        ) : (
+          <>
+            <Check />
+            <span>Valid JSON · {lineCount} lines</span>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function MockEditorModal({
+  state: initial,
+  onClose,
+  onSaved,
+  showToast,
+}: MockEditorModalProps) {
   const [method, setMethod] = useState(initial.method)
   const [path, setPath] = useState(initial.path)
   const [status, setStatus] = useState(initial.status)
@@ -126,8 +379,20 @@ export function MockEditorModal({ state: initial, onClose, onSaved, showToast }:
   const [matchHeaders, setMatchHeaders] = useState(initial.matchHeaders)
   const [matchBody, setMatchBody] = useState(initial.matchBody)
   const [matchOpen, setMatchOpen] = useState(initial.matchOpen)
+  const [responseMode, setResponseMode] = useState<ResponseMode>(initial.responseMode)
+  const [sequenceSteps, setSequenceSteps] = useState<SequenceStepDraft[]>(initial.sequenceSteps)
+  const [sequenceOnEnd, setSequenceOnEnd] = useState(initial.sequenceOnEnd)
+  const [sequenceCurrentStep, setSequenceCurrentStep] = useState(initial.sequenceCurrentStep)
+  const [editingStepIndex, setEditingStepIndex] = useState<number | null>(null)
+  const stepEditorRef = useRef<HTMLDivElement | null>(null)
+  const confirm = useConfirm()
 
-  // Reset when initial state changes
+  useEffect(() => {
+    if (editingStepIndex !== null) {
+      stepEditorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [editingStepIndex])
+
   useEffect(() => {
     setMethod(initial.method)
     setPath(initial.path)
@@ -138,14 +403,29 @@ export function MockEditorModal({ state: initial, onClose, onSaved, showToast }:
     setMatchHeaders(initial.matchHeaders)
     setMatchBody(initial.matchBody)
     setMatchOpen(initial.matchOpen)
+    setResponseMode(initial.responseMode)
+    setSequenceSteps(initial.sequenceSteps)
+    setSequenceOnEnd(initial.sequenceOnEnd)
+    setSequenceCurrentStep(initial.sequenceCurrentStep)
+    setEditingStepIndex(null)
   }, [initial])
+
+  const switchToSequence = useCallback(() => {
+    setResponseMode('sequence')
+    // Seed with a step built from the current static body so the user
+    // doesn't start from empty.
+    setSequenceSteps(prev => {
+      if (prev.length > 0) return prev
+      return [makeDefaultStep(status || 200, body || '{}')]
+    })
+  }, [body, status])
 
   const handleSave = useCallback(async () => {
     let parsedBody: unknown
     try {
       parsedBody = JSON.parse(body)
     } catch (err) {
-      alert('Invalid JSON in response body: ' + (err as Error).message)
+      showToast(`Invalid JSON in response body: ${(err as Error).message}`, 'warn')
       return
     }
 
@@ -159,7 +439,7 @@ export function MockEditorModal({ state: initial, onClose, onSaved, showToast }:
       try {
         match.body = JSON.parse(matchBody)
       } catch (err) {
-        alert('Invalid JSON in match body: ' + (err as Error).message)
+        showToast(`Invalid JSON in match body: ${(err as Error).message}`, 'warn')
         return
       }
     }
@@ -173,167 +453,421 @@ export function MockEditorModal({ state: initial, onClose, onSaved, showToast }:
     }
     if (Object.keys(match).length > 0) mock.match = match
 
+    // Always persist both static body AND sequence steps when the user has
+    // defined any — response_mode decides which one the backend serves.
+    if (sequenceSteps.length > 0) {
+      const serialized: SequenceStep[] = []
+      for (let i = 0; i < sequenceSteps.length; i++) {
+        const s = sequenceSteps[i]
+        let parsedStepBody: unknown
+        try {
+          parsedStepBody = s.body.trim() ? JSON.parse(s.body) : null
+        } catch (err) {
+          showToast(
+            `Invalid JSON in step ${i + 1}: ${(err as Error).message}`,
+            'warn',
+          )
+          return
+        }
+        serialized.push({
+          status: s.status || 200,
+          body: parsedStepBody,
+          delay_ms: s.delay || 0,
+        })
+      }
+      mock.sequence = { steps: serialized, on_end: sequenceOnEnd }
+    }
+    mock.response_mode = responseMode
+
     try {
       const result = await api.saveMock(
         mock as unknown as Omit<Mock, 'enabled'>,
         initial.editingIndex,
       )
       if (result.disabled_duplicates?.length) {
-        showToast(`${result.disabled_duplicates.length} duplicate mock(s) auto-disabled`, 'warn')
+        showToast(
+          `${result.disabled_duplicates.length} duplicate mock(s) auto-disabled`,
+          'warn',
+        )
       }
       onClose()
       onSaved()
     } catch (err) {
-      alert('Failed to save mock: ' + (err as Error).message)
+      showToast(`Failed to save mock: ${(err as Error).message}`, 'warn')
     }
-  }, [method, path, status, delay, body, matchQuery, matchHeaders, matchBody, initial.editingIndex, onClose, onSaved, showToast])
+  }, [
+    method,
+    path,
+    status,
+    delay,
+    body,
+    matchQuery,
+    matchHeaders,
+    matchBody,
+    responseMode,
+    sequenceSteps,
+    sequenceOnEnd,
+    initial.editingIndex,
+    onClose,
+    onSaved,
+    showToast,
+  ])
 
-  const handleOverlayClick = useCallback((e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) onClose()
-  }, [onClose])
+  const handleDelete = useCallback(async () => {
+    if (initial.editingIndex === null) return
+    const ok = await confirm({
+      title: 'Delete mock?',
+      message: (
+        <>
+          <code className="font-mono text-fg-0">
+            {method} {path}
+          </code>{' '}
+          will be removed and its JSON file deleted from disk.
+        </>
+      ),
+      confirmLabel: 'Delete',
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await api.deleteMock(initial.editingIndex)
+      onClose()
+      onSaved()
+      showToast('Mock deleted')
+    } catch (err) {
+      showToast(`Failed to delete mock: ${(err as Error).message}`, 'warn')
+    }
+  }, [initial.editingIndex, method, path, confirm, onClose, onSaved, showToast])
+
+  const handleOverlayMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target === e.currentTarget) onClose()
+    },
+    [onClose],
+  )
+
+  const handleResetCounter = useCallback(async () => {
+    if (initial.editingIndex === null) return
+    try {
+      await api.resetSequence(initial.editingIndex)
+      setSequenceCurrentStep(0)
+      showToast('Sequence counter reset')
+    } catch (err) {
+      showToast(`Failed to reset counter: ${(err as Error).message}`, 'warn')
+    }
+  }, [initial.editingIndex, showToast])
+
+  const addStep = useCallback(() => {
+    setSequenceSteps(prev => {
+      const base = prev.length > 0 ? prev[prev.length - 1] : { status: status || 200, body: '{}', delay: 0 }
+      const next = [...prev, { status: base.status || 200, body: base.body || '{}', delay: 0 }]
+      setEditingStepIndex(next.length - 1)
+      return next
+    })
+  }, [status])
+
+  const updateStep = useCallback((index: number, patch: Partial<SequenceStepDraft>) => {
+    setSequenceSteps(prev => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)))
+  }, [])
+
+  const removeStep = useCallback((index: number) => {
+    setSequenceSteps(prev => prev.filter((_, i) => i !== index))
+    setEditingStepIndex(prev => (prev === index ? null : prev !== null && prev > index ? prev - 1 : prev))
+  }, [])
 
   const isEditing = initial.editingIndex !== null
+  const nextStepForDisplay =
+    sequenceSteps.length > 0
+      ? ((sequenceCurrentStep % sequenceSteps.length) + sequenceSteps.length) % sequenceSteps.length
+      : 0
 
   return (
-    <div
-      onClick={handleOverlayClick}
-      className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100]"
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        className="bg-dt-surface border border-dt-border rounded-xl w-[700px] max-w-[90vw] max-h-[85vh] flex flex-col max-md:w-full max-md:max-w-[100vw] max-md:max-h-[100vh] max-md:h-screen max-md:rounded-none"
-      >
-        {/* Header */}
-        <div className="flex justify-between items-center px-5 py-4 border-b border-dt-border">
-          <h3 className="text-base font-semibold">{isEditing ? 'Edit Mock' : 'Save as Mock'}</h3>
-          <button
-            onClick={onClose}
-            className="bg-transparent border-none text-dt-muted text-[22px] cursor-pointer px-1 hover:text-dt-text"
-          >
-            &times;
+    <div onMouseDown={handleOverlayMouseDown} className="modal-scrim">
+      <div onMouseDown={e => e.stopPropagation()} className="modal">
+        <div className="modal-head">
+          <h2>{isEditing ? 'Edit mock' : 'Save as mock'}</h2>
+          <span className="sub">
+            {method} {path}
+          </span>
+          <div className="flex-1" />
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">
+            <X />
           </button>
         </div>
 
-        {/* Body */}
-        <div className="px-5 py-5 overflow-y-auto flex-1">
-          {/* Top row: Method, Path, Status, Delay */}
-          <div className="flex gap-4 mb-5 max-md:flex-col max-md:gap-3">
-            <div className="flex flex-col gap-2 w-[120px] max-md:w-full">
-              <label className="form-label">Method</label>
-              <select value={method} onChange={e => setMethod(e.target.value)} className="form-input">
-                {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => (
+        <div className="modal-body">
+          <div className="grid-2">
+            <div className="fld">
+              <label>Method</label>
+              <select className="select" value={method} onChange={e => setMethod(e.target.value)}>
+                {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => (
                   <option key={m}>{m}</option>
                 ))}
               </select>
             </div>
-            <div className="flex flex-col gap-2 flex-1 max-md:w-full">
-              <label className="form-label">Path</label>
+            <div className="fld">
+              <label>Path</label>
               <input
-                type="text"
+                className="input"
                 value={path}
                 onChange={e => setPath(e.target.value)}
                 placeholder="/api/v1/users"
-                className="form-input"
               />
             </div>
-            <div className="flex flex-col gap-2 w-20 max-md:w-full">
-              <label className="form-label">Status</label>
+            <div className="fld">
+              <label>Status</label>
               <input
+                className={`input ${statusClass(status)}`}
                 type="number"
                 value={status}
                 onChange={e => setStatus(parseInt(e.target.value) || 200)}
-                className="form-input"
               />
             </div>
-            <div className="flex flex-col gap-2 w-[100px] max-md:w-full">
-              <label className="form-label">Delay (ms)</label>
+            <div className="fld">
+              <label>Delay (ms)</label>
               <input
+                className="input"
                 type="number"
                 value={delay}
                 onChange={e => setDelay(parseInt(e.target.value) || 0)}
-                className="form-input"
               />
             </div>
           </div>
 
-          {/* Response body */}
-          <div className="flex flex-col gap-2">
-            <label className="form-label">Response Body (JSON)</label>
-            <JsonEditor
-              value={body}
-              onChange={setBody}
-              minRows={12}
-            />
+          <div className="fld">
+            <label>Response mode</label>
+            <div className="seg" role="tablist" aria-label="Response mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={responseMode === 'static'}
+                className={responseMode === 'static' ? 'active' : ''}
+                onClick={() => setResponseMode('static')}
+              >
+                Static
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={responseMode === 'sequence'}
+                className={responseMode === 'sequence' ? 'active' : ''}
+                onClick={switchToSequence}
+              >
+                Sequence
+              </button>
+            </div>
           </div>
 
-          {/* Match conditions */}
-          <div className="mt-4 border-t border-dt-border pt-4">
-            <button
-              onClick={() => setMatchOpen(!matchOpen)}
-              className="text-xs text-dt-muted uppercase tracking-wider cursor-pointer select-none bg-transparent border-none p-1 hover:text-dt-text"
-            >
-              {matchOpen ? '▼' : '▶'} Match conditions (optional)
-            </button>
-            {matchOpen && (
-              <div className="mt-2">
-                <p className="text-xs text-dt-muted mb-3 leading-relaxed">
-                  Use these to differentiate multiple mocks for the same method + path.
-                  A request must satisfy every defined condition to match. Leave empty to match any request.
-                </p>
-
-                <div className="flex flex-col gap-2 mt-3">
-                  <label className="form-label">
-                    Query parameters (one per line, <code className="bg-dt-bg px-1 py-px rounded text-[11px]">key=value</code>)
-                  </label>
-                  <textarea
-                    value={matchQuery}
-                    onChange={e => setMatchQuery(e.target.value)}
-                    rows={3}
-                    spellCheck={false}
-                    placeholder={'status=pending\nlimit=20'}
-                    className="form-input min-h-[60px] text-xs"
-                  />
+          {responseMode === 'static' ? (
+            <div className="fld">
+              <label>Response body (JSON)</label>
+              <JsonEditor value={body} onChange={setBody} />
+            </div>
+          ) : (
+            <div className="seq-editor">
+              <div className="seq-editor-head">
+                <div className="seg">
+                  <button
+                    type="button"
+                    className={sequenceOnEnd === 'loop' ? 'active' : ''}
+                    onClick={() => setSequenceOnEnd('loop')}
+                  >
+                    Loop
+                  </button>
+                  <button
+                    type="button"
+                    className={sequenceOnEnd === 'stay' ? 'active' : ''}
+                    onClick={() => setSequenceOnEnd('stay')}
+                  >
+                    Stay on last
+                  </button>
+                  <button
+                    type="button"
+                    className={sequenceOnEnd === 'reset' ? 'active' : ''}
+                    onClick={() => setSequenceOnEnd('reset')}
+                  >
+                    Reset
+                  </button>
                 </div>
-
-                <div className="flex flex-col gap-2 mt-3">
-                  <label className="form-label">
-                    Request headers (one per line, <code className="bg-dt-bg px-1 py-px rounded text-[11px]">key: value</code>)
-                  </label>
-                  <textarea
-                    value={matchHeaders}
-                    onChange={e => setMatchHeaders(e.target.value)}
-                    rows={3}
-                    spellCheck={false}
-                    placeholder="x-user-id: 123"
-                    className="form-input min-h-[60px] text-xs"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-2 mt-3">
-                  <label className="form-label">
-                    Request body subset (JSON — partial match)
-                  </label>
-                  <textarea
-                    value={matchBody}
-                    onChange={e => setMatchBody(e.target.value)}
-                    rows={4}
-                    spellCheck={false}
-                    placeholder='{"type": "credit"}'
-                    className="form-input min-h-[60px] text-xs"
-                  />
-                </div>
+                <div className="flex-1" />
+                {isEditing && (
+                  <button type="button" className="btn ghost" onClick={handleResetCounter}>
+                    <Refresh size={14} /> Reset counter
+                  </button>
+                )}
               </div>
-            )}
-          </div>
+
+              {sequenceSteps.length > 0 && (
+                <div className="seq-editor-status">
+                  <span>
+                    Next call returns <b>step {nextStepForDisplay + 1}</b> of {sequenceSteps.length}.
+                  </span>
+                </div>
+              )}
+
+              <div className="seq-timeline">
+                {sequenceSteps.map((step, i) => {
+                  const active = i === nextStepForDisplay
+                  const editing = i === editingStepIndex
+                  return (
+                    <Fragment key={i}>
+                      <div
+                        className={`seq-step ${active ? 'active' : ''} ${editing ? 'editing' : ''}`}
+                      >
+                        <span className="n">step {i + 1}</span>
+                        <h4>
+                          <span className={`tag-type ${statusClass(step.status)}`}>
+                            {step.status}
+                          </span>
+                          {active && <span className="next-tag">NEXT</span>}
+                        </h4>
+                        <pre className="preview">{truncatePreview(step.body)}</pre>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className={`btn ghost ${editing ? 'active' : ''}`}
+                            style={{ flex: 1 }}
+                            onClick={() => setEditingStepIndex(prev => (prev === i ? null : i))}
+                          >
+                            {editing ? 'Editing…' : 'Edit'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn ghost"
+                            aria-label={`Delete step ${i + 1}`}
+                            onClick={() => removeStep(i)}
+                          >
+                            <Trash size={12} />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="seq-arrow">
+                        <ChevronRight size={18} />
+                      </div>
+                    </Fragment>
+                  )
+                })}
+                <button type="button" className="seq-end" onClick={addStep}>
+                  <Plus size={18} />
+                  <div style={{ marginTop: 6 }}>Add step</div>
+                </button>
+              </div>
+
+              {editingStepIndex !== null && sequenceSteps[editingStepIndex] && (
+                <div className="seq-step-editor" ref={stepEditorRef}>
+                  <div className="fld">
+                    <label>Status</label>
+                    <input
+                      className={`input ${statusClass(sequenceSteps[editingStepIndex].status)}`}
+                      type="number"
+                      value={sequenceSteps[editingStepIndex].status}
+                      onChange={e =>
+                        updateStep(editingStepIndex, { status: parseInt(e.target.value) || 200 })
+                      }
+                    />
+                  </div>
+                  <div className="fld">
+                    <label>Delay (ms)</label>
+                    <input
+                      className="input"
+                      type="number"
+                      value={sequenceSteps[editingStepIndex].delay}
+                      onChange={e =>
+                        updateStep(editingStepIndex, { delay: parseInt(e.target.value) || 0 })
+                      }
+                    />
+                  </div>
+                  <div className="fld wide">
+                    <label>Body (JSON) — step {editingStepIndex + 1}</label>
+                    <JsonEditor
+                      value={sequenceSteps[editingStepIndex].body}
+                      onChange={v => updateStep(editingStepIndex, { body: v })}
+                    />
+                  </div>
+                  <div className="wide" style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => setEditingStepIndex(null)}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <details className="details-row" open>
+                <summary onClick={e => e.preventDefault()}>
+                  Fallback static body
+                  <span className="hint">
+                    used when on-end is “reset” (served between cycles); also saved for when you switch back to Static mode
+                  </span>
+                </summary>
+                <JsonEditor value={body} onChange={setBody} />
+              </details>
+            </div>
+          )}
+
+          <details className="details-row" open={matchOpen}>
+            <summary onClick={e => {
+              e.preventDefault()
+              setMatchOpen(o => !o)
+            }}>
+              Match conditions
+              <span className="hint">
+                optional — differentiate multiple mocks for the same method + path
+              </span>
+            </summary>
+            <div className="kv-list">
+              <div>
+                <div className="label">
+                  Query parameters{' '}
+                  <span className="text-fg-3">(one per line, key=value)</span>
+                </div>
+                <textarea
+                  value={matchQuery}
+                  onChange={e => setMatchQuery(e.target.value)}
+                  spellCheck={false}
+                  placeholder={'cursor=\nlimit=20'}
+                />
+              </div>
+              <div>
+                <div className="label">
+                  Request headers{' '}
+                  <span className="text-fg-3">(one per line, key: value)</span>
+                </div>
+                <textarea
+                  value={matchHeaders}
+                  onChange={e => setMatchHeaders(e.target.value)}
+                  spellCheck={false}
+                  placeholder="x-user-id: 123"
+                />
+              </div>
+              <div>
+                <div className="label">Request body (partial JSON subset)</div>
+                <textarea
+                  value={matchBody}
+                  onChange={e => setMatchBody(e.target.value)}
+                  spellCheck={false}
+                  placeholder='{ "type": "credit" }'
+                />
+              </div>
+            </div>
+          </details>
         </div>
 
-        {/* Footer */}
-        <div className="px-5 py-4 border-t border-dt-border flex justify-end gap-2">
-          <button onClick={onClose} className="btn bg-transparent border-dt-border">
+        <div className="modal-foot">
+          {isEditing && (
+            <button type="button" className="btn danger" onClick={handleDelete}>
+              <Trash /> Delete
+            </button>
+          )}
+          <div className="flex-1" />
+          <button type="button" className="btn ghost" onClick={onClose}>
             Cancel
           </button>
-          <button onClick={handleSave} className="btn bg-dt-accent text-white border-dt-accent hover:bg-[#4c93e6]">
-            Save
+          <button type="button" className="btn primary" onClick={handleSave}>
+            <Check /> Save mock
           </button>
         </div>
       </div>

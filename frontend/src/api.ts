@@ -17,7 +17,19 @@ export async function reloadMocks(): Promise<void> {
 }
 
 export async function deleteMock(index: number): Promise<void> {
-  await fetch(`${API_BASE}/mocks/${index}`, { method: 'DELETE' })
+  const res = await fetch(`${API_BASE}/mocks/${index}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+}
+
+export async function resetSequence(index: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/mocks/${index}/sequence/reset`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
 }
 
 export async function saveMock(
@@ -85,6 +97,18 @@ export async function openInBrowser(): Promise<void> {
     await fetch(`${API_BASE}/open-browser`, { method: 'POST' })
   } catch {
     window.open(window.location.href, '_blank')
+  }
+}
+
+export async function openUrl(url: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/open-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    })
+  } catch {
+    window.open(url, '_blank')
   }
 }
 
