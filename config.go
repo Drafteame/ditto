@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -38,7 +37,7 @@ func NewConfigStore() (*ConfigStore, error) {
 
 	cs := &ConfigStore{
 		config:   DefaultConfig(),
-		filePath: filepath.Join(dataDir, "config.json"),
+		filePath: NewDataLayout(dataDir).ConfigPath,
 	}
 
 	// Load existing config if present
