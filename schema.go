@@ -688,7 +688,11 @@ func moveDir(src, dest string) error {
 		os.RemoveAll(dest)
 		return err
 	}
-	return os.RemoveAll(src)
+	if err := os.RemoveAll(src); err != nil {
+		os.RemoveAll(dest)
+		return err
+	}
+	return nil
 }
 
 func copyDir(src, dest string) error {
