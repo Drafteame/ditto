@@ -6,15 +6,6 @@ import (
 	"runtime"
 )
 
-var dataSubdirs = []string{
-	"mocks",
-	"descriptors",
-	"event_templates",
-	"sequences",
-	"recordings",
-	"scenarios",
-}
-
 // DataLayout contains Ditto's bundle-compatible persistence paths.
 type DataLayout struct {
 	Root              string
@@ -27,17 +18,41 @@ type DataLayout struct {
 	ScenariosDir      string
 }
 
+type dataSubdir struct {
+	name   string
+	assign func(*DataLayout, string)
+}
+
+var dataSubdirs = []dataSubdir{
+	{"mocks", func(layout *DataLayout, path string) { layout.MocksDir = path }},
+	{"descriptors", func(layout *DataLayout, path string) { layout.DescriptorsDir = path }},
+	{"event_templates", func(layout *DataLayout, path string) { layout.EventTemplatesDir = path }},
+	{"sequences", func(layout *DataLayout, path string) { layout.SequencesDir = path }},
+	{"recordings", func(layout *DataLayout, path string) { layout.RecordingsDir = path }},
+	{"scenarios", func(layout *DataLayout, path string) { layout.ScenariosDir = path }},
+}
+
 // NewDataLayout resolves every path in the persistent data layout from root.
 func NewDataLayout(root string) DataLayout {
-	return DataLayout{
-		Root:              root,
-		ConfigPath:        filepath.Join(root, "config.json"),
-		MocksDir:          filepath.Join(root, "mocks"),
-		DescriptorsDir:    filepath.Join(root, "descriptors"),
-		EventTemplatesDir: filepath.Join(root, "event_templates"),
-		SequencesDir:      filepath.Join(root, "sequences"),
-		RecordingsDir:     filepath.Join(root, "recordings"),
-		ScenariosDir:      filepath.Join(root, "scenarios"),
+	layout := DataLayout{
+		Root:       root,
+		ConfigPath: filepath.Join(root, "config.json"),
+	}
+	for _, subdir := range dataSubdirs {
+		subdir.assign(&layout, filepath.Join(root, subdir.name))
+	}
+	return layout
+}
+
+// ArtifactDirs returns the directories that can contain user-loadable artifacts.
+func (layout DataLayout) ArtifactDirs() []string {
+	return []string{
+		layout.MocksDir,
+		layout.DescriptorsDir,
+		layout.EventTemplatesDir,
+		layout.SequencesDir,
+		layout.RecordingsDir,
+		layout.ScenariosDir,
 	}
 }
 
@@ -47,8 +62,8 @@ func EnsureDataLayout(root string) (DataLayout, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return layout, err
 	}
-	for _, dir := range dataSubdirs {
-		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+	for _, dir := range layout.ArtifactDirs() {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return layout, err
 		}
 	}

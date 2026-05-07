@@ -4,8 +4,8 @@ import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
 import * as api from './api'
 import { useAppUiStore } from './stores/useAppUiStore'
+import { useLogStore } from './stores/useLogStore'
 import { useMockStore } from './stores/useMockStore'
-import { useSocketStore } from './stores/useSocketStore'
 import { Header } from './components/Header'
 import { UpdateBanner } from './components/UpdateBanner'
 import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
@@ -29,13 +29,13 @@ export default function App() {
   const loadMocks = useMockStore(state => state.loadMocks)
   const reloadMocks = useMockStore(state => state.reloadMocks)
   const advanceSequenceCursor = useMockStore(state => state.advanceSequenceCursor)
-  const logEntries = useSocketStore(state => state.logEntries)
-  const connected = useSocketStore(state => state.connected)
-  const selectedLogId = useSocketStore(state => state.selectedLogId)
-  const setConnected = useSocketStore(state => state.setConnected)
-  const appendLogEvent = useSocketStore(state => state.appendLogEvent)
-  const clearLog = useSocketStore(state => state.clearLog)
-  const selectLog = useSocketStore(state => state.selectLog)
+  const logEntries = useLogStore(state => state.logEntries)
+  const connected = useLogStore(state => state.connected)
+  const selectedLogId = useLogStore(state => state.selectedLogId)
+  const setConnected = useLogStore(state => state.setConnected)
+  const appendLogEvent = useLogStore(state => state.appendLogEvent)
+  const clearLog = useLogStore(state => state.clearLog)
+  const selectLog = useLogStore(state => state.selectLog)
   const sidebarOpen = useAppUiStore(state => state.sidebarOpen)
   const sidebarCollapsed = useAppUiStore(state => state.sidebarCollapsed)
   const drawerWidth = useAppUiStore(state => state.drawerWidth)
