@@ -46,14 +46,11 @@ func NewDataLayout(root string) DataLayout {
 
 // ArtifactDirs returns the directories that can contain user-loadable artifacts.
 func (layout DataLayout) ArtifactDirs() []string {
-	return []string{
-		layout.MocksDir,
-		layout.DescriptorsDir,
-		layout.EventTemplatesDir,
-		layout.SequencesDir,
-		layout.RecordingsDir,
-		layout.ScenariosDir,
+	dirs := make([]string, len(dataSubdirs))
+	for i, subdir := range dataSubdirs {
+		dirs[i] = filepath.Join(layout.Root, subdir.name)
 	}
+	return dirs
 }
 
 // EnsureDataLayout creates Ditto's persistent root and known artifact folders.
@@ -70,21 +67,21 @@ func EnsureDataLayout(root string) (DataLayout, error) {
 	return layout, nil
 }
 
-// DataDir returns the platform-appropriate directory for persistent Ditto data.
+// DataDir returns the platform-appropriate layout for persistent Ditto data.
 // The directory and the standard artifact subdirectories are created if they
 // don't exist.
 //
 //   - macOS:   ~/Library/Application Support/Ditto/
 //   - Linux:   ~/.config/ditto/
 //   - Windows: %APPDATA%\Ditto\
-func DataDir() (string, error) {
+func DataDir() (DataLayout, error) {
 	var base string
 
 	switch runtime.GOOS {
 	case "darwin":
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", err
+			return DataLayout{}, err
 		}
 		base = filepath.Join(home, "Library", "Application Support", "Ditto")
 	case "windows":
@@ -92,7 +89,7 @@ func DataDir() (string, error) {
 		if appData == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				return "", err
+				return DataLayout{}, err
 			}
 			appData = filepath.Join(home, "AppData", "Roaming")
 		}
@@ -102,28 +99,25 @@ func DataDir() (string, error) {
 		if configDir == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				return "", err
+				return DataLayout{}, err
 			}
 			configDir = filepath.Join(home, ".config")
 		}
 		base = filepath.Join(configDir, "ditto")
 	}
 
-	if _, err := EnsureDataLayout(base); err != nil {
-		return "", err
-	}
-	return base, nil
+	return EnsureDataLayout(base)
 }
 
 // DefaultMocksDir returns the persistent mocks directory inside DataDir.
 // Creates it with an example mock if it doesn't exist yet.
 func DefaultMocksDir() (string, error) {
-	dataDir, err := DataDir()
+	layout, err := DataDir()
 	if err != nil {
 		return "", err
 	}
 
-	mocksDir := NewDataLayout(dataDir).MocksDir
+	mocksDir := layout.MocksDir
 
 	// Seed with example mock on first run
 	examplePath := filepath.Join(mocksDir, "example.json")

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import type { LogEntry } from './types'
 import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
@@ -24,32 +25,62 @@ function isMobileDevice(): boolean {
 }
 
 export default function App() {
-  const mocks = useMockStore(state => state.mocks)
-  const serverInfo = useMockStore(state => state.serverInfo)
-  const loadMocks = useMockStore(state => state.loadMocks)
-  const reloadMocks = useMockStore(state => state.reloadMocks)
-  const advanceSequenceCursor = useMockStore(state => state.advanceSequenceCursor)
-  const logEntries = useLogStore(state => state.logEntries)
-  const connected = useLogStore(state => state.connected)
-  const selectedLogId = useLogStore(state => state.selectedLogId)
-  const setConnected = useLogStore(state => state.setConnected)
-  const appendLogEvent = useLogStore(state => state.appendLogEvent)
-  const clearLog = useLogStore(state => state.clearLog)
-  const selectLog = useLogStore(state => state.selectLog)
-  const sidebarOpen = useAppUiStore(state => state.sidebarOpen)
-  const sidebarCollapsed = useAppUiStore(state => state.sidebarCollapsed)
-  const drawerWidth = useAppUiStore(state => state.drawerWidth)
-  const updateInfo = useAppUiStore(state => state.updateInfo)
-  const modalState = useAppUiStore(state => state.modalState)
-  const qrOpen = useAppUiStore(state => state.qrOpen)
-  const setSidebarOpen = useAppUiStore(state => state.setSidebarOpen)
-  const toggleSidebarOpen = useAppUiStore(state => state.toggleSidebarOpen)
-  const setSidebarCollapsed = useAppUiStore(state => state.setSidebarCollapsed)
-  const toggleSidebarCollapsed = useAppUiStore(state => state.toggleSidebarCollapsed)
-  const setDrawerWidth = useAppUiStore(state => state.setDrawerWidth)
-  const setUpdateInfo = useAppUiStore(state => state.setUpdateInfo)
-  const setModalState = useAppUiStore(state => state.setModalState)
-  const setQrOpen = useAppUiStore(state => state.setQrOpen)
+  const { mocks, serverInfo, loadMocks, reloadMocks, advanceSequenceCursor } =
+    useMockStore(useShallow(state => ({
+      mocks: state.mocks,
+      serverInfo: state.serverInfo,
+      loadMocks: state.loadMocks,
+      reloadMocks: state.reloadMocks,
+      advanceSequenceCursor: state.advanceSequenceCursor,
+    })))
+  const {
+    logEntries,
+    connected,
+    selectedLogId,
+    setConnected,
+    appendLogEvent,
+    clearLog,
+    selectLog,
+  } = useLogStore(useShallow(state => ({
+    logEntries: state.logEntries,
+    connected: state.connected,
+    selectedLogId: state.selectedLogId,
+    setConnected: state.setConnected,
+    appendLogEvent: state.appendLogEvent,
+    clearLog: state.clearLog,
+    selectLog: state.selectLog,
+  })))
+  const {
+    sidebarOpen,
+    sidebarCollapsed,
+    drawerWidth,
+    updateInfo,
+    modalState,
+    qrOpen,
+    setSidebarOpen,
+    toggleSidebarOpen,
+    setSidebarCollapsed,
+    toggleSidebarCollapsed,
+    setDrawerWidth,
+    setUpdateInfo,
+    setModalState,
+    setQrOpen,
+  } = useAppUiStore(useShallow(state => ({
+    sidebarOpen: state.sidebarOpen,
+    sidebarCollapsed: state.sidebarCollapsed,
+    drawerWidth: state.drawerWidth,
+    updateInfo: state.updateInfo,
+    modalState: state.modalState,
+    qrOpen: state.qrOpen,
+    setSidebarOpen: state.setSidebarOpen,
+    toggleSidebarOpen: state.toggleSidebarOpen,
+    setSidebarCollapsed: state.setSidebarCollapsed,
+    toggleSidebarCollapsed: state.toggleSidebarCollapsed,
+    setDrawerWidth: state.setDrawerWidth,
+    setUpdateInfo: state.setUpdateInfo,
+    setModalState: state.setModalState,
+    setQrOpen: state.setQrOpen,
+  })))
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
