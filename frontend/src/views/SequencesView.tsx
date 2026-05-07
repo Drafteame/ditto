@@ -22,11 +22,13 @@ export const SequencesView = memo(function SequencesView({
   const {
     sequences,
     playerStates,
+    waitingEvents,
     sequencesLoading,
     sequencesError,
   } = useSequenceStore(useShallow(state => ({
     sequences: state.sequences,
     playerStates: state.playerStates,
+    waitingEvents: state.waitingEvents,
     sequencesLoading: state.loading,
     sequencesError: state.error,
   })))
@@ -56,6 +58,7 @@ export const SequencesView = memo(function SequencesView({
       templates={eventTemplates}
       schemaTypes={schemaTypes}
       playerStates={playerStates}
+      waitingEvents={waitingEvents}
       loading={sequencesLoading}
       error={sequencesError}
       onRefresh={loadSequences}

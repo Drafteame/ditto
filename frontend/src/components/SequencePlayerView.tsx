@@ -1,4 +1,4 @@
-import type { EventSequence, PlayerState } from '../types'
+import type { EventSequence, PlayerEvent, PlayerState } from '../types'
 import { Pause, Play, Stop } from './icons'
 
 const SPEEDS = [
@@ -13,6 +13,7 @@ const SPEEDS = [
 interface SequencePlayerViewProps {
   sequence: EventSequence
   state?: PlayerState
+  waitingEvent?: PlayerEvent
   onPlay: () => Promise<void>
   onPause: () => Promise<void>
   onStop: () => Promise<void>
@@ -23,6 +24,7 @@ interface SequencePlayerViewProps {
 export function SequencePlayerView({
   sequence,
   state,
+  waitingEvent,
   onPlay,
   onPause,
   onStop,
@@ -35,6 +37,7 @@ export function SequencePlayerView({
   const maxDelay = Math.max(...sequence.steps.map(step => step.delay_ms || 0), 1)
   const canPause = status === 'playing'
   const canStop = status === 'playing' || status === 'paused'
+  const waitingDelay = waitingEvent?.step_index === current ? waitingEvent.delay_ms : undefined
 
   return (
     <section className="sequence-player">
@@ -86,6 +89,7 @@ export function SequencePlayerView({
         </select>
         <div className="transport-summary">
           Step {Math.min(current + 1, sequence.steps.length)} / {sequence.steps.length}
+          {waitingDelay !== undefined && (status === 'playing' || status === 'paused') ? ` · next step in ${waitingDelay}ms` : ''}
           {state?.last_dispatch_summary ? ` · ${state.last_dispatch_summary}` : ''}
         </div>
       </div>

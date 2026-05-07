@@ -51,6 +51,7 @@ type PlayerEvent struct {
 	SequenceID      string      `json:"sequence_id"`
 	StepID          string      `json:"step_id,omitempty"`
 	StepIndex       int         `json:"step_index,omitempty"`
+	DelayMs         int64       `json:"delay_ms,omitempty"`
 	DispatchSummary string      `json:"dispatch_summary,omitempty"`
 	Error           string      `json:"error,omitempty"`
 	At              time.Time   `json:"at"`
@@ -478,7 +479,7 @@ func (r *sequenceRunner) loop() {
 			remaining = delay
 			waitUntil = r.player.clock.Now().Add(delay)
 			resetTimer(timer, delay)
-			// TODO: emit a "waiting" player event with the armed step and delay.
+			r.publishWaiting(state.CurrentStep, delay)
 		}
 
 		if waiting {
@@ -541,6 +542,9 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 			}
 		})
 		r.publishState("state")
+		if nextRemaining > 0 {
+			r.publishWaiting(state.CurrentStep, nextRemaining)
+		}
 		reply(state, nil)
 		return nextRemaining > 0, nextRemaining, false
 	case playerCommandPause:
@@ -618,6 +622,9 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 			s.Speed = cmd.speed
 		})
 		r.publishState("state")
+		if waiting && nextRemaining > 0 {
+			r.publishWaiting(state.CurrentStep, nextRemaining)
+		}
 		reply(state, nil)
 		return waiting && nextRemaining > 0, nextRemaining, false
 	case playerCommandShutdown:
@@ -748,6 +755,22 @@ func (r *sequenceRunner) publishStep(stepID string, stepIndex int, summary strin
 		StepIndex:       stepIndex,
 		DispatchSummary: summary,
 		At:              r.player.clock.Now().UTC(),
+	})
+}
+
+func (r *sequenceRunner) publishWaiting(stepIndex int, delay time.Duration) {
+	if stepIndex < 0 || stepIndex >= len(r.seq.Steps) {
+		return
+	}
+	step := r.seq.Steps[stepIndex]
+	r.player.broadcaster.Publish(PlayerEvent{
+		Type:       "waiting",
+		State:      r.State(),
+		SequenceID: r.seq.ID,
+		StepID:     step.ID,
+		StepIndex:  stepIndex,
+		DelayMs:    delay.Milliseconds(),
+		At:         r.player.clock.Now().UTC(),
 	})
 }
 

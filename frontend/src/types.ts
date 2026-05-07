@@ -184,11 +184,12 @@ export interface PlayerState {
 }
 
 export interface PlayerEvent {
-  type: 'state' | 'step' | 'error' | 'completed' | 'stopped' | 'looped'
+  type: 'state' | 'step' | 'waiting' | 'error' | 'completed' | 'stopped' | 'looped'
   state: PlayerState
   sequence_id: string
   step_id?: string
   step_index?: number
+  delay_ms?: number
   dispatch_summary?: string
   error?: string
   at: string

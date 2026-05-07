@@ -530,6 +530,48 @@ func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 	assertNoPlayerEvent(t, ch, "step")
 }
 
+func TestSequencePlayerEmitsWaitingEventBeforeStep(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Waiting",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 1_000, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
+	clock := newFakeClock(testClockStart())
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster, clock)
+	defer player.Shutdown(t.Context())
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	event := waitForPlayerEvent(t, ch, "waiting", 500*time.Millisecond)
+	if event.StepID != seq.Steps[0].ID || event.StepIndex != 0 {
+		t.Fatalf("unexpected waiting step: %#v", event)
+	}
+	if event.DelayMs != 1_000 {
+		t.Fatalf("expected 1000ms delay, got %d", event.DelayMs)
+	}
+	assertNoPlayerEvent(t, ch, "step")
+	clock.Advance(time.Second)
+	waitForPlayerEvent(t, ch, "step", 500*time.Millisecond)
+}
+
 func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 	dir := t.TempDir()
 	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))

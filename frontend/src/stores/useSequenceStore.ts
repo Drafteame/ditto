@@ -10,6 +10,7 @@ import type {
 interface SequenceStore {
   sequences: EventSequence[]
   playerStates: Record<string, PlayerState>
+  waitingEvents: Record<string, PlayerEvent | undefined>
   loading: boolean
   error: string
   loadSequences: () => Promise<void>
@@ -39,6 +40,7 @@ function sequenceErrorMessage(err: unknown) {
 export const useSequenceStore = create<SequenceStore>((set) => ({
   sequences: [],
   playerStates: {},
+  waitingEvents: {},
   loading: false,
   error: '',
   loadSequences: async () => {
@@ -50,7 +52,7 @@ export const useSequenceStore = create<SequenceStore>((set) => ({
       ])
       const playerStates: Record<string, PlayerState> = {}
       stateData.states.forEach(state => { playerStates[state.sequence_id] = state })
-      set({ sequences: seqData.sequences, playerStates, loading: false })
+      set({ sequences: seqData.sequences, playerStates, waitingEvents: {}, loading: false })
     } catch (err) {
       set({ loading: false, error: (err as Error).message })
     }
@@ -60,7 +62,7 @@ export const useSequenceStore = create<SequenceStore>((set) => ({
       const data = await api.fetchSequenceStates()
       const playerStates: Record<string, PlayerState> = {}
       data.states.forEach(state => { playerStates[state.sequence_id] = state })
-      set({ playerStates })
+      set({ playerStates, waitingEvents: {} })
     } catch (err) {
       set({ error: (err as Error).message })
     }
@@ -113,6 +115,17 @@ export const useSequenceStore = create<SequenceStore>((set) => ({
     return state
   },
   applyPlayerEvent: (event) => {
-    set(current => ({ playerStates: mergeState(current.playerStates, event.state) }))
+    set(current => {
+      const waitingEvents = { ...current.waitingEvents }
+      if (event.type === 'waiting') {
+        waitingEvents[event.sequence_id] = event
+      } else if (event.type === 'step' || event.type === 'completed' || event.type === 'stopped' || event.type === 'error') {
+        delete waitingEvents[event.sequence_id]
+      }
+      return {
+        playerStates: mergeState(current.playerStates, event.state),
+        waitingEvents,
+      }
+    })
   },
 }))

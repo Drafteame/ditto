@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { EventSequence, EventSequenceStep, EventTemplate, PlayerState, SchemaTypeDescriptor } from '../types'
+import type { EventSequence, EventSequenceStep, EventTemplate, PlayerEvent, PlayerState, SchemaTypeDescriptor } from '../types'
 import { Edit, Grip, Plus, Refresh, Sequence, Trash, X } from './icons'
 import { useConfirm } from './ConfirmDialog'
 import { SequencePlayerView } from './SequencePlayerView'
@@ -32,6 +32,7 @@ interface SequencesPanelProps {
   templates: EventTemplate[]
   schemaTypes: SchemaTypeDescriptor[]
   playerStates: Record<string, PlayerState>
+  waitingEvents: Record<string, PlayerEvent | undefined>
   loading: boolean
   error: string
   onRefresh: () => void
@@ -87,6 +88,7 @@ export function SequencesPanel({
   templates,
   schemaTypes,
   playerStates,
+  waitingEvents,
   loading,
   error,
   onRefresh,
@@ -179,6 +181,7 @@ export function SequencesPanel({
           <SequencePlayerView
             sequence={selectedSequence}
             state={playerStates[selectedSequence.id]}
+            waitingEvent={waitingEvents[selectedSequence.id]}
             onPlay={() => onPlay(selectedSequence.id)}
             onPause={() => onPause(selectedSequence.id)}
             onStop={() => onStop(selectedSequence.id)}
