@@ -50,6 +50,10 @@ func main() {
 	savedCfg := cfgStore.Get()
 
 	// Resolve mocks directory: explicit flag > persistent storage
+	layout, err := DataDir()
+	if err != nil {
+		log.Fatalf("Failed to determine data directory: %v", err)
+	}
 	if *mocksDir == "" {
 		defaultDir, err := DefaultMocksDir()
 		if err != nil {
@@ -70,6 +74,7 @@ func main() {
 		Port:     *port,
 		Target:   *target,
 		MocksDir: *mocksDir,
+		Layout:   layout,
 		HTTPS:    *https,
 		CertDir:  *certDir,
 		ServeUI:  true,

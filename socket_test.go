@@ -390,11 +390,16 @@ func TestWebSocketProxyModeRejectsForbiddenOrigin(t *testing.T) {
 		w.WriteHeader(http.StatusSwitchingProtocols)
 	}))
 	defer target.Close()
+	layout, err := EnsureDataLayout(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	srv, err := NewServer(ServerConfig{
 		Port:     8888,
 		Target:   target.URL,
-		MocksDir: t.TempDir(),
+		MocksDir: layout.MocksDir,
+		Layout:   layout,
 		ServeUI:  false,
 	})
 	if err != nil {

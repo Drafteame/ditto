@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,9 +39,11 @@ type EncodedServerMessage struct {
 }
 
 type EncodedPayload struct {
-	Data  []byte
-	Kind  websocket.MessageType
-	Value any
+	Data        []byte
+	Kind        websocket.MessageType
+	Value       any
+	ContentType string
+	TypeName    string
 }
 
 type ProtocolAdapter interface {
@@ -148,9 +151,10 @@ type SocketClientSnapshot struct {
 }
 
 type socketDispatchRequest struct {
-	Channel string          `json:"channel"`
-	Payload json.RawMessage `json:"payload"`
-	Adapter string          `json:"adapter,omitempty"`
+	Channel  string          `json:"channel"`
+	Payload  json.RawMessage `json:"payload"`
+	Adapter  string          `json:"adapter,omitempty"`
+	TypeName string          `json:"type_name,omitempty"`
 }
 
 type SocketDispatchResult struct {
@@ -168,7 +172,11 @@ func NewSocketHub(bus *EventBus, jsonLogs bool) *SocketHub {
 	}
 }
 
-func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
+func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*SchemaRegistry) {
+	var schemas *SchemaRegistry
+	if len(registries) > 0 {
+		schemas = registries[0]
+	}
 	mux.HandleFunc("/__ditto__/socket", hub.ServeHTTP)
 	mux.HandleFunc("/__ditto__/ws", hub.ServeHTTP)
 	mux.HandleFunc("/__ditto__/api/socket/clients", func(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +216,21 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
 		if len(req.Payload) == 0 {
 			req.Payload = json.RawMessage(`{}`)
 		}
-		result := hub.Dispatch(req.Channel, req.Payload, req.Adapter)
+		var result SocketDispatchResult
+		if strings.TrimSpace(req.TypeName) != "" {
+			if schemas == nil {
+				http.Error(w, "schema registry is not available", http.StatusBadRequest)
+				return
+			}
+			encoded, err := schemas.Encode(req.TypeName, req.Payload)
+			if err != nil {
+				http.Error(w, "protobuf encode failed: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			result = hub.DispatchEncoded(req.Channel, encoded, req.Adapter)
+		} else {
+			result = hub.Dispatch(req.Channel, req.Payload, req.Adapter)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
 	})
@@ -335,6 +357,18 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFilter string) SocketDispatchResult {
+	return h.dispatch(channel, adapterFilter, func(client *SocketClient) (EncodedPayload, error) {
+		return client.protocol.EncodePayload(payload)
+	})
+}
+
+func (h *SocketHub) DispatchEncoded(channel string, payload EncodedPayload, adapterFilter string) SocketDispatchResult {
+	return h.dispatch(channel, adapterFilter, func(client *SocketClient) (EncodedPayload, error) {
+		return payload, nil
+	})
+}
+
+func (h *SocketHub) dispatch(channel string, adapterFilter string, encode func(client *SocketClient) (EncodedPayload, error)) SocketDispatchResult {
 	channel = strings.TrimSpace(channel)
 	adapterFilter = normalizeAdapter(adapterFilter)
 	ids := h.registry.Clients(channel)
@@ -356,7 +390,7 @@ func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFil
 		subID := client.subscriptionID(channel)
 		cached, ok := payloadCache[client.adapter]
 		if !ok {
-			encoded, err := client.protocol.EncodePayload(payload)
+			encoded, err := encode(client)
 			cached = adapterPayload{payload: encoded, err: err}
 			payloadCache[client.adapter] = cached
 		}
@@ -869,11 +903,19 @@ func (AppSyncAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, er
 }
 
 func (AppSyncAdapter) WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error) {
+	value := payload.Value
+	if payload.Kind == websocket.MessageBinary {
+		value = map[string]any{
+			"base64":       base64.StdEncoding.EncodeToString(payload.Data),
+			"content_type": payload.ContentType,
+			"type_name":    payload.TypeName,
+		}
+	}
 	return marshalTextMessage(map[string]any{
 		"type": "data",
 		"id":   subID,
 		"payload": map[string]any{
-			"data": payload.Value,
+			"data": value,
 		},
 	})
 }

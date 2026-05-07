@@ -76,6 +76,7 @@ type ServerConfig struct {
 	Port     int
 	Target   string
 	MocksDir string
+	Layout   DataLayout
 	HTTPS    bool
 	CertDir  string
 	ServeUI  bool
@@ -89,6 +90,7 @@ type Server struct {
 	Bus       *EventBus
 	ProxyMgr  *ProxyManager
 	SocketHub *SocketHub
+	Schemas   *SchemaRegistry
 	Info      ServerInfo
 	Config    ServerConfig
 	CertPath  string
@@ -100,6 +102,13 @@ type Server struct {
 
 // NewServer creates and configures the HTTP server with all routes.
 func NewServer(cfg ServerConfig) (*Server, error) {
+	if cfg.MocksDir == "" {
+		return nil, fmt.Errorf("server config mocks dir is required")
+	}
+	if cfg.Layout.DescriptorsDir == "" {
+		return nil, fmt.Errorf("server config layout with descriptors dir is required")
+	}
+
 	store := NewMockStore(cfg.MocksDir)
 	if err := store.Load(); err != nil {
 		return nil, fmt.Errorf("failed to load mocks: %w", err)
@@ -109,6 +118,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	proxyMgr := NewProxyManager(cfg.Target)
 	jsonLogs := cfg.JSONLogs
 	socketHub := NewSocketHub(bus, jsonLogs)
+	descriptorsDir := cfg.Layout.DescriptorsDir
+	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load schema registry: %w", err)
+	}
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
@@ -135,7 +149,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	RegisterUI(mux, store, bus, proxyMgr, info, cfg.ServeUI)
-	RegisterSocketRoutes(mux, socketHub)
+	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
+	RegisterSchemaRoutes(mux, schemaRegistry)
 
 	// Main proxy/mock handler
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +271,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Bus:       bus,
 		ProxyMgr:  proxyMgr,
 		SocketHub: socketHub,
+		Schemas:   schemaRegistry,
 		Info:      info,
 		Config:    cfg,
 		CertPath:  certPath,

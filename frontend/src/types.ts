@@ -93,10 +93,50 @@ export interface SocketDispatchRequest {
   channel: string
   payload: unknown
   adapter?: 'raw' | 'appsync' | ''
+  type_name?: string
 }
 
 export interface SocketDispatchResult {
   delivered: number
   dropped?: string[]
   errors?: string[]
+}
+
+export interface SchemaField {
+  name: string
+  json_name: string
+  type: string
+  number: number
+  repeated: boolean
+  map: boolean
+  optional: boolean
+  oneof?: string
+  message_type?: string
+  enum_type?: string
+}
+
+export interface SchemaTypeDescriptor {
+  full_name: string
+  name: string
+  package: string
+  file: string
+  pack_id: string
+  fields: SchemaField[]
+  example_json: unknown
+}
+
+export interface SchemaPack {
+  id: string
+  name: string
+  path: string
+  loaded_at: string
+  types: SchemaTypeDescriptor[]
+}
+
+export interface SchemaPacksResponse {
+  packs: SchemaPack[]
+}
+
+export interface SchemaTypesResponse {
+  types: SchemaTypeDescriptor[]
 }
