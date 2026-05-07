@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -54,6 +56,11 @@ type PlayerEvent struct {
 	At              time.Time   `json:"at"`
 }
 
+type stepCacheEntry struct {
+	payloadHash [32]byte
+	encoded     EncodedPayload
+}
+
 type PlayerBroadcaster struct {
 	mu      sync.Mutex
 	clients map[chan PlayerEvent]struct{}
@@ -74,7 +81,6 @@ func (b *PlayerBroadcaster) Subscribe() chan PlayerEvent {
 func (b *PlayerBroadcaster) Unsubscribe(ch chan PlayerEvent) {
 	b.mu.Lock()
 	delete(b.clients, ch)
-	close(ch)
 	b.mu.Unlock()
 }
 
@@ -86,8 +92,12 @@ func (b *PlayerBroadcaster) Publish(event PlayerEvent) {
 		event.At = time.Now().UTC()
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	clients := make([]chan PlayerEvent, 0, len(b.clients))
 	for ch := range b.clients {
+		clients = append(clients, ch)
+	}
+	b.mu.Unlock()
+	for _, ch := range clients {
 		select {
 		case ch <- event:
 		default:
@@ -110,10 +120,15 @@ func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer b.Unsubscribe(ch)
 
 	ctx := r.Context()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-heartbeat.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
 		case event := <-ch:
 			data, _ := json.Marshal(event)
 			fmt.Fprintf(w, "data: %s\n\n", data)
@@ -166,6 +181,10 @@ func (p *SequencePlayer) Play(id string, opts PlayOptions) (PlayerState, error) 
 	}
 	seq, err := p.reg.Get(id)
 	if err != nil {
+		p.mu.Unlock()
+		return PlayerState{}, err
+	}
+	if err := p.reg.validate(seq); err != nil {
 		p.mu.Unlock()
 		return PlayerState{}, err
 	}
@@ -334,6 +353,7 @@ type sequenceRunner struct {
 	player *SequencePlayer
 	seq    EventSequence
 	vars   map[string]string
+	cache  map[string]stepCacheEntry
 
 	commands chan playerCommand
 	done     chan struct{}
@@ -358,6 +378,7 @@ func newSequenceRunner(player *SequencePlayer, seq EventSequence, opts PlayOptio
 		player:   player,
 		seq:      cloneEventSequence(seq),
 		vars:     cloneStringMap(opts.Vars),
+		cache:    make(map[string]stepCacheEntry),
 		commands: make(chan playerCommand, 16),
 		done:     make(chan struct{}),
 		state:    state,
@@ -488,6 +509,11 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 	}
 	switch cmd.kind {
 	case playerCommandResume:
+		current := r.State()
+		if current.Status != PlayerPaused {
+			reply(current, fmt.Errorf("cannot resume: status is %s", current.Status))
+			return waiting, remaining, false
+		}
 		opts := normalizePlayOptions(cmd.opts)
 		nextRemaining := remaining
 		if nextRemaining > 0 {
@@ -504,6 +530,11 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 		reply(state, nil)
 		return nextRemaining > 0, nextRemaining, false
 	case playerCommandPause:
+		current := r.State()
+		if current.Status != PlayerPlaying {
+			reply(current, fmt.Errorf("cannot pause: status is %s", current.Status))
+			return waiting, remaining, false
+		}
 		if waiting {
 			stopTimer(timer)
 			remaining = time.Until(waitUntil)
@@ -520,6 +551,11 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 		reply(state, nil)
 		return false, remaining, false
 	case playerCommandStop:
+		current := r.State()
+		if !isActivePlayerStatus(current.Status) {
+			reply(current, fmt.Errorf("cannot stop: status is %s", current.Status))
+			return waiting, remaining, false
+		}
 		if waiting {
 			stopTimer(timer)
 		}
@@ -579,6 +615,9 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 				s.Status = PlayerStopped
 			}
 		})
+		if state.Status == PlayerStopped {
+			r.publish("stopped", "", 0, "", "")
+		}
 		reply(state, nil)
 		return false, 0, true
 	default:
@@ -599,6 +638,11 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 		r.fail(err)
 		return
 	}
+	rendered, err = r.prepareRenderedStep(step, rendered)
+	if err != nil {
+		r.fail(err)
+		return
+	}
 	result, err := dispatchRendered(r.player.hub, r.player.schemas, rendered, nil)
 	if err != nil {
 		r.fail(err)
@@ -611,6 +655,29 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 	})
 	r.publish("step", step.ID, index, summary, "")
 	_ = next
+}
+
+func (r *sequenceRunner) prepareRenderedStep(step EventSequenceStep, rendered RenderedDispatch) (RenderedDispatch, error) {
+	typeName := strings.TrimSpace(rendered.TypeName)
+	if typeName == "" {
+		return rendered, nil
+	}
+	if r.player.schemas == nil {
+		return rendered, fmt.Errorf("schema registry is not available")
+	}
+	hash := sha256.Sum256([]byte(typeName + "\x00" + string(rendered.Payload)))
+	if cached, ok := r.cache[step.ID]; ok && cached.payloadHash == hash {
+		encoded := cached.encoded
+		rendered.EncodedPayload = &encoded
+		return rendered, nil
+	}
+	encoded, err := r.player.schemas.Encode(typeName, rendered.Payload)
+	if err != nil {
+		return rendered, fmt.Errorf("protobuf encode failed: %w", err)
+	}
+	r.cache[step.ID] = stepCacheEntry{payloadHash: hash, encoded: encoded}
+	rendered.EncodedPayload = &encoded
+	return rendered, nil
 }
 
 func (r *sequenceRunner) fail(err error) {
@@ -635,7 +702,7 @@ func (r *sequenceRunner) complete() {
 			s.CurrentStep = 0
 			s.Status = PlayerPlaying
 		})
-		r.player.broadcaster.Publish(PlayerEvent{Type: "completed", State: state, SequenceID: r.seq.ID, At: time.Now().UTC()})
+		r.player.broadcaster.Publish(PlayerEvent{Type: "looped", State: state, SequenceID: r.seq.ID, At: time.Now().UTC()})
 	case "reset":
 		state := r.setState(func(s *PlayerState) {
 			s.CurrentStep = 0

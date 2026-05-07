@@ -65,6 +65,150 @@ func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 	}
 }
 
+func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Loop Event",
+		OnEnd: "loop",
+		Steps: []EventSequenceStep{
+			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster)
+	defer player.Shutdown(t.Context())
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	event := waitForPlayerEvent(t, ch, "looped", 500*time.Millisecond)
+	if event.State.Status != PlayerPlaying {
+		t.Fatalf("looped event should keep playing status, got %s", event.State.Status)
+	}
+	if _, err := player.Stop(seq.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSequencePlayerTerminalControlsReturnErrors(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := reg.Create(EventSequence{
+		Name:  "Terminal",
+		OnEnd: "stay",
+		Steps: []EventSequenceStep{
+			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"n":"{{missing}}"}`)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcaster := NewPlayerBroadcaster()
+	ch := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(ch)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), broadcaster)
+	defer player.Shutdown(t.Context())
+	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForPlayerEvent(t, ch, "error", 500*time.Millisecond)
+	if _, err := player.Pause(seq.ID); err == nil {
+		t.Fatal("expected pause on errored runner to fail")
+	}
+	if _, err := player.Stop(seq.ID); err == nil {
+		t.Fatal("expected stop on errored runner to fail")
+	}
+}
+
+func TestSequenceRunnerCachesEncodedPayloadByStepAndPayload(t *testing.T) {
+	root := t.TempDir()
+	writeProto(t, filepath.Join(root, "pack"), "event.proto", `syntax = "proto3"; package ditto.cache; message Event { string id = 1; }`)
+	schemas, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &sequenceRunner{
+		player: &SequencePlayer{schemas: schemas},
+		cache:  make(map[string]stepCacheEntry),
+	}
+	step := EventSequenceStep{ID: "step-cache"}
+	rendered := RenderedDispatch{
+		TypeName: "ditto.cache.Event",
+		Payload:  json.RawMessage(`{"id":"a"}`),
+	}
+	first, err := runner.prepareRenderedStep(step, rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.EncodedPayload == nil || len(runner.cache) != 1 {
+		t.Fatal("expected first encode to populate cache")
+	}
+	entry := runner.cache[step.ID]
+	entry.encoded.Data = []byte("cached")
+	runner.cache[step.ID] = entry
+	second, err := runner.prepareRenderedStep(step, rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.EncodedPayload == nil || string(second.EncodedPayload.Data) != "cached" {
+		t.Fatalf("expected cached payload, got %#v", second.EncodedPayload)
+	}
+	third, err := runner.prepareRenderedStep(step, RenderedDispatch{
+		TypeName: "ditto.cache.Event",
+		Payload:  json.RawMessage(`{"id":"b"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(third.EncodedPayload.Data) == "cached" {
+		t.Fatal("expected payload change to invalidate cache")
+	}
+}
+
+func TestSequencePlayerRejectsZeroStepSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.mu.Lock()
+	reg.sequences["empty-00000000"] = EventSequence{
+		Version: 1,
+		ID:      "empty-00000000",
+		Name:    "Empty",
+		OnEnd:   "stay",
+		Steps:   []EventSequenceStep{},
+	}
+	reg.mu.Unlock()
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), NewPlayerBroadcaster())
+	if _, err := player.Play("empty-00000000", PlayOptions{}); err == nil {
+		t.Fatal("expected zero-step sequence to be rejected")
+	}
+}
+
 func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	dir := t.TempDir()
 	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))

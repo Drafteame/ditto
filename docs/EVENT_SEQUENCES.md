@@ -91,6 +91,10 @@ JSON string.
 
 Missing `on_end` defaults to `stay`.
 
+The SSE stream emits `completed` only for terminal completion. Looping
+sequences emit `looped` at the wrap boundary while the state remains
+`playing`.
+
 ## Transport Controls
 
 The player is owned by the backend. The UI reflects state over SSE and sends
@@ -121,6 +125,9 @@ exit point as manual dispatch and templates.
 
 The player takes a snapshot of the sequence when playback starts. Edits to the
 sequence file are visible on the next play, not the current run.
+
+Ditto validates sequences before they enter the registry and again before play.
+Sequences with zero steps are rejected instead of creating an idle runner.
 
 If a referenced template is deleted during playback, or dispatch fails, the
 player emits an error event and aborts the run. Per-step error policy is left

@@ -184,7 +184,7 @@ export interface PlayerState {
 }
 
 export interface PlayerEvent {
-  type: 'state' | 'step' | 'error' | 'completed' | 'stopped'
+  type: 'state' | 'step' | 'error' | 'completed' | 'stopped' | 'looped'
   state: PlayerState
   sequence_id: string
   step_id?: string

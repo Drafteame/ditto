@@ -282,7 +282,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 			rendered.InvalidCasts = invalid
 		}
 		rendered.Source = fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID)
-		return prepareRenderedSequenceStep(rendered, r.schemas)
+		return validateRenderedSequenceStep(rendered)
 	}
 
 	payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, nil)
@@ -299,26 +299,15 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 		Source:       fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID),
 	}
 	_ = index
-	return prepareRenderedSequenceStep(rendered, r.schemas)
+	return validateRenderedSequenceStep(rendered)
 }
 
-func prepareRenderedSequenceStep(rendered RenderedDispatch, schemas *SchemaRegistry) (RenderedDispatch, error) {
+func validateRenderedSequenceStep(rendered RenderedDispatch) (RenderedDispatch, error) {
 	if len(rendered.Missing) > 0 {
 		return rendered, fmt.Errorf("missing variables: %s", strings.Join(rendered.Missing, ", "))
 	}
 	if len(rendered.InvalidCasts) > 0 {
 		return rendered, fmt.Errorf("invalid template casts: %s", describeInvalidCasts(rendered.InvalidCasts))
-	}
-	typeName := strings.TrimSpace(rendered.TypeName)
-	if typeName != "" {
-		if schemas == nil {
-			return rendered, fmt.Errorf("schema registry is not available")
-		}
-		encoded, err := schemas.Encode(typeName, rendered.Payload)
-		if err != nil {
-			return rendered, fmt.Errorf("protobuf encode failed: %w", err)
-		}
-		rendered.EncodedPayload = &encoded
 	}
 	return rendered, nil
 }
@@ -368,6 +357,10 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 		}
 		if strings.ContainsAny(step.Channel, "\r\n") {
 			return fmt.Errorf("step %d channel cannot contain newlines", i+1)
+		}
+		if strings.Contains(step.Channel, "{{") || strings.Contains(step.Channel, "}}") {
+			// TODO: M7 — support channel templating for triggers.
+			return fmt.Errorf("step %d channel variables are not supported", i+1)
 		}
 		if _, err := NewProtocolAdapter(step.Adapter); err != nil {
 			return err

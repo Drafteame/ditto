@@ -55,6 +55,12 @@ func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 	if _, err := reg.Update(seq.ID, got); err == nil {
 		t.Fatal("expected on_end validation error")
 	}
+
+	got.OnEnd = "stay"
+	got.Steps[0].Channel = "/games/{{matchId}}"
+	if _, err := reg.Update(seq.ID, got); err == nil {
+		t.Fatal("expected channel templating validation error")
+	}
 }
 
 func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
