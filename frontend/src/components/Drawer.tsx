@@ -81,6 +81,19 @@ function MatchBanner({ entry, target }: { entry: LogEntry; target: string }) {
       </div>
     )
   }
+  if (entry.type === 'SOCKET') {
+    return (
+      <div className="match-banner proxy">
+        <Globe />
+        <div className="flex-1 min-w-0">
+          <div className="title">Socket event</div>
+          <div className="detail">
+            Ditto handled <code>{entry.method}</code> for <code>{entry.path}</code>.
+          </div>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="match-banner miss">
       <Alert />

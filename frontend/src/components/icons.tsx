@@ -189,3 +189,19 @@ export const Braces = (p: IconProps) => (
   </Svg>
 )
 
+export const Send = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M22 2L11 13" />
+    <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+  </Svg>
+)
+
+export const Radio = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="2" />
+    <path d="M16.24 7.76a6 6 0 0 1 0 8.48" />
+    <path d="M7.76 16.24a6 6 0 0 1 0-8.48" />
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+    <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+  </Svg>
+)

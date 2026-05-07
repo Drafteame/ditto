@@ -1,4 +1,11 @@
-import type { Mock, MocksResponse, UpdateInfo } from './types'
+import type {
+  Mock,
+  MocksResponse,
+  SocketClientsResponse,
+  SocketDispatchRequest,
+  SocketDispatchResult,
+  UpdateInfo,
+} from './types'
 
 const API_BASE = '/__ditto__/api'
 
@@ -110,6 +117,28 @@ export async function openUrl(url: string): Promise<void> {
   } catch {
     window.open(url, '_blank')
   }
+}
+
+export async function fetchSocketClients(): Promise<SocketClientsResponse> {
+  const res = await fetch(`${API_BASE}/socket/clients`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function dispatchSocketEvent(req: SocketDispatchRequest): Promise<SocketDispatchResult> {
+  const res = await fetch(`${API_BASE}/socket/dispatch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
 }
 
 export async function waitForPort(port: number, maxAttempts = 30): Promise<void> {

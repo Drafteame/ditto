@@ -23,7 +23,7 @@ var webFS embed.FS
 // LogEvent represents a single request passing through Ditto.
 type LogEvent struct {
 	Timestamp      string              `json:"timestamp"`
-	Type           string              `json:"type"` // MOCK, PROXY, MISS
+	Type           string              `json:"type"` // MOCK, PROXY, MISS, SOCKET
 	Method         string              `json:"method"`
 	Path           string              `json:"path"`
 	Status         int                 `json:"status"`
