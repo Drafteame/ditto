@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -224,6 +225,7 @@ func TestSocketHubDispatchAdapterFilter(t *testing.T) {
 		id:            "raw-1",
 		adapter:       "raw",
 		protocol:      RawAdapter{},
+		control:       make(chan EncodedServerMessage, 1),
 		send:          make(chan EncodedServerMessage, 1),
 		done:          make(chan struct{}),
 		subscriptions: map[string]string{"/scores": "raw-sub"},
@@ -232,6 +234,7 @@ func TestSocketHubDispatchAdapterFilter(t *testing.T) {
 		id:            "appsync-1",
 		adapter:       "appsync",
 		protocol:      AppSyncAdapter{},
+		control:       make(chan EncodedServerMessage, 1),
 		send:          make(chan EncodedServerMessage, 1),
 		done:          make(chan struct{}),
 		subscriptions: map[string]string{"/scores": "appsync-sub"},
@@ -467,6 +470,7 @@ func TestEnqueueControlPublishesErrorWhenClientClosed(t *testing.T) {
 		id:            "raw-1",
 		adapter:       "raw",
 		protocol:      RawAdapter{},
+		control:       make(chan EncodedServerMessage, 1),
 		send:          make(chan EncodedServerMessage, 1),
 		done:          make(chan struct{}),
 		subscriptions: map[string]string{},
@@ -493,4 +497,102 @@ func TestSocketClientEnqueueRejectsEmptyMessageKind(t *testing.T) {
 	if client.enqueue(EncodedServerMessage{Data: []byte(`{}`)}, 0) {
 		t.Fatalf("enqueue() accepted empty websocket message type")
 	}
+}
+
+func TestSocketClientEnqueueRejectsAfterClose(t *testing.T) {
+	client := &SocketClient{
+		send: make(chan EncodedServerMessage, 1),
+		done: make(chan struct{}),
+	}
+	client.close()
+
+	if client.enqueue(textMessage([]byte(`{"ok":true}`)), 0) {
+		t.Fatalf("enqueue() accepted message after close")
+	}
+	if len(client.send) != 0 {
+		t.Fatalf("enqueue() buffered a message after close")
+	}
+}
+
+func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false)
+	client := &SocketClient{
+		id:            "raw-1",
+		adapter:       "raw",
+		protocol:      RawAdapter{},
+		control:       make(chan EncodedServerMessage, 1),
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{},
+	}
+	client.send <- textMessage([]byte(`{"data":true}`))
+
+	hub.enqueueControl(client, ServerMsg{Type: "subscribe_ack", Channel: "/scores"})
+
+	if len(client.control) != 1 {
+		t.Fatalf("control channel len = %d, want 1", len(client.control))
+	}
+	if len(client.send) != 1 {
+		t.Fatalf("data channel len = %d, want unchanged full buffer", len(client.send))
+	}
+}
+
+func TestDispatchEncodesPayloadOncePerAdapter(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false)
+	adapter := &countingAdapter{}
+	clientA := &SocketClient{
+		id:            "client-a",
+		adapter:       "counting",
+		protocol:      adapter,
+		control:       make(chan EncodedServerMessage, 1),
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{"/scores": "sub-a"},
+	}
+	clientB := &SocketClient{
+		id:            "client-b",
+		adapter:       "counting",
+		protocol:      adapter,
+		control:       make(chan EncodedServerMessage, 1),
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{"/scores": "sub-b"},
+	}
+	hub.addClient(clientA)
+	hub.addClient(clientB)
+	hub.registry.Subscribe("/scores", clientA.id)
+	hub.registry.Subscribe("/scores", clientB.id)
+
+	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+	if result.Delivered != 2 {
+		t.Fatalf("Dispatch() delivered %d clients, want 2", result.Delivered)
+	}
+	if adapter.encodePayloadCalls != 1 {
+		t.Fatalf("EncodePayload called %d times, want 1", adapter.encodePayloadCalls)
+	}
+}
+
+type countingAdapter struct {
+	encodePayloadCalls int
+}
+
+func (a *countingAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
+	return ClientMsg{}, nil
+}
+
+func (a *countingAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
+	a.encodePayloadCalls++
+	return EncodedPayload{Data: append([]byte(nil), payload...), Kind: websocket.MessageText}, nil
+}
+
+func (a *countingAdapter) WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error) {
+	return textMessage([]byte(fmt.Sprintf(`{"id":%q,"data":%s}`, subID, payload.Data))), nil
+}
+
+func (a *countingAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
+	return textMessage([]byte(`{}`)), nil
+}
+
+func (a *countingAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
+	return EncodedServerMessage{}, 0
 }

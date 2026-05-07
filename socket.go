@@ -37,8 +37,16 @@ type EncodedServerMessage struct {
 	Kind websocket.MessageType
 }
 
+type EncodedPayload struct {
+	Data  []byte
+	Kind  websocket.MessageType
+	Value any
+}
+
 type ProtocolAdapter interface {
 	ParseClientMessage(b []byte) (ClientMsg, error)
+	EncodePayload(payload json.RawMessage) (EncodedPayload, error)
+	WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error)
 	EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error)
 	Heartbeat() (EncodedServerMessage, time.Duration)
 }
@@ -121,8 +129,10 @@ type SocketClient struct {
 	remoteAddr string
 	connected  time.Time
 	conn       *websocket.Conn
+	control    chan EncodedServerMessage
 	send       chan EncodedServerMessage
 	done       chan struct{}
+	closed     atomic.Bool
 	closeOnce  sync.Once
 
 	mu            sync.RWMutex
@@ -301,6 +311,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		remoteAddr:    r.RemoteAddr,
 		connected:     time.Now(),
 		conn:          conn,
+		control:       make(chan EncodedServerMessage, 16),
 		send:          make(chan EncodedServerMessage, 64),
 		done:          make(chan struct{}),
 		subscriptions: make(map[string]string),
@@ -328,6 +339,11 @@ func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFil
 	adapterFilter = normalizeAdapter(adapterFilter)
 	ids := h.registry.Clients(channel)
 	result := SocketDispatchResult{}
+	type adapterPayload struct {
+		payload EncodedPayload
+		err     error
+	}
+	payloadCache := make(map[string]adapterPayload)
 	for _, id := range ids {
 		client := h.client(id)
 		if client == nil {
@@ -338,12 +354,17 @@ func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFil
 			continue
 		}
 		subID := client.subscriptionID(channel)
-		data, err := client.protocol.EncodeServerMessage(ServerMsg{
-			Type:    "data",
-			ID:      subID,
-			Channel: channel,
-			Payload: payload,
-		})
+		cached, ok := payloadCache[client.adapter]
+		if !ok {
+			encoded, err := client.protocol.EncodePayload(payload)
+			cached = adapterPayload{payload: encoded, err: err}
+			payloadCache[client.adapter] = cached
+		}
+		if cached.err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", client.id, cached.err))
+			continue
+		}
+		data, err := client.protocol.WrapData(cached.payload, subID)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", client.id, err))
 			continue
@@ -475,24 +496,41 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
 	pingTicker := time.NewTicker(75 * time.Second)
 	defer pingTicker.Stop()
 
+	writeMsg := func(msg EncodedServerMessage) bool {
+		if msg.Kind == 0 {
+			return false
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := client.conn.Write(writeCtx, msg.Kind, msg.Data)
+		cancel()
+		return err == nil
+	}
+
 	for {
+		select {
+		case msg := <-client.control:
+			if !writeMsg(msg) {
+				return
+			}
+			continue
+		default:
+		}
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-client.done:
 			return
+		case msg := <-client.control:
+			if !writeMsg(msg) {
+				return
+			}
 		case msg := <-client.send:
-			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := client.conn.Write(writeCtx, msg.Kind, msg.Data)
-			cancel()
-			if err != nil {
+			if !writeMsg(msg) {
 				return
 			}
 		case <-heartbeatC:
-			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := client.conn.Write(writeCtx, heartbeat.Kind, heartbeat.Data)
-			cancel()
-			if err != nil {
+			if !writeMsg(heartbeat) {
 				return
 			}
 		case <-pingTicker.C:
@@ -516,7 +554,7 @@ func (h *SocketHub) enqueueControl(client *SocketClient, msg ServerMsg) {
 		h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, "adapter returned empty websocket message type", 0)
 		return
 	}
-	if !client.enqueue(data, 2*time.Second) {
+	if !client.enqueueOn(client.control, data, 500*time.Millisecond) {
 		h.publishSocketEvent("ERROR", client.id, http.StatusServiceUnavailable, "control message dropped", 0)
 	}
 }
@@ -589,12 +627,20 @@ func (c *SocketClient) subscriptionList() []string {
 
 func (c *SocketClient) close() {
 	c.closeOnce.Do(func() {
+		c.closed.Store(true)
 		close(c.done)
 	})
 }
 
 func (c *SocketClient) enqueue(msg EncodedServerMessage, timeout time.Duration) bool {
+	return c.enqueueOn(c.send, msg, timeout)
+}
+
+func (c *SocketClient) enqueueOn(ch chan EncodedServerMessage, msg EncodedServerMessage, timeout time.Duration) bool {
 	if msg.Kind == 0 {
+		return false
+	}
+	if ch == nil || c.closed.Load() {
 		return false
 	}
 	select {
@@ -606,7 +652,7 @@ func (c *SocketClient) enqueue(msg EncodedServerMessage, timeout time.Duration) 
 		select {
 		case <-c.done:
 			return false
-		case c.send <- msg:
+		case ch <- msg:
 			return true
 		default:
 			return false
@@ -618,7 +664,7 @@ func (c *SocketClient) enqueue(msg EncodedServerMessage, timeout time.Duration) 
 	select {
 	case <-c.done:
 		return false
-	case c.send <- msg:
+	case ch <- msg:
 		return true
 	case <-timer.C:
 		return false
@@ -720,10 +766,11 @@ func (RawAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
 func (RawAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
 	switch msg.Type {
 	case "data", "":
-		if len(msg.Payload) == 0 {
-			return textMessage([]byte(`{}`)), nil
+		payload, err := RawAdapter{}.EncodePayload(msg.Payload)
+		if err != nil {
+			return EncodedServerMessage{}, err
 		}
-		return textMessage(msg.Payload), nil
+		return RawAdapter{}.WrapData(payload, msg.ID)
 	case "connection_ack":
 		return marshalTextMessage(map[string]any{"type": "connection_ack"})
 	case "subscribe_ack":
@@ -735,6 +782,20 @@ func (RawAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, erro
 	default:
 		return marshalTextMessage(map[string]any{"type": msg.Type})
 	}
+}
+
+func (RawAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+	return EncodedPayload{
+		Data: append([]byte(nil), payload...),
+		Kind: websocket.MessageText,
+	}, nil
+}
+
+func (RawAdapter) WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error) {
+	return EncodedServerMessage{Data: payload.Data, Kind: payload.Kind}, nil
 }
 
 func (RawAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
@@ -787,22 +848,34 @@ func (AppSyncAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, 
 	case "error":
 		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "payload": appSyncErrorPayload(msg.Payload)})
 	case "data", "":
-		var payload any = map[string]any{}
-		if len(msg.Payload) > 0 {
-			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-				payload = string(msg.Payload)
-			}
+		payload, err := AppSyncAdapter{}.EncodePayload(msg.Payload)
+		if err != nil {
+			return EncodedServerMessage{}, err
 		}
-		return marshalTextMessage(map[string]any{
-			"type": "data",
-			"id":   msg.ID,
-			"payload": map[string]any{
-				"data": payload,
-			},
-		})
+		return AppSyncAdapter{}.WrapData(payload, msg.ID)
 	default:
 		return marshalTextMessage(map[string]any{"type": msg.Type, "id": msg.ID})
 	}
+}
+
+func (AppSyncAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
+	var value any = map[string]any{}
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &value); err != nil {
+			value = string(payload)
+		}
+	}
+	return EncodedPayload{Value: value, Kind: websocket.MessageText}, nil
+}
+
+func (AppSyncAdapter) WrapData(payload EncodedPayload, subID string) (EncodedServerMessage, error) {
+	return marshalTextMessage(map[string]any{
+		"type": "data",
+		"id":   subID,
+		"payload": map[string]any{
+			"data": payload.Value,
+		},
+	})
 }
 
 func (AppSyncAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
