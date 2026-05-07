@@ -51,6 +51,7 @@ type PlayerEvent struct {
 	SequenceID      string      `json:"sequence_id"`
 	StepID          string      `json:"step_id,omitempty"`
 	StepIndex       int         `json:"step_index,omitempty"`
+	DelayMs         int64       `json:"delay_ms,omitempty"`
 	DispatchSummary string      `json:"dispatch_summary,omitempty"`
 	Error           string      `json:"error,omitempty"`
 	At              time.Time   `json:"at"`
@@ -148,18 +149,23 @@ type SequencePlayer struct {
 	schemas     *SchemaRegistry
 	hub         *SocketHub
 	broadcaster *PlayerBroadcaster
+	clock       Clock
 
 	mu      sync.RWMutex
 	runners map[string]*sequenceRunner
 }
 
-func NewSequencePlayer(reg *EventSequenceRegistry, templates *EventTemplateRegistry, schemas *SchemaRegistry, hub *SocketHub, broadcaster *PlayerBroadcaster) *SequencePlayer {
+func NewSequencePlayer(reg *EventSequenceRegistry, templates *EventTemplateRegistry, schemas *SchemaRegistry, hub *SocketHub, broadcaster *PlayerBroadcaster, clock Clock) *SequencePlayer {
+	if clock == nil {
+		clock = systemClock
+	}
 	return &SequencePlayer{
 		reg:         reg,
 		templates:   templates,
 		schemas:     schemas,
 		hub:         hub,
 		broadcaster: broadcaster,
+		clock:       clock,
 		runners:     make(map[string]*sequenceRunner),
 	}
 }
@@ -370,7 +376,7 @@ type sequenceRunner struct {
 }
 
 func newSequenceRunner(player *SequencePlayer, seq EventSequence, opts PlayOptions) *sequenceRunner {
-	now := time.Now().UTC()
+	now := player.clock.Now().UTC()
 	current := clampStep(opts.StartStep, len(seq.Steps))
 	state := PlayerState{
 		SequenceID:  seq.ID,
@@ -407,7 +413,7 @@ func (r *sequenceRunner) setState(mut func(*PlayerState)) PlayerState {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	mut(&r.state)
-	r.state.UpdatedAt = time.Now().UTC()
+	r.state.UpdatedAt = r.player.clock.Now().UTC()
 	return clonePlayerState(r.state)
 }
 
@@ -436,10 +442,8 @@ func (r *sequenceRunner) shutdown() {
 
 func (r *sequenceRunner) loop() {
 	defer close(r.done)
-	timer := time.NewTimer(time.Hour)
-	if !timer.Stop() {
-		<-timer.C
-	}
+	timer := r.player.clock.NewTimer(time.Hour)
+	stopTimer(timer)
 
 	var waiting bool
 	var waitUntil time.Time
@@ -461,7 +465,7 @@ func (r *sequenceRunner) loop() {
 					nextWaiting, nextRemaining, exit := r.handleCommand(cmd, timer, false, time.Time{}, remaining)
 					waiting, remaining = nextWaiting, nextRemaining
 					if waiting {
-						waitUntil = time.Now().Add(remaining)
+						waitUntil = r.player.clock.Now().Add(remaining)
 					}
 					if exit {
 						return
@@ -473,14 +477,14 @@ func (r *sequenceRunner) loop() {
 			}
 			waiting = true
 			remaining = delay
-			waitUntil = time.Now().Add(delay)
+			waitUntil = r.player.clock.Now().Add(delay)
 			resetTimer(timer, delay)
-			// TODO: emit a "waiting" player event with the armed step and delay.
+			r.publishWaiting(state.CurrentStep, delay)
 		}
 
 		if waiting {
 			select {
-			case <-timer.C:
+			case <-timer.C():
 				waiting = false
 				remaining = 0
 				r.dispatchCurrentStep()
@@ -488,7 +492,7 @@ func (r *sequenceRunner) loop() {
 				nextWaiting, nextRemaining, exit := r.handleCommand(cmd, timer, waiting, waitUntil, remaining)
 				waiting, remaining = nextWaiting, nextRemaining
 				if waiting {
-					waitUntil = time.Now().Add(remaining)
+					waitUntil = r.player.clock.Now().Add(remaining)
 				}
 				if exit {
 					return
@@ -501,7 +505,7 @@ func (r *sequenceRunner) loop() {
 		nextWaiting, nextRemaining, exit := r.handleCommand(cmd, timer, false, waitUntil, remaining)
 		waiting, remaining = nextWaiting, nextRemaining
 		if waiting {
-			waitUntil = time.Now().Add(remaining)
+			waitUntil = r.player.clock.Now().Add(remaining)
 		}
 		if exit {
 			return
@@ -509,7 +513,7 @@ func (r *sequenceRunner) loop() {
 	}
 }
 
-func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, waiting bool, waitUntil time.Time, remaining time.Duration) (bool, time.Duration, bool) {
+func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting bool, waitUntil time.Time, remaining time.Duration) (bool, time.Duration, bool) {
 	reply := func(state PlayerState, err error) {
 		if cmd.reply != nil {
 			cmd.reply <- playerCommandReply{state: state, err: err}
@@ -538,6 +542,9 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 			}
 		})
 		r.publishState("state")
+		if nextRemaining > 0 {
+			r.publishWaiting(state.CurrentStep, nextRemaining)
+		}
 		reply(state, nil)
 		return nextRemaining > 0, nextRemaining, false
 	case playerCommandPause:
@@ -548,7 +555,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 		}
 		if waiting {
 			stopTimer(timer)
-			remaining = time.Until(waitUntil)
+			remaining = waitUntil.Sub(r.player.clock.Now())
 			if remaining < 0 {
 				remaining = 0
 			}
@@ -597,7 +604,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 		oldSpeed := currentState.Speed
 		var nextRemaining time.Duration
 		if waiting {
-			nextRemaining = time.Until(waitUntil)
+			nextRemaining = waitUntil.Sub(r.player.clock.Now())
 			if nextRemaining < 0 {
 				nextRemaining = 0
 			}
@@ -615,6 +622,9 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer *time.Timer, wai
 			s.Speed = cmd.speed
 		})
 		r.publishState("state")
+		if waiting && nextRemaining > 0 {
+			r.publishWaiting(state.CurrentStep, nextRemaining)
+		}
 		reply(state, nil)
 		return waiting && nextRemaining > 0, nextRemaining, false
 	case playerCommandShutdown:
@@ -732,7 +742,7 @@ func (r *sequenceRunner) publishStateSnapshot(kind string, state PlayerState) {
 		Type:       kind,
 		State:      state,
 		SequenceID: r.seq.ID,
-		At:         time.Now().UTC(),
+		At:         r.player.clock.Now().UTC(),
 	})
 }
 
@@ -744,7 +754,23 @@ func (r *sequenceRunner) publishStep(stepID string, stepIndex int, summary strin
 		StepID:          stepID,
 		StepIndex:       stepIndex,
 		DispatchSummary: summary,
-		At:              time.Now().UTC(),
+		At:              r.player.clock.Now().UTC(),
+	})
+}
+
+func (r *sequenceRunner) publishWaiting(stepIndex int, delay time.Duration) {
+	if stepIndex < 0 || stepIndex >= len(r.seq.Steps) {
+		return
+	}
+	step := r.seq.Steps[stepIndex]
+	r.player.broadcaster.Publish(PlayerEvent{
+		Type:       "waiting",
+		State:      r.State(),
+		SequenceID: r.seq.ID,
+		StepID:     step.ID,
+		StepIndex:  stepIndex,
+		DelayMs:    delay.Milliseconds(),
+		At:         r.player.clock.Now().UTC(),
 	})
 }
 
@@ -754,7 +780,7 @@ func (r *sequenceRunner) publishError(state PlayerState, err error) {
 		State:      state,
 		SequenceID: r.seq.ID,
 		Error:      err.Error(),
-		At:         time.Now().UTC(),
+		At:         r.player.clock.Now().UTC(),
 	})
 }
 
@@ -802,16 +828,16 @@ func rescaleRemaining(remaining time.Duration, oldSpeed, newSpeed float64) time.
 	return scaled
 }
 
-func stopTimer(timer *time.Timer) {
+func stopTimer(timer Timer) {
 	if !timer.Stop() {
 		select {
-		case <-timer.C:
+		case <-timer.C():
 		default:
 		}
 	}
 }
 
-func resetTimer(timer *time.Timer, d time.Duration) {
+func resetTimer(timer Timer, d time.Duration) {
 	stopTimer(timer)
 	timer.Reset(d)
 }

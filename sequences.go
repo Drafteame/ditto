@@ -176,8 +176,6 @@ func (r *EventSequenceRegistry) Get(id string) (EventSequence, error) {
 }
 
 func (r *EventSequenceRegistry) Create(seq EventSequence) (EventSequence, error) {
-	// validateSequenceVariableKeyCollisions runs against the raw input
-	// before normalize trims keys, so "foo" and " foo " are caught.
 	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
 		return EventSequence{}, err
 	}
@@ -212,8 +210,6 @@ func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSeque
 	if !isSafeEventTemplateID(id) {
 		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
-	// validateSequenceVariableKeyCollisions runs against the raw input
-	// before normalize trims keys, so "foo" and " foo " are caught.
 	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
 		return EventSequence{}, err
 	}
@@ -623,6 +619,8 @@ func validateSequenceVariableKeys(vars map[string]json.RawMessage, label string)
 	return nil
 }
 
+// validateSequenceVariableKeyCollisions runs against raw input before
+// normalize trims keys, so "foo" and " foo " are caught.
 func validateSequenceVariableKeyCollisions(seq EventSequence) error {
 	if err := validateSequenceVariableKeys(seq.Vars, "sequence vars"); err != nil {
 		return err

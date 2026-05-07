@@ -119,6 +119,11 @@ explicitly starts in Max mode.
 
 Max mode (`speed = 0`) skips all waits and dispatches steps back-to-back.
 
+When playback arms a positive delay for the next step, the SSE stream emits a
+`waiting` player event before the step dispatches. The event includes
+`step_id`, `step_index`, and `delay_ms`, where `delay_ms` is the wall-clock
+delay after applying the current speed.
+
 ## Schemas
 
 If a resolved step has `type_name`, Ditto validates that the schema type is

@@ -1,189 +1,56 @@
 import { useCallback, useEffect, useRef, useMemo } from 'react'
-import { useShallow } from 'zustand/react/shallow'
 import type { LogEntry } from './types'
+import { useAppShellState } from './hooks/useAppShellState'
 import { useSSE } from './hooks/useSSE'
 import { useSequenceEvents } from './hooks/useSequenceEvents'
 import { useToast } from './hooks/useToast'
+import { useAppShortcuts } from './hooks/useAppShortcuts'
 import * as api from './api'
-import { useAppUiStore } from './stores/useAppUiStore'
-import { useLogStore } from './stores/useLogStore'
-import { useMockStore } from './stores/useMockStore'
 import { useEventTemplateStore } from './stores/useEventTemplateStore'
 import { useSequenceStore } from './stores/useSequenceStore'
 import { useSchemaStore } from './stores/useSchemaStore'
 import { useSocketStore } from './stores/useSocketStore'
-import { Header } from './components/Header'
-import { UpdateBanner } from './components/UpdateBanner'
-import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
-import { LogPanel, LOG_SEARCH_INPUT_ID } from './components/LogPanel'
-import { SocketPanel } from './components/SocketPanel'
-import { EventTemplatesPanel } from './components/EventTemplatesPanel'
-import { SequencesPanel } from './components/SequencesPanel'
-import { Drawer } from './components/Drawer'
-import { MockEditorModal, createNewMockState, createEditMockState } from './components/MockEditorModal'
-import { QRModal } from './components/QRModal'
-import { ToastContainer } from './components/ToastContainer'
+import { createNewMockState, createEditMockState } from './components/MockEditorModal'
+import { AppShell } from './components/AppShell'
+import { RequestsView } from './views/RequestsView'
+import { SocketsView } from './views/SocketsView'
+import { TemplatesView } from './views/TemplatesView'
+import { SequencesView } from './views/SequencesView'
 
-function isInsideWails(): boolean {
-  return new URLSearchParams(window.location.search).get('desktop') === '1'
-}
+function isInsideWails(): boolean { return new URLSearchParams(window.location.search).get('desktop') === '1' }
+function isMobileDevice(): boolean { return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) }
 
-function isMobileDevice(): boolean {
-  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-}
+const views = { requests: RequestsView, sockets: SocketsView, templates: TemplatesView, sequences: SequencesView }
 
 export default function App() {
-  const { mocks, serverInfo, loadMocks, reloadMocks, advanceSequenceCursor } =
-    useMockStore(useShallow(state => ({
-      mocks: state.mocks,
-      serverInfo: state.serverInfo,
-      loadMocks: state.loadMocks,
-      reloadMocks: state.reloadMocks,
-      advanceSequenceCursor: state.advanceSequenceCursor,
-    })))
-  const {
-    logEntries,
-    connected,
-    selectedLogId,
-    setConnected,
-    appendLogEvent,
-    clearLog,
-    selectLog,
-  } = useLogStore(useShallow(state => ({
-    logEntries: state.logEntries,
-    connected: state.connected,
-    selectedLogId: state.selectedLogId,
-    setConnected: state.setConnected,
-    appendLogEvent: state.appendLogEvent,
-    clearLog: state.clearLog,
-    selectLog: state.selectLog,
-  })))
-  const {
-    sidebarOpen,
-    sidebarCollapsed,
-    activeView,
-    drawerWidth,
-    updateInfo,
-    modalState,
-    qrOpen,
-    setSidebarOpen,
-    toggleSidebarOpen,
-    setSidebarCollapsed,
-    toggleSidebarCollapsed,
-    setDrawerWidth,
-    setUpdateInfo,
-    setModalState,
-    setQrOpen,
-    setActiveView,
-  } = useAppUiStore(useShallow(state => ({
-    sidebarOpen: state.sidebarOpen,
-    sidebarCollapsed: state.sidebarCollapsed,
-    activeView: state.activeView,
-    drawerWidth: state.drawerWidth,
-    updateInfo: state.updateInfo,
-    modalState: state.modalState,
-    qrOpen: state.qrOpen,
-    setSidebarOpen: state.setSidebarOpen,
-    toggleSidebarOpen: state.toggleSidebarOpen,
-    setSidebarCollapsed: state.setSidebarCollapsed,
-    toggleSidebarCollapsed: state.toggleSidebarCollapsed,
-    setDrawerWidth: state.setDrawerWidth,
-    setUpdateInfo: state.setUpdateInfo,
-    setModalState: state.setModalState,
-    setQrOpen: state.setQrOpen,
-    setActiveView: state.setActiveView,
-  })))
-  const {
-    connectedClients,
-    socketClientsLoading,
-    socketClientsError,
-    loadSocketClients,
-  } = useSocketStore(useShallow(state => ({
-    connectedClients: state.connectedClients,
-    socketClientsLoading: state.loading,
-    socketClientsError: state.error,
-    loadSocketClients: state.loadClients,
-  })))
-  const {
-    schemaPacks,
-    schemaTypes,
-    schemasLoading,
-    schemasError,
-    loadSchemas,
-    uploadSchemaPack,
-    deleteSchemaPack,
-  } = useSchemaStore(useShallow(state => ({
-    schemaPacks: state.packs,
-    schemaTypes: state.types,
-    schemasLoading: state.loading,
-    schemasError: state.error,
-    loadSchemas: state.loadSchemas,
-    uploadSchemaPack: state.uploadPack,
-    deleteSchemaPack: state.deletePack,
-  })))
-  const {
-    eventTemplates,
-    eventTemplatesLoading,
-    eventTemplatesError,
-    loadEventTemplates,
-    saveEventTemplate,
-    deleteEventTemplate,
-    dispatchEventTemplate,
-  } = useEventTemplateStore(useShallow(state => ({
-    eventTemplates: state.templates,
-    eventTemplatesLoading: state.loading,
-    eventTemplatesError: state.error,
-    loadEventTemplates: state.loadTemplates,
-    saveEventTemplate: state.saveTemplate,
-    deleteEventTemplate: state.deleteTemplate,
-    dispatchEventTemplate: state.dispatchTemplate,
-  })))
-  const {
-    sequences,
-    playerStates,
-    sequencesLoading,
-    sequencesError,
-    loadSequences,
-    loadPlayerStates,
-    saveSequence,
-    deleteSequence,
-    playSequence,
-    pauseSequence,
-    stopSequence,
-    seekSequence,
-    setSequenceSpeed,
-    applyPlayerEvent,
-  } = useSequenceStore(useShallow(state => ({
-    sequences: state.sequences,
-    playerStates: state.playerStates,
-    sequencesLoading: state.loading,
-    sequencesError: state.error,
-    loadSequences: state.loadSequences,
-    loadPlayerStates: state.loadPlayerStates,
-    saveSequence: state.saveSequence,
-    deleteSequence: state.deleteSequence,
-    playSequence: state.playSequence,
-    pauseSequence: state.pauseSequence,
-    stopSequence: state.stopSequence,
-    seekSequence: state.seekSequence,
-    setSequenceSpeed: state.setSequenceSpeed,
-    applyPlayerEvent: state.applyPlayerEvent,
-  })))
+  const { mock, log, ui, counts } = useAppShellState()
+  const { mocks, serverInfo, loadMocks, reloadMocks, advanceSequenceCursor } = mock
+  const { logEntries, connected, selectedLogId, setConnected, appendLogEvent, clearLog, selectLog } = log
+  const { sidebarOpen, sidebarCollapsed, activeView, drawerWidth, updateInfo, modalState, qrOpen, setSidebarOpen, toggleSidebarOpen, setSidebarCollapsed, toggleSidebarCollapsed, setDrawerWidth, setUpdateInfo, setModalState, setQrOpen, setActiveView } = ui
+  const { connectedClientCount, eventTemplateCount, sequenceCount } = counts
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
   const isMobile = useRef(isMobileDevice()).current
   const socketRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const refreshData = useCallback(() => {
+    loadMocks()
+    useSocketStore.getState().loadClients()
+    useSchemaStore.getState().loadSchemas()
+    useEventTemplateStore.getState().loadTemplates()
+    useSequenceStore.getState().loadSequences()
+  }, [loadMocks])
+
   const scheduleSocketClientRefresh = useCallback(() => {
     if (socketRefreshTimer.current) {
       clearTimeout(socketRefreshTimer.current)
     }
     socketRefreshTimer.current = setTimeout(() => {
-      loadSocketClients()
+      useSocketStore.getState().loadClients()
       socketRefreshTimer.current = null
     }, 250)
-  }, [loadSocketClients])
+  }, [])
 
   useSSE(
     useCallback((event) => {
@@ -195,41 +62,27 @@ export default function App() {
     }, [advanceSequenceCursor, appendLogEvent, scheduleSocketClientRefresh]),
     useCallback(() => {
       setConnected(true)
-      loadMocks()
-      loadSocketClients()
-      loadSchemas()
-      loadEventTemplates()
-      loadSequences()
-    }, [loadEventTemplates, loadMocks, loadSchemas, loadSequences, loadSocketClients, setConnected]),
+      refreshData()
+    }, [refreshData, setConnected]),
     useCallback(() => setConnected(false), [setConnected]),
-    useCallback(() => {
-      loadMocks()
-      loadSocketClients()
-      loadSchemas()
-      loadEventTemplates()
-      loadSequences()
-    }, [loadEventTemplates, loadMocks, loadSchemas, loadSequences, loadSocketClients]),
+    refreshData,
   )
 
   useSequenceEvents(
     useCallback((event) => {
-      applyPlayerEvent(event)
-    }, [applyPlayerEvent]),
+      useSequenceStore.getState().applyPlayerEvent(event)
+    }, []),
     useCallback(() => {
-      loadPlayerStates()
-    }, [loadPlayerStates]),
+      useSequenceStore.getState().loadPlayerStates()
+    }, []),
   )
 
   useEffect(() => {
-    loadMocks()
-    loadSocketClients()
-    loadSchemas()
-    loadEventTemplates()
-    loadSequences()
+    refreshData()
     api.fetchUpdateCheck().then(data => {
       if (data.available) setUpdateInfo(data)
     }).catch(() => {})
-  }, [loadEventTemplates, loadMocks, loadSchemas, loadSequences, loadSocketClients, setUpdateInfo])
+  }, [refreshData, setUpdateInfo])
 
   useEffect(() => {
     return () => {
@@ -239,47 +92,16 @@ export default function App() {
     }
   }, [])
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setModalState(null)
-        setQrOpen(false)
-        selectLog(null)
-        return
-      }
-
-      const mod = e.metaKey || e.ctrlKey
-      if (!mod) return
-
-      const key = e.key.toLowerCase()
-      if (key === 'k') {
-        e.preventDefault()
-        const input = document.getElementById(LOG_SEARCH_INPUT_ID) as HTMLInputElement | null
-        input?.focus()
-        input?.select()
-      } else if (key === '\\') {
-        e.preventDefault()
-        const isDesktopViewport = window.matchMedia('(min-width: 768px)').matches
-        if (isDesktopViewport) {
-          toggleSidebarCollapsed()
-        } else {
-          toggleSidebarOpen()
-        }
-      } else if (key === 'l') {
-        e.preventDefault()
-        clearLog()
-      }
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [
-    clearLog,
-    selectLog,
-    setModalState,
-    setQrOpen,
-    toggleSidebarCollapsed,
-    toggleSidebarOpen,
-  ])
+  useAppShortcuts({
+    onEscape: useCallback(() => {
+      setModalState(null)
+      setQrOpen(false)
+      selectLog(null)
+    }, [selectLog, setModalState, setQrOpen]),
+    onToggleSidebar: toggleSidebarOpen,
+    onToggleSidebarCollapsed: toggleSidebarCollapsed,
+    onClearLog: clearLog,
+  })
 
   const handleReloadMocks = useCallback(async () => {
     await reloadMocks()
@@ -312,206 +134,51 @@ export default function App() {
     [selectedLogId, logEntries],
   )
 
-  const mainContent = useMemo(() => {
-    switch (activeView) {
-      case 'requests':
-        return (
-          <LogPanel
-            entries={logEntries}
-            serverInfo={serverInfo}
-            selectedId={selectedLogId}
-            onSelect={selectLog}
-            onSaveAsMock={handleSaveAsMock}
-          />
-        )
-      case 'sockets':
-        return (
-          <SocketPanel
-            clients={connectedClients}
-            entries={logEntries}
-            serverInfo={serverInfo}
-            schemaPacks={schemaPacks}
-            schemaTypes={schemaTypes}
-            schemasLoading={schemasLoading}
-            schemasError={schemasError}
-            templates={eventTemplates}
-            templatesLoading={eventTemplatesLoading}
-            templatesError={eventTemplatesError}
-            loading={socketClientsLoading}
-            error={socketClientsError}
-            onRefresh={loadSocketClients}
-            onRefreshSchemas={loadSchemas}
-            onRefreshTemplates={loadEventTemplates}
-            onUploadSchemaPack={uploadSchemaPack}
-            onDeleteSchemaPack={deleteSchemaPack}
-            onDispatchTemplate={(id, variables) => dispatchEventTemplate(id, variables)}
-            showToast={showToast}
-          />
-        )
-      case 'templates':
-        return (
-          <EventTemplatesPanel
-            templates={eventTemplates}
-            schemaTypes={schemaTypes}
-            loading={eventTemplatesLoading}
-            error={eventTemplatesError}
-            onRefresh={loadEventTemplates}
-            onSave={saveEventTemplate}
-            onDelete={deleteEventTemplate}
-            showToast={showToast}
-          />
-        )
-      case 'sequences':
-        return (
-          <SequencesPanel
-            sequences={sequences}
-            templates={eventTemplates}
-            schemaTypes={schemaTypes}
-            playerStates={playerStates}
-            loading={sequencesLoading}
-            error={sequencesError}
-            onRefresh={loadSequences}
-            onSave={saveSequence}
-            onDelete={deleteSequence}
-            onPlay={async (id) => { await playSequence(id) }}
-            onPause={async (id) => { await pauseSequence(id) }}
-            onStop={async (id) => { await stopSequence(id) }}
-            onSeek={async (id, step) => { await seekSequence(id, step) }}
-            onSpeed={async (id, speed) => { await setSequenceSpeed(id, speed) }}
-            showToast={showToast}
-          />
-        )
-    }
-  }, [
-    activeView,
-    connectedClients,
-    deleteEventTemplate,
-    deleteSequence,
-    deleteSchemaPack,
-    dispatchEventTemplate,
-    eventTemplates,
-    eventTemplatesError,
-    eventTemplatesLoading,
-    handleSaveAsMock,
-    loadEventTemplates,
-    loadSequences,
-    loadSchemas,
-    loadSocketClients,
-    logEntries,
-    pauseSequence,
-    playerStates,
-    playSequence,
-    saveEventTemplate,
-    saveSequence,
-    schemaPacks,
-    schemaTypes,
-    schemasError,
-    schemasLoading,
-    selectLog,
-    selectedLogId,
-    serverInfo,
-    sequences,
-    sequencesError,
-    sequencesLoading,
-    seekSequence,
-    setSequenceSpeed,
-    showToast,
-    socketClientsError,
-    socketClientsLoading,
-    stopSequence,
-    uploadSchemaPack,
-  ])
+  const View = views[activeView]
 
   return (
-    <>
-      <Header
-        version={serverInfo?.version || ''}
-        connected={connected}
-        isDesktop={isDesktop}
-        isMobile={isMobile}
-        onReloadMocks={handleReloadMocks}
-        onClearLog={handleClearLog}
-        onShowQR={() => setQrOpen(true)}
-        onToggleSidebar={toggleSidebarOpen}
+    <AppShell
+      activeView={activeView}
+      connected={connected}
+      connectedClientCount={connectedClientCount}
+      drawerWidth={drawerWidth}
+      eventTemplateCount={eventTemplateCount}
+      isDesktop={isDesktop}
+      isMobile={isMobile}
+      modalState={modalState}
+      mocks={mocks}
+      qrOpen={qrOpen}
+      selectedEntry={selectedEntry}
+      sequenceCount={sequenceCount}
+      serverInfo={serverInfo}
+      sidebarCollapsed={sidebarCollapsed}
+      sidebarOpen={sidebarOpen}
+      toasts={toasts}
+      updateInfo={updateInfo}
+      onChangeView={setActiveView}
+      onClearLog={handleClearLog}
+      onCloseDrawer={() => selectLog(null)}
+      onCreateMock={handleCreateMock}
+      onEditMock={handleEditMock}
+      onMocksChanged={loadMocks}
+      onReloadMocks={handleReloadMocks}
+      onResizeDrawer={setDrawerWidth}
+      onSaveAsMock={handleSaveAsMock}
+      onSetModalState={setModalState}
+      onSetQrOpen={setQrOpen}
+      onSetSidebarCollapsed={setSidebarCollapsed}
+      onSetSidebarOpen={setSidebarOpen}
+      onSetUpdateInfo={setUpdateInfo}
+      onToggleSidebar={toggleSidebarOpen}
+      showToast={showToast}
+    >
+      <View
+        serverInfo={serverInfo}
+        selectedLogId={selectedLogId}
+        onSelectLog={selectLog}
+        onSaveAsMock={handleSaveAsMock}
+        showToast={showToast}
       />
-
-      {updateInfo && (
-        <UpdateBanner info={updateInfo} onDismiss={() => setUpdateInfo(null)} />
-      )}
-
-      <main className="flex flex-1 overflow-hidden min-h-0">
-        {sidebarCollapsed && <CollapsedSidebarRail onExpand={() => setSidebarCollapsed(false)} />}
-        <Sidebar
-          open={sidebarOpen}
-          collapsed={sidebarCollapsed}
-          mocks={mocks}
-          serverInfo={serverInfo}
-          onClose={() => setSidebarOpen(false)}
-          onCollapse={() => setSidebarCollapsed(true)}
-          onMocksChanged={loadMocks}
-          onEditMock={handleEditMock}
-          onCreateMock={handleCreateMock}
-          showToast={showToast}
-        />
-        <section className="flex-1 flex flex-col min-w-0 min-h-0">
-          <div className="main-tabs">
-            <button
-              type="button"
-              className={activeView === 'requests' ? 'active' : ''}
-              onClick={() => setActiveView('requests')}
-            >
-              Requests
-            </button>
-            <button
-              type="button"
-              className={activeView === 'sockets' ? 'active' : ''}
-              onClick={() => setActiveView('sockets')}
-            >
-              Sockets
-              <span className="c">{connectedClients.length}</span>
-            </button>
-            <button
-              type="button"
-              className={activeView === 'templates' ? 'active' : ''}
-              onClick={() => setActiveView('templates')}
-            >
-              Event Templates
-              <span className="c">{eventTemplates.length}</span>
-            </button>
-            <button
-              type="button"
-              className={activeView === 'sequences' ? 'active' : ''}
-              onClick={() => setActiveView('sequences')}
-            >
-              Sequences
-              <span className="c">{sequences.length}</span>
-            </button>
-          </div>
-          {mainContent}
-        </section>
-        {selectedEntry && (
-          <Drawer
-            entry={selectedEntry}
-            serverInfo={serverInfo}
-            width={drawerWidth}
-            onResize={setDrawerWidth}
-            onClose={() => selectLog(null)}
-            onSaveAsMock={handleSaveAsMock}
-          />
-        )}
-      </main>
-
-      {modalState && (
-        <MockEditorModal
-          state={modalState}
-          onClose={() => setModalState(null)}
-          onSaved={loadMocks}
-          showToast={showToast}
-        />
-      )}
-      {qrOpen && <QRModal onClose={() => setQrOpen(false)} />}
-
-      <ToastContainer toasts={toasts} />
-    </>
+    </AppShell>
   )
 }
