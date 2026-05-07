@@ -212,7 +212,10 @@ export async function dispatchEventTemplate(
     const missing = data?.missing_variables?.length
       ? `Missing variables: ${data.missing_variables.join(', ')}`
       : ''
-    throw new Error(missing || text || `HTTP ${res.status}`)
+    const invalid = data?.invalid_casts?.length
+      ? `Invalid casts: ${data.invalid_casts.map(item => `${item.kind}:${item.name}`).join(', ')}`
+      : ''
+    throw new Error([missing, invalid, text || `HTTP ${res.status}`].filter(Boolean).join(' / '))
   }
   if (!data) throw new Error(`HTTP ${res.status}`)
   return data

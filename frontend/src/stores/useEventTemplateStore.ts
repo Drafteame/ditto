@@ -15,7 +15,7 @@ interface EventTemplateStore {
   deleteTemplate: (id: string) => Promise<void>
   dispatchTemplate: (
     id: string,
-    variables?: Record<string, string>,
+    variables?: Record<string, unknown>,
     overrides?: Pick<EventTemplateDispatchRequest, 'channel_override' | 'adapter_override'>,
   ) => Promise<EventTemplateDispatchResult>
 }

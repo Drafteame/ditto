@@ -51,6 +51,9 @@ func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(first) error = %v", err)
 	}
+	if first.Version != 1 {
+		t.Fatalf("Version = %d, want 1", first.Version)
+	}
 	second, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":2}`)}, nil)
 	if err != nil {
 		t.Fatalf("Create(second) error = %v", err)
@@ -216,6 +219,42 @@ func TestResolveTemplateRejectsInvalidJSONAndDeepPayload(t *testing.T) {
 	}
 	if _, _, err := ResolveTemplate(json.RawMessage(value), map[string]string{"x": "1"}); err == nil {
 		t.Fatalf("ResolveTemplate(deep payload) unexpectedly succeeded")
+	}
+}
+
+func TestResolveTemplateReportsInvalidCasts(t *testing.T) {
+	payload := json.RawMessage(`{"age":"{{int:age}}","future":"{{date:dob}}"}`)
+	resolved, missing, invalid, err := resolveTemplateDetailed(payload, map[string]string{"age": "abc", "dob": "2026-05-07"}, nil)
+	if err != nil {
+		t.Fatalf("resolveTemplateDetailed() error = %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("missing = %#v, want none", missing)
+	}
+	if len(invalid) != 2 || invalid[0].Name != "age" || invalid[0].Kind != "int" || invalid[1].Kind != "date" {
+		t.Fatalf("invalid casts = %#v", invalid)
+	}
+	if !strings.Contains(string(resolved), "{{int:age}}") || !strings.Contains(string(resolved), "{{date:dob}}") {
+		t.Fatalf("resolved = %s, want invalid cast placeholders preserved", resolved)
+	}
+}
+
+func TestValidateTemplateRejectsUnsupportedAndInlineCasts(t *testing.T) {
+	for name, payload := range map[string]json.RawMessage{
+		"unsupported": json.RawMessage(`{"dob":"{{date:dob}}"}`),
+		"inline":      json.RawMessage(`{"label":"age {{int:age}}"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateEventTemplate(EventTemplate{
+				Version: 1,
+				Name:    name,
+				Channel: "tickets",
+				Payload: payload,
+			}, nil)
+			if err == nil {
+				t.Fatalf("validateEventTemplate() unexpectedly succeeded")
+			}
+		})
 	}
 }
 
@@ -424,6 +463,44 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("builtins dispatch status/body = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *testing.T) {
+	reg, err := NewEventTemplateRegistry(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+	}
+	tmpl, err := reg.Create(EventTemplate{
+		Name:    "Typed",
+		Channel: "tickets",
+		Payload: json.RawMessage(`{"age":"{{int:age}}","obj":"{{json:obj}}"}`),
+	}, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	mux := http.NewServeMux()
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(NewEventBus(), false), nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"age":"abc","obj":{"score":7}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_casts") || strings.Contains(rec.Body.String(), "missing_variables") {
+		t.Fatalf("invalid cast status/body = %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"age":42,"obj":{"score":7}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("typed JSON variables status/body = %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"score":7`) || !strings.Contains(rec.Body.String(), `"age":42`) {
+		t.Fatalf("typed JSON variables response = %s", rec.Body.String())
 	}
 }
 

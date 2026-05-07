@@ -266,6 +266,84 @@ export default function App() {
     [selectedLogId, logEntries],
   )
 
+  const mainContent = useMemo(() => {
+    switch (activeView) {
+      case 'requests':
+        return (
+          <LogPanel
+            entries={logEntries}
+            serverInfo={serverInfo}
+            selectedId={selectedLogId}
+            onSelect={selectLog}
+            onSaveAsMock={handleSaveAsMock}
+          />
+        )
+      case 'sockets':
+        return (
+          <SocketPanel
+            clients={connectedClients}
+            entries={logEntries}
+            serverInfo={serverInfo}
+            schemaPacks={schemaPacks}
+            schemaTypes={schemaTypes}
+            schemasLoading={schemasLoading}
+            schemasError={schemasError}
+            templates={eventTemplates}
+            templatesLoading={eventTemplatesLoading}
+            templatesError={eventTemplatesError}
+            loading={socketClientsLoading}
+            error={socketClientsError}
+            onRefresh={loadSocketClients}
+            onRefreshSchemas={loadSchemas}
+            onRefreshTemplates={loadEventTemplates}
+            onUploadSchemaPack={uploadSchemaPack}
+            onDeleteSchemaPack={deleteSchemaPack}
+            onDispatchTemplate={(id, variables) => dispatchEventTemplate(id, variables)}
+            showToast={showToast}
+          />
+        )
+      case 'templates':
+        return (
+          <EventTemplatesPanel
+            templates={eventTemplates}
+            schemaTypes={schemaTypes}
+            loading={eventTemplatesLoading}
+            error={eventTemplatesError}
+            onRefresh={loadEventTemplates}
+            onSave={saveEventTemplate}
+            onDelete={deleteEventTemplate}
+            showToast={showToast}
+          />
+        )
+    }
+  }, [
+    activeView,
+    connectedClients,
+    deleteEventTemplate,
+    deleteSchemaPack,
+    dispatchEventTemplate,
+    eventTemplates,
+    eventTemplatesError,
+    eventTemplatesLoading,
+    handleSaveAsMock,
+    loadEventTemplates,
+    loadSchemas,
+    loadSocketClients,
+    logEntries,
+    saveEventTemplate,
+    schemaPacks,
+    schemaTypes,
+    schemasError,
+    schemasLoading,
+    selectLog,
+    selectedLogId,
+    serverInfo,
+    showToast,
+    socketClientsError,
+    socketClientsLoading,
+    uploadSchemaPack,
+  ])
+
   return (
     <>
       <Header
@@ -323,48 +401,7 @@ export default function App() {
               <span className="c">{eventTemplates.length}</span>
             </button>
           </div>
-          {activeView === 'requests' ? (
-            <LogPanel
-              entries={logEntries}
-              serverInfo={serverInfo}
-              selectedId={selectedLogId}
-              onSelect={selectLog}
-              onSaveAsMock={handleSaveAsMock}
-            />
-          ) : activeView === 'sockets' ? (
-            <SocketPanel
-              clients={connectedClients}
-              entries={logEntries}
-              serverInfo={serverInfo}
-              schemaPacks={schemaPacks}
-              schemaTypes={schemaTypes}
-              schemasLoading={schemasLoading}
-              schemasError={schemasError}
-              templates={eventTemplates}
-              templatesLoading={eventTemplatesLoading}
-              templatesError={eventTemplatesError}
-              loading={socketClientsLoading}
-              error={socketClientsError}
-              onRefresh={loadSocketClients}
-              onRefreshSchemas={loadSchemas}
-              onRefreshTemplates={loadEventTemplates}
-              onUploadSchemaPack={uploadSchemaPack}
-              onDeleteSchemaPack={deleteSchemaPack}
-              onDispatchTemplate={(id, variables) => dispatchEventTemplate(id, variables)}
-              showToast={showToast}
-            />
-          ) : (
-            <EventTemplatesPanel
-              templates={eventTemplates}
-              schemaTypes={schemaTypes}
-              loading={eventTemplatesLoading}
-              error={eventTemplatesError}
-              onRefresh={loadEventTemplates}
-              onSave={saveEventTemplate}
-              onDelete={deleteEventTemplate}
-              showToast={showToast}
-            />
-          )}
+          {mainContent}
         </section>
         {selectedEntry && (
           <Drawer

@@ -1068,6 +1068,20 @@ svg {
   flex-direction: column;
   gap: 8px;
 }
+.template-resolved-preview {
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-code);
+  color: var(--fg-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
 .quick-template-form label,
 .template-form-grid label,
 .template-description {
@@ -1320,7 +1334,7 @@ svg {
 }
 .template-variable-row {
   display: grid;
-  grid-template-columns: minmax(100px, 0.8fr) minmax(100px, 0.8fr) minmax(140px, 1.2fr) auto;
+  grid-template-columns: minmax(100px, 0.8fr) minmax(100px, 0.8fr) minmax(140px, 1.2fr) auto auto;
   gap: 8px;
   align-items: center;
 }

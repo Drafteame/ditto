@@ -164,12 +164,14 @@ type SocketDispatchResult struct {
 }
 
 type RenderedDispatch struct {
-	Channel        string          `json:"channel"`
-	Adapter        string          `json:"adapter,omitempty"`
-	TypeName       string          `json:"type_name,omitempty"`
-	Payload        json.RawMessage `json:"payload"`
-	EncodedPayload *EncodedPayload `json:"-"`
-	Missing        []string        `json:"missing,omitempty"`
+	Channel  string          `json:"channel"`
+	Adapter  string          `json:"adapter,omitempty"`
+	TypeName string          `json:"type_name,omitempty"`
+	Payload  json.RawMessage `json:"payload"`
+	// EncodedPayload is an M4 hook for sequence players that pre-encode a step.
+	EncodedPayload *EncodedPayload            `json:"-"`
+	Missing        []string                   `json:"missing,omitempty"`
+	InvalidCasts   []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
 }
 
 func NewSocketHub(bus *EventBus, jsonLogs bool) *SocketHub {

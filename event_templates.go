@@ -27,11 +27,12 @@ const (
 
 var (
 	ErrEventTemplateNotFound = errors.New("event template not found")
-	templateVariablePattern  = regexp.MustCompile(`\{\{\s*(?:(str|json|int|float|bool):)?([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
+	templateVariablePattern  = regexp.MustCompile(`\{\{\s*(?:(\w+):)?([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
 	templateNamePattern      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 type EventTemplate struct {
+	Version     int                     `json:"version"`
 	ID          string                  `json:"id"`
 	Name        string                  `json:"name"`
 	Description string                  `json:"description,omitempty"`
@@ -50,6 +51,12 @@ type EventTemplateVariable struct {
 	Default     *string `json:"default,omitempty"`
 }
 
+type EventTemplateInvalidCast struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
 type EventTemplateRegistry struct {
 	mu        sync.RWMutex
 	dir       string
@@ -61,15 +68,16 @@ type eventTemplatesResponse struct {
 }
 
 type eventTemplateDispatchRequest struct {
-	Variables       map[string]string `json:"variables,omitempty"`
-	ChannelOverride string            `json:"channel_override,omitempty"`
-	AdapterOverride string            `json:"adapter_override,omitempty"`
+	Variables       map[string]json.RawMessage `json:"variables,omitempty"`
+	ChannelOverride string                     `json:"channel_override,omitempty"`
+	AdapterOverride string                     `json:"adapter_override,omitempty"`
 }
 
 type eventTemplateDispatchResponse struct {
 	SocketDispatchResult
-	ResolvedPayload  json.RawMessage `json:"resolved_payload"`
-	MissingVariables []string        `json:"missing_variables,omitempty"`
+	ResolvedPayload  json.RawMessage            `json:"resolved_payload"`
+	MissingVariables []string                   `json:"missing_variables,omitempty"`
+	InvalidCasts     []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
 }
 
 func NewEventTemplateRegistry(dir string) (*EventTemplateRegistry, error) {
@@ -254,16 +262,17 @@ func (r *EventTemplateRegistry) Render(id string, vars map[string]string) (Rende
 			defaults[name] = variable.Default
 		}
 	}
-	payload, missing, err := resolveTemplate(tmpl.Payload, vars, defaults)
+	payload, missing, invalidCasts, err := resolveTemplateDetailed(tmpl.Payload, vars, defaults)
 	if err != nil {
 		return RenderedDispatch{}, err
 	}
 	return RenderedDispatch{
-		Channel:  strings.TrimSpace(tmpl.Channel),
-		Adapter:  tmpl.Adapter,
-		TypeName: tmpl.TypeName,
-		Payload:  payload,
-		Missing:  missing,
+		Channel:      strings.TrimSpace(tmpl.Channel),
+		Adapter:      tmpl.Adapter,
+		TypeName:     tmpl.TypeName,
+		Payload:      payload,
+		Missing:      missing,
+		InvalidCasts: invalidCasts,
 	}, nil
 }
 
@@ -313,16 +322,28 @@ func (r *EventTemplateRegistry) pathForIDLocked(id string) string {
 }
 
 func ResolveTemplate(payload json.RawMessage, vars map[string]string) (json.RawMessage, []string, error) {
-	return resolveTemplate(payload, vars, nil)
+	resolved, missing, invalidCasts, err := resolveTemplateDetailed(payload, vars, nil)
+	if err != nil {
+		return resolved, missing, err
+	}
+	if len(invalidCasts) > 0 {
+		return resolved, missing, fmt.Errorf("invalid template casts: %s", describeInvalidCasts(invalidCasts))
+	}
+	return resolved, missing, nil
 }
 
 func resolveTemplate(payload json.RawMessage, vars map[string]string, defaults map[string]*string) (json.RawMessage, []string, error) {
+	resolved, missing, _, err := resolveTemplateDetailed(payload, vars, defaults)
+	return resolved, missing, err
+}
+
+func resolveTemplateDetailed(payload json.RawMessage, vars map[string]string, defaults map[string]*string) (json.RawMessage, []string, []EventTemplateInvalidCast, error) {
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
 	var value any
 	if err := json.Unmarshal(payload, &value); err != nil {
-		return nil, nil, fmt.Errorf("invalid template payload JSON: %w", err)
+		return nil, nil, nil, fmt.Errorf("invalid template payload JSON: %w", err)
 	}
 	values := builtinTemplateValues()
 	for name, value := range defaults {
@@ -333,27 +354,43 @@ func resolveTemplate(payload json.RawMessage, vars map[string]string, defaults m
 	for name, value := range vars {
 		values[name] = value
 	}
-	missingSet := make(map[string]struct{})
-	var missing []string
-	addMissing := func(name string) {
-		if _, ok := missingSet[name]; ok {
-			return
-		}
-		missingSet[name] = struct{}{}
-		missing = append(missing, name)
+	state := &templateResolveState{
+		missingSet: make(map[string]struct{}),
 	}
-	resolved, err := resolveTemplateValue(value, values, addMissing, 0)
+	resolved, err := resolveTemplateValue(value, values, state, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	data, err := json.Marshal(resolved)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return data, missing, nil
+	return data, state.missing, state.invalidCasts, nil
 }
 
-func resolveTemplateValue(value any, values map[string]string, addMissing func(string), depth int) (any, error) {
+type templateResolveState struct {
+	missingSet   map[string]struct{}
+	missing      []string
+	invalidCasts []EventTemplateInvalidCast
+}
+
+func (s *templateResolveState) addMissing(name string) {
+	if _, ok := s.missingSet[name]; ok {
+		return
+	}
+	s.missingSet[name] = struct{}{}
+	s.missing = append(s.missing, name)
+}
+
+func (s *templateResolveState) addInvalidCast(name, kind, value string) {
+	s.invalidCasts = append(s.invalidCasts, EventTemplateInvalidCast{
+		Name:  name,
+		Kind:  kind,
+		Value: value,
+	})
+}
+
+func resolveTemplateValue(value any, values map[string]string, state *templateResolveState, depth int) (any, error) {
 	if depth > maxTemplateResolveDepth {
 		return nil, fmt.Errorf("template payload nesting exceeds depth limit %d", maxTemplateResolveDepth)
 	}
@@ -361,7 +398,7 @@ func resolveTemplateValue(value any, values map[string]string, addMissing func(s
 	case map[string]any:
 		next := make(map[string]any, len(typed))
 		for key, child := range typed {
-			resolved, err := resolveTemplateValue(child, values, addMissing, depth+1)
+			resolved, err := resolveTemplateValue(child, values, state, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -371,7 +408,7 @@ func resolveTemplateValue(value any, values map[string]string, addMissing func(s
 	case []any:
 		next := make([]any, len(typed))
 		for i, child := range typed {
-			resolved, err := resolveTemplateValue(child, values, addMissing, depth+1)
+			resolved, err := resolveTemplateValue(child, values, state, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -379,13 +416,13 @@ func resolveTemplateValue(value any, values map[string]string, addMissing func(s
 		}
 		return next, nil
 	case string:
-		return resolveTemplateString(typed, values, addMissing), nil
+		return resolveTemplateString(typed, values, state), nil
 	default:
 		return value, nil
 	}
 }
 
-func resolveTemplateString(value string, values map[string]string, addMissing func(string)) any {
+func resolveTemplateString(value string, values map[string]string, state *templateResolveState) any {
 	matches := templateVariablePattern.FindAllStringSubmatchIndex(value, -1)
 	if len(matches) == 0 {
 		return value
@@ -395,10 +432,10 @@ func resolveTemplateString(value string, values map[string]string, addMissing fu
 		name := value[matches[0][4]:matches[0][5]]
 		resolved, ok := values[name]
 		if !ok {
-			addMissing(name)
+			state.addMissing(name)
 			return value
 		}
-		return typedTemplateValue(kind, name, resolved, addMissing)
+		return typedTemplateValue(kind, name, resolved, state)
 	}
 
 	var b strings.Builder
@@ -408,7 +445,7 @@ func resolveTemplateString(value string, values map[string]string, addMissing fu
 		name := value[match[4]:match[5]]
 		resolved, ok := values[name]
 		if !ok {
-			addMissing(name)
+			state.addMissing(name)
 			b.WriteString(value[match[0]:match[1]])
 		} else {
 			b.WriteString(resolved)
@@ -426,7 +463,7 @@ func templateMatchKind(value string, match []int) string {
 	return value[match[2]:match[3]]
 }
 
-func typedTemplateValue(kind, name, value string, addMissing func(string)) any {
+func typedTemplateValue(kind, name, value string, state *templateResolveState) any {
 	switch kind {
 	case "", "str":
 		return value
@@ -448,7 +485,7 @@ func typedTemplateValue(kind, name, value string, addMissing func(string)) any {
 			return parsed
 		}
 	}
-	addMissing(name)
+	state.addInvalidCast(name, kind, value)
 	return fmt.Sprintf("{{%s:%s}}", kind, name)
 }
 
@@ -575,7 +612,12 @@ func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registr
 	if ok := decodeEventTemplateJSON(w, r, &req, true); !ok {
 		return
 	}
-	rendered, err := registry.Render(id, req.Variables)
+	vars, err := eventTemplateVariablesToStrings(req.Variables)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rendered, err := registry.Render(id, vars)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, ErrEventTemplateNotFound) {
@@ -584,12 +626,13 @@ func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registr
 		http.Error(w, err.Error(), status)
 		return
 	}
-	if len(rendered.Missing) > 0 {
+	if len(rendered.Missing) > 0 || len(rendered.InvalidCasts) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(eventTemplateDispatchResponse{
 			ResolvedPayload:  rendered.Payload,
 			MissingVariables: rendered.Missing,
+			InvalidCasts:     rendered.InvalidCasts,
 		})
 		return
 	}
@@ -608,6 +651,41 @@ func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registr
 	})
 }
 
+func eventTemplateVariablesToStrings(vars map[string]json.RawMessage) (map[string]string, error) {
+	if len(vars) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(vars))
+	for name, raw := range vars {
+		name = strings.TrimSpace(name)
+		if !templateNamePattern.MatchString(name) {
+			return nil, fmt.Errorf("invalid variable name %q", name)
+		}
+		if len(raw) == 0 {
+			out[name] = ""
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(raw, &text); err == nil {
+			out[name] = text
+			continue
+		}
+		if !json.Valid(raw) {
+			return nil, fmt.Errorf("variable %q must be valid JSON", name)
+		}
+		out[name] = string(raw)
+	}
+	return out, nil
+}
+
+func describeInvalidCasts(casts []EventTemplateInvalidCast) string {
+	parts := make([]string, 0, len(casts))
+	for _, cast := range casts {
+		parts = append(parts, fmt.Sprintf("%s:%s", cast.Kind, cast.Name))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func splitEventTemplatePath(rest string) (id string, action string, ok bool) {
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
 	if len(parts) == 1 && isSafeEventTemplateID(parts[0]) {
@@ -620,6 +698,9 @@ func splitEventTemplatePath(rest string) (id string, action string, ok bool) {
 }
 
 func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry) error {
+	if tmpl.Version != 1 {
+		return fmt.Errorf("unsupported event template version %d", tmpl.Version)
+	}
 	if strings.TrimSpace(tmpl.Name) == "" {
 		return fmt.Errorf("name is required")
 	}
@@ -643,6 +724,9 @@ func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry) error {
 	if !json.Valid(tmpl.Payload) {
 		return fmt.Errorf("payload must be valid JSON")
 	}
+	if err := validateTemplateCasts(tmpl.Payload); err != nil {
+		return err
+	}
 	typeName := strings.TrimSpace(tmpl.TypeName)
 	if typeName != "" {
 		if schemas == nil || schemas.Descriptor(typeName) == nil {
@@ -664,6 +748,56 @@ func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry) error {
 		seen[name] = struct{}{}
 	}
 	return nil
+}
+
+func validateTemplateCasts(payload json.RawMessage) error {
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return fmt.Errorf("payload must be valid JSON")
+	}
+	return validateTemplateCastsInValue(value)
+}
+
+func validateTemplateCastsInValue(value any) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, child := range typed {
+			if err := validateTemplateCastsInValue(child); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if err := validateTemplateCastsInValue(child); err != nil {
+				return err
+			}
+		}
+	case string:
+		matches := templateVariablePattern.FindAllStringSubmatchIndex(typed, -1)
+		for _, match := range matches {
+			kind := templateMatchKind(typed, match)
+			if kind == "" {
+				continue
+			}
+			if !isSupportedTemplateCast(kind) {
+				return fmt.Errorf("unsupported template cast %q", kind)
+			}
+			if !(len(matches) == 1 && match[0] == 0 && match[1] == len(typed)) {
+				name := typed[match[4]:match[5]]
+				return fmt.Errorf("typed template cast %q for %q must occupy the whole string", kind, name)
+			}
+		}
+	}
+	return nil
+}
+
+func isSupportedTemplateCast(kind string) bool {
+	switch kind {
+	case "str", "json", "int", "float", "bool":
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeEventTemplateJSON(w http.ResponseWriter, r *http.Request, dst any, allowEmpty bool) bool {
@@ -692,6 +826,9 @@ func decodeEventTemplateJSON(w http.ResponseWriter, r *http.Request, dst any, al
 }
 
 func normalizeEventTemplate(tmpl EventTemplate) EventTemplate {
+	if tmpl.Version == 0 {
+		tmpl.Version = 1
+	}
 	tmpl.Name = strings.TrimSpace(tmpl.Name)
 	tmpl.Description = strings.TrimSpace(tmpl.Description)
 	tmpl.Channel = strings.TrimSpace(tmpl.Channel)

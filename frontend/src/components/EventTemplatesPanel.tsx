@@ -306,6 +306,11 @@ function TemplateEditorModal({
                 <input className="input" value={variable.name} onChange={e => updateVariable(index, { name: e.target.value })} placeholder="name" />
                 <input className="input" value={variable.default ?? ''} onChange={e => updateVariable(index, { default: e.target.value })} placeholder="default" />
                 <input className="input" value={variable.description ?? ''} onChange={e => updateVariable(index, { description: e.target.value })} placeholder="description" />
+                {variable.default !== undefined && (
+                  <button type="button" className="btn ghost" onClick={() => updateVariable(index, { default: undefined })}>
+                    Clear
+                  </button>
+                )}
                 <button type="button" className="btn icon ghost" onClick={() => removeVariable(index)} aria-label="Remove variable">
                   <X size={14} />
                 </button>
@@ -354,7 +359,7 @@ export function detectTemplateVariablesInValue(value: unknown): string[] {
 
 function detectTemplateVariablesInString(payloadText: string): string[] {
   const names = new Set<string>()
-  const re = /\{\{\s*(?:(?:str|json|int|float|bool):)?([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
+  const re = /\{\{\s*(?:(?:\w+):)?([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
   let match: RegExpExecArray | null
   while ((match = re.exec(payloadText)) !== null) {
     names.add(match[1])

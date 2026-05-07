@@ -109,6 +109,7 @@ export interface EventTemplateVariable {
 }
 
 export interface EventTemplate {
+  version: number
   id: string
   name: string
   description?: string
@@ -126,7 +127,7 @@ export interface EventTemplatesResponse {
 }
 
 export interface EventTemplateDispatchRequest {
-  variables?: Record<string, string>
+  variables?: Record<string, unknown>
   channel_override?: string
   adapter_override?: 'raw' | 'appsync' | ''
 }
@@ -134,6 +135,7 @@ export interface EventTemplateDispatchRequest {
 export interface EventTemplateDispatchResult extends SocketDispatchResult {
   resolved_payload: unknown
   missing_variables?: string[]
+  invalid_casts?: Array<{ name: string; kind: string; value: string }>
 }
 
 export interface SchemaField {

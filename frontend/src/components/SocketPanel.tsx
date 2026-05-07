@@ -79,6 +79,7 @@ export function SocketPanel({
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [templateVars, setTemplateVars] = useState<Record<string, string>>({})
   const [templateDispatching, setTemplateDispatching] = useState(false)
+  const [lastResolvedTemplatePayload, setLastResolvedTemplatePayload] = useState('')
 
   const selectedType = useMemo(
     () => schemaTypes.find(type => type.full_name === typeName) ?? null,
@@ -154,6 +155,7 @@ export function SocketPanel({
 
   function selectTemplate(template: EventTemplate) {
     setSelectedTemplateId(template.id)
+    setLastResolvedTemplatePayload('')
     setTemplateVars(current => {
       const next: Record<string, string> = {}
       template.variables?.forEach(variable => {
@@ -180,6 +182,7 @@ export function SocketPanel({
         if (value !== '') vars[name] = value
       })
       const result = await onDispatchTemplate(selectedTemplate.id, vars)
+      setLastResolvedTemplatePayload(JSON.stringify(result.resolved_payload, null, 2))
       const dropped = result.dropped?.length ?? 0
       const errors = result.errors?.length ?? 0
       const suffix = dropped || errors ? `, ${dropped} dropped, ${errors} errors` : ''
@@ -359,6 +362,9 @@ export function SocketPanel({
               <button type="button" className="btn primary" onClick={handleTemplateDispatch} disabled={templateDispatching}>
                 <Send /> Dispatch
               </button>
+              {lastResolvedTemplatePayload && (
+                <pre className="template-resolved-preview">{lastResolvedTemplatePayload}</pre>
+              )}
             </div>
           )}
         </section>
