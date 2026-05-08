@@ -54,7 +54,7 @@ Ditto can also stand in for your app's WebSocket backend. The minimum to start m
 
 1. **Point your app at Ditto.** Set its WebSocket URL to `ws://localhost:8888/__ditto__/socket` (or `wss://...` if you started Ditto with `--https`). Ditto exposes `/__ditto__/ws` as an alias.
 2. **Open the Sockets tab** in the dashboard. Connected clients and the channels they have subscribed to appear there in real time.
-3. **Pick a protocol adapter.** Choose a built-in (`raw` for plain JSON, `appsync` for AWS AppSync Events) or any **adapter profile** loaded from `adapter_profiles/` (e.g. `appsync-draftea` ships as a default for AppSync backends with a Draftea-style custom envelope). Profiles are JSON config files that customise envelope shape and type aliases per backend with no Go code — see the [Adapter profiles section](WEBSOCKET_MOCKING_PLAN.md#adapter-profiles) of the plan. A visual editor for profiles is planned (M9 in the roadmap).
+3. **Pick a protocol adapter.** Choose a built-in (`raw` for plain JSON, `appsync` for AWS AppSync Events) or any **adapter profile** loaded from `adapter_profiles/` (e.g. `appsync-draftea` ships as a default for AppSync backends with a Draftea-style custom envelope). Profiles are JSON config files that customise envelope shape and type aliases per backend with no Go code — see the [Adapter profiles section](docs/WEBSOCKET_ARCHITECTURE.md#adapter-profiles) of the architecture doc. A visual editor for profiles is planned (M9 in the roadmap).
 4. **Dispatch an event.** Select a channel the client is subscribed to, write the JSON payload, and click **Dispatch**. The client receives it immediately.
 
 Default adapter profiles are seeded once and then treated as user-owned files. To regenerate the bundled default after removing or renaming it, move custom profile JSON files aside, delete `adapter_profiles/.seeded`, and restart Ditto.
@@ -65,7 +65,7 @@ That's enough to send arbitrary events to a connected app. The features below ar
 - **Reusable events** — save a composed event as a template with `{{vars}}` substitution. See [docs/EVENT_TEMPLATES.md](docs/EVENT_TEMPLATES.md).
 - **Timed sequences** — chain templates into a timeline with delays and play/pause/scrub/speed transport controls. See [docs/EVENT_SEQUENCES.md](docs/EVENT_SEQUENCES.md).
 
-Full plan and milestone-by-milestone breakdown: [WEBSOCKET_MOCKING_PLAN.md](WEBSOCKET_MOCKING_PLAN.md).
+Full roadmap and milestone-by-milestone breakdown: see the v1.8 section in [ROADMAP.md](ROADMAP.md). Architecture, filesystem layout, and adapter profile spec: [docs/WEBSOCKET_ARCHITECTURE.md](docs/WEBSOCKET_ARCHITECTURE.md).
 
 ## Headless mode
 
