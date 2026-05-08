@@ -103,10 +103,10 @@ func (b *LiveBridge) Attach(channel string, client *SocketClient) {
 		b.chans[channel] = ch
 		go ch.run()
 	}
-	b.mu.Unlock()
 	ch.mu.Lock()
 	ch.clients[client.id] = client
 	ch.mu.Unlock()
+	b.mu.Unlock()
 }
 
 func (b *LiveBridge) Detach(channel, clientID string) {

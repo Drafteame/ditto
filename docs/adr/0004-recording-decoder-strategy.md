@@ -29,6 +29,15 @@ the protobuf bytes. For raw text frames it keeps valid JSON as decoded metadata.
 Decoded output is optional. Failures leave `decoded` empty and set
 `decode_error`; the raw frame remains replayable.
 
+Decoder behavior in M5:
+
+| Frame / adapter path | M5 behavior |
+|---|---|
+| AppSync profile | Parse the profile-shaped data envelope, reverse `type_aliases`, and decode protobuf when the schema is loaded. |
+| Built-in AppSync | Treat the alias as a possible fully-qualified type name; if no schema matches, keep alias-only decoded metadata. |
+| Raw text | Keep valid JSON as decoded metadata. |
+| Binary | Store `raw_b64` only and report that binary has no envelope decoder. |
+
 ## Consequences
 
 - M6 can replay original frames without needing schemas or profiles.

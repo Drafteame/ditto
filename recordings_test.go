@@ -231,5 +231,6 @@ func TestRecorderMarksInterruptedManifest(t *testing.T) {
 
 func TestConvertRecordingToSequenceM6(t *testing.T) {
 	t.Skip("M6")
-	_, _ = ConvertRecordingToSequence("recording-12345678", nil)
+	rec, _ := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	_, _ = rec.ConvertRecordingToSequence("recording-12345678", nil)
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -42,7 +43,7 @@ type RecordingManifest struct {
 	StoppedAt      *time.Time                 `json:"stopped_at"`
 	Channels       []RecordingChannelManifest `json:"channels"`
 	AdapterProfile string                     `json:"adapter_profile,omitempty"`
-	SchemaPackIDs  []string                   `json:"schema_pack_ids"`
+	SchemaPackIDs  []string                   `json:"schema_pack_ids,omitempty"`
 	Error          string                     `json:"error,omitempty"`
 }
 
@@ -51,7 +52,7 @@ type RecordingChannelManifest struct {
 	Events         int                      `json:"events"`
 	Dropped        int                      `json:"dropped"`
 	QueueDropped   int                      `json:"queue_dropped,omitempty"`
-	RateCapHz      int                      `json:"rate_cap_hz"`
+	RateCapHz      int                      `json:"rate_cap_hz,omitempty"`
 	AdapterProfile string                   `json:"adapter_profile,omitempty"`
 	ProfileChanges []RecordingProfileChange `json:"profile_changes,omitempty"`
 }
@@ -201,7 +202,7 @@ func (r *Recorder) Start(name, description string) (RecordingManifest, error) {
 		r.active = nil
 		return RecordingManifest{}, err
 	}
-	go session.run()
+	go session.runSafe()
 	r.publish("RECORD_START", id, http.StatusCreated, "")
 	return session.manifest, nil
 }
@@ -221,10 +222,7 @@ func (r *Recorder) Stop(id string) (RecordingManifest, error) {
 	case <-session.done:
 	case <-time.After(5 * time.Second):
 		session.setError("stop timed out while draining frames")
-		select {
-		case <-session.done:
-		case <-time.After(5 * time.Second):
-		}
+		<-session.done
 	}
 	now := time.Now().UTC()
 	session.mu.Lock()
@@ -349,7 +347,11 @@ func (r *Recorder) Delete(id string) error {
 	if active := r.ActiveID(); active == id {
 		return fmt.Errorf("cannot delete active recording")
 	}
-	return os.RemoveAll(filepath.Join(r.dir, id))
+	path := filepath.Join(r.dir, id)
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
 }
 
 func (r *Recorder) Frames(id, channel string, offset, limit int) ([]RecordedFrame, error) {
@@ -412,7 +414,7 @@ func (r *Recorder) recoverInterrupted() error {
 			r.publish("WARN", entry.Name(), http.StatusOK, "invalid recording manifest")
 			continue
 		}
-		if manifest.StoppedAt == nil {
+		if manifest.StoppedAt == nil && manifest.Error != "interrupted" {
 			info, err := os.Stat(filepath.Join(dir, "manifest.json"))
 			stopped := time.Now().UTC()
 			if err == nil {
@@ -535,6 +537,19 @@ func (s *recordingSession) run() {
 			_ = s.flushManifest()
 		}
 	}
+}
+
+func (s *recordingSession) runSafe() {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.setError(fmt.Sprintf("recording writer panic: %v", recovered))
+			if s.recorder != nil {
+				s.recorder.publish("ERROR", s.manifest.ID, http.StatusInternalServerError, "recording writer panic")
+				s.recorder.clearActive(s)
+			}
+		}
+	}()
+	s.run()
 }
 
 func (s *recordingSession) closeWriters() {
@@ -902,7 +917,11 @@ func RegisterRecordingRoutes(mux *http.ServeMux, recorder *Recorder) {
 		}
 		if len(parts) == 1 && r.Method == http.MethodDelete {
 			if err := recorder.Delete(id); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				status := http.StatusBadRequest
+				if errors.Is(err, fs.ErrNotExist) {
+					status = http.StatusNotFound
+				}
+				http.Error(w, err.Error(), status)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -912,6 +931,6 @@ func RegisterRecordingRoutes(mux *http.ServeMux, recorder *Recorder) {
 	})
 }
 
-func ConvertRecordingToSequence(recordingID string, channels []string) (EventSequence, error) {
+func (r *Recorder) ConvertRecordingToSequence(recordingID string, channels []string) (EventSequence, error) {
 	return EventSequence{}, errors.New("not implemented (M6)")
 }

@@ -377,7 +377,7 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 	if err != nil {
 		t.Fatalf("NewProtocolAdapter(appsync-draftea) error = %v", err)
 	}
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	client := &SocketClient{
 		id:            "appsync-draftea-1",
 		adapter:       "appsync-draftea",
@@ -433,7 +433,7 @@ func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	RegisterSocketRoutes(mux, NewSocketHub(NewEventBus(), false))
+	RegisterSocketRoutes(mux, NewSocketHub(NewEventBus(), false, nil))
 	req := httptest.NewRequest(http.MethodGet, "/__ditto__/api/socket/adapter-profiles", nil)
 	req.RemoteAddr = "127.0.0.1:55555"
 	rec := httptest.NewRecorder()

@@ -100,7 +100,7 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 }
 
 func TestLiveBridgeDetachAttachStressKeepsNewClient(t *testing.T) {
-	bridge := NewLiveBridge(NewLiveTargetManager("", nil), NewSocketHub(NewEventBus(), false))
+	bridge := NewLiveBridge(NewLiveTargetManager("", nil), NewSocketHub(NewEventBus(), false, nil))
 	for i := 0; i < 250; i++ {
 		channel := "/race"
 		oldClient := testSocketClient("old")
@@ -140,7 +140,7 @@ func TestLiveBridgeEmptyTargetLogsOnceUntilTargetChanges(t *testing.T) {
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	manager := NewLiveTargetManager("", nil)
-	hub := NewSocketHub(bus, false)
+	hub := NewSocketHub(bus, false, nil)
 	bridge := NewLiveBridge(manager, hub)
 
 	bridge.Attach("/empty", testSocketClient("client"))

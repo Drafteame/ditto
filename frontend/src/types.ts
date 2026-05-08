@@ -316,7 +316,7 @@ export interface RecordedFrame {
     payload_json?: unknown
     alias?: string
   }
-  decode_error: string
+  decode_error?: string
 }
 
 export interface RecordingsResponse {

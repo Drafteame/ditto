@@ -182,11 +182,7 @@ type RenderedDispatch struct {
 	InvalidCasts   []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
 }
 
-func NewSocketHub(bus *EventBus, jsonLogs bool, modes ...*ChannelModeRegistry) *SocketHub {
-	var modeRegistry *ChannelModeRegistry
-	if len(modes) > 0 {
-		modeRegistry = modes[0]
-	}
+func NewSocketHub(bus *EventBus, jsonLogs bool, modeRegistry *ChannelModeRegistry) *SocketHub {
 	hub := &SocketHub{
 		registry: NewSubscriptionRegistry(),
 		bus:      bus,

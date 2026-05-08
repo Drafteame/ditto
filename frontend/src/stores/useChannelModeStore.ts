@@ -2,6 +2,10 @@ import { create } from 'zustand'
 import * as api from '../api'
 import type { ChannelConfig, ChannelMode } from '../types'
 
+function isDefaultChannelMode(config: ChannelConfig) {
+  return config.mode === 'mock' && !config.recording_id && !config.rate_cap_hz
+}
+
 interface ChannelModeStore {
   modes: Record<string, ChannelConfig>
   liveTarget: string
@@ -40,7 +44,15 @@ export const useChannelModeStore = create<ChannelModeStore>((set, get) => ({
     set({ modes: { ...previous, [channel]: optimistic }, error: '' })
     try {
       const saved = await api.setChannelMode({ channel, mode, rate_cap_hz: rateCapHz })
-      set(current => ({ modes: { ...current.modes, [channel]: saved } }))
+      set(current => {
+        const modes = { ...current.modes }
+        if (isDefaultChannelMode(saved)) {
+          delete modes[channel]
+        } else {
+          modes[channel] = saved
+        }
+        return { modes }
+      })
     } catch (err) {
       set({ modes: previous, error: (err as Error).message })
       throw err

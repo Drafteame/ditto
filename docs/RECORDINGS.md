@@ -66,6 +66,13 @@ Each channel file is JSONL. One line is one `RecordedFrame`.
 missing. This keeps M6 free to replay original frames or build editable events
 from decoded payloads when schemas are available.
 
+`direction` is currently one of:
+
+- `upstream`: backend/upstream bytes forwarded through Ditto;
+- `local`: bytes originating locally, including client -> Ditto live-forward
+  frames in mixed mode and Ditto -> client local dispatches after adapter
+  wrapping.
+
 M5 records four frame sources:
 
 - upstream -> Ditto live frames, with `direction: "upstream"`;
