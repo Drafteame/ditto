@@ -498,14 +498,18 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 
 // logRequest writes a single request log line.
 func logRequest(jsonMode bool, e LogEvent) {
+	logRequestTo(os.Stdout, jsonMode, e)
+}
+
+func logRequestTo(w io.Writer, jsonMode bool, e LogEvent) {
 	if jsonMode {
 		data, err := json.Marshal(e)
 		if err != nil {
 			return
 		}
-		fmt.Fprintln(os.Stdout, string(data))
+		fmt.Fprintln(w, string(data))
 		return
 	}
-	fmt.Fprintf(os.Stdout, "%s %-6s %s %s → %d (%dms)\n",
+	fmt.Fprintf(w, "%s %-6s %s %s → %d (%dms)\n",
 		e.Timestamp, e.Type, e.Method, e.Path, e.Status, e.DurationMs)
 }

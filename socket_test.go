@@ -1,13 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -278,26 +277,6 @@ func addRawTestSubscriber(hub *SocketHub, channel string) *SocketClient {
 	return client
 }
 
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stdout
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe(): %v", err)
-	}
-	os.Stdout = writer
-	defer func() { os.Stdout = old }()
-	fn()
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close stdout writer: %v", err)
-	}
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read stdout: %v", err)
-	}
-	return string(data)
-}
-
 func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
 	bus := NewEventBus()
 	events := bus.Subscribe()
@@ -354,16 +333,42 @@ func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
 	}
 }
 
+func TestDispatchLogBodyTruncatesUTF8PayloadsAsValidJSONString(t *testing.T) {
+	result := SocketDispatchResult{Delivered: 1}
+	payload := json.RawMessage(`{"data":"` + strings.Repeat("ñ", dispatchPayloadMaxBytes) + `"}`)
+	bodyText := buildDispatchLogBody(result, &DecodedFrame{PayloadJSON: payload}, "")
+	var body DispatchLogBody
+	if err := json.Unmarshal([]byte(bodyText), &body); err != nil {
+		t.Fatalf("body invalid JSON: %v", err)
+	}
+	if !body.Truncated {
+		t.Fatalf("body.Truncated = false, want true")
+	}
+	var truncated string
+	if err := json.Unmarshal(body.Payload, &truncated); err != nil {
+		t.Fatalf("truncated payload should remain valid JSON string: %v", err)
+	}
+	if truncated == "" {
+		t.Fatalf("truncated payload is empty")
+	}
+}
+
 func TestDispatchLogSkipsDecodeWhenNoSubscribers(t *testing.T) {
 	bus := NewEventBus()
 	hub := NewSocketHub(bus, true, nil)
 	addRawTestSubscriber(hub, "/nosub")
 
-	output := captureStdout(t, func() {
-		hub.Dispatch("/nosub", json.RawMessage(`{"score":7}`), "")
+	result := hub.Dispatch("/nosub", json.RawMessage(`{"score":7}`), "")
+	var buf bytes.Buffer
+	logRequestTo(&buf, true, LogEvent{
+		Type:         "SOCKET",
+		Method:       "DISPATCH",
+		Path:         "/nosub",
+		Status:       http.StatusOK,
+		ResponseBody: dispatchSummary(result),
 	})
 	var event LogEvent
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
 		if line == "" {
 			continue
 		}
@@ -373,7 +378,7 @@ func TestDispatchLogSkipsDecodeWhenNoSubscribers(t *testing.T) {
 		}
 	}
 	if event.ResponseBody == "" {
-		t.Fatalf("missing /nosub log event in %q", output)
+		t.Fatalf("missing /nosub log event in %q", buf.String())
 	}
 	var body DispatchLogBody
 	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {

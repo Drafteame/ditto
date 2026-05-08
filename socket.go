@@ -608,19 +608,26 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCache map[string]adapterPayload) (*DecodedFrame, string) {
 	if hint.TypeName != "" {
 		decoded := &DecodedFrame{TypeName: hint.TypeName}
-		if h.schemas != nil {
-			for _, cached := range payloadCache {
-				if cached.err == nil && cached.payload.Kind == websocket.MessageBinary && len(cached.payload.Data) > 0 {
-					payload, err := h.schemas.Decode(hint.TypeName, cached.payload.Data)
-					if err != nil {
-						return decoded, err.Error()
-					}
-					decoded.PayloadJSON = payload
-					break
+		if h.schemas == nil {
+			return decoded, "schema not loaded"
+		}
+		names := make([]string, 0, len(payloadCache))
+		for name := range payloadCache {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			cached := payloadCache[name]
+			if cached.err == nil && cached.payload.Kind == websocket.MessageBinary && len(cached.payload.Data) > 0 {
+				payload, err := h.schemas.Decode(hint.TypeName, cached.payload.Data)
+				if err != nil {
+					return decoded, err.Error()
 				}
+				decoded.PayloadJSON = payload
+				return decoded, ""
 			}
 		}
-		return decoded, ""
+		return decoded, "schema payload not available"
 	}
 	if len(hint.Payload) > 0 {
 		return &DecodedFrame{PayloadJSON: hint.Payload}, ""
