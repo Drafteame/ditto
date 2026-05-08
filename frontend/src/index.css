@@ -1303,6 +1303,51 @@ svg {
   gap: 5px;
   color: var(--fg-2);
 }
+.socket-event-row .dispatch-payload {
+  flex-wrap: wrap;
+  gap: 6px;
+  white-space: normal;
+}
+.dispatch-counts {
+  color: var(--fg-3);
+}
+.payload-chip,
+.truncate-badge,
+.decode-badge {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+.payload-chip {
+  color: var(--accent);
+}
+.truncate-badge {
+  color: var(--warn);
+}
+.decode-badge {
+  color: var(--fg-3);
+}
+.payload-details {
+  flex-basis: 100%;
+  min-width: 0;
+}
+.payload-details summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.payload-details pre {
+  margin: 6px 0 4px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--fg-1);
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px;
+}
 
 @media (max-width: 900px) {
   .socket-grid {

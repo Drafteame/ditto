@@ -17,6 +17,28 @@ export interface LogEntry extends LogEvent {
   id: string
 }
 
+export interface DispatchLogBody {
+  delivered: number
+  dropped: number
+  errors: number
+  type_name?: string
+  alias?: string
+  payload?: unknown
+  decode_error?: string
+  truncated?: boolean
+}
+
+export function parseDispatchLogBody(raw: string | undefined): DispatchLogBody | null {
+  if (!raw) return null
+  try {
+    const data = JSON.parse(raw) as DispatchLogBody
+    if (typeof data.delivered === 'number') return data
+    return null
+  } catch {
+    return null
+  }
+}
+
 export interface MockMatch {
   query?: Record<string, string>
   headers?: Record<string, string>

@@ -123,6 +123,7 @@ type SocketHub struct {
 	modes    *ChannelModeRegistry
 	live     *LiveBridge
 	recorder *Recorder
+	schemas  *SchemaRegistry
 	events   *CoalescingPublisher
 
 	mu      sync.RWMutex
@@ -171,6 +172,31 @@ type SocketDispatchResult struct {
 	Errors    []string `json:"errors,omitempty"`
 }
 
+const dispatchPayloadMaxBytes = 4096
+
+// Payload is an object/array/scalar when complete. If Truncated is true, it is
+// a JSON string containing the first dispatchPayloadMaxBytes bytes.
+type DispatchLogBody struct {
+	Delivered   int             `json:"delivered"`
+	Dropped     int             `json:"dropped"`
+	Errors      int             `json:"errors"`
+	TypeName    string          `json:"type_name,omitempty"`
+	Alias       string          `json:"alias,omitempty"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	DecodeError string          `json:"decode_error,omitempty"`
+	Truncated   bool            `json:"truncated,omitempty"`
+}
+
+type dispatchDecodeHint struct {
+	TypeName string
+	Payload  json.RawMessage
+}
+
+type adapterPayload struct {
+	payload EncodedPayload
+	err     error
+}
+
 type RenderedDispatch struct {
 	Channel  string          `json:"channel"`
 	Adapter  string          `json:"adapter,omitempty"`
@@ -213,6 +239,10 @@ func (h *SocketHub) SetLiveBridge(live *LiveBridge) {
 
 func (h *SocketHub) SetRecorder(recorder *Recorder) {
 	h.recorder = recorder
+}
+
+func (h *SocketHub) SetSchemas(schemas *SchemaRegistry) {
+	h.schemas = schemas
 }
 
 func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*SchemaRegistry) {
@@ -499,7 +529,7 @@ func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFil
 }
 
 func (h *SocketHub) DispatchWithSource(channel string, payload json.RawMessage, adapterFilter, source string) SocketDispatchResult {
-	return h.dispatch(channel, adapterFilter, source, func(client *SocketClient) (EncodedPayload, error) {
+	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{Payload: payload}, func(client *SocketClient) (EncodedPayload, error) {
 		return client.protocol.EncodePayload(payload)
 	})
 }
@@ -509,20 +539,16 @@ func (h *SocketHub) DispatchEncoded(channel string, payload EncodedPayload, adap
 }
 
 func (h *SocketHub) DispatchEncodedWithSource(channel string, payload EncodedPayload, adapterFilter, source string) SocketDispatchResult {
-	return h.dispatch(channel, adapterFilter, source, func(client *SocketClient) (EncodedPayload, error) {
+	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{TypeName: payload.TypeName}, func(client *SocketClient) (EncodedPayload, error) {
 		return payload, nil
 	})
 }
 
-func (h *SocketHub) dispatch(channel string, adapterFilter string, source string, encode func(client *SocketClient) (EncodedPayload, error)) SocketDispatchResult {
+func (h *SocketHub) dispatch(channel string, adapterFilter string, source string, hint dispatchDecodeHint, encode func(client *SocketClient) (EncodedPayload, error)) SocketDispatchResult {
 	channel = strings.TrimSpace(channel)
 	adapterFilter = normalizeAdapter(adapterFilter)
 	ids := h.registry.Clients(channel)
 	result := SocketDispatchResult{}
-	type adapterPayload struct {
-		payload EncodedPayload
-		err     error
-	}
 	payloadCache := make(map[string]adapterPayload)
 	recordedAdapters := make(map[string]struct{})
 	for _, id := range ids {
@@ -570,8 +596,38 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 			result.Dropped = append(result.Dropped, client.id)
 		}
 	}
-	h.publishSocketEventWithSource("DISPATCH", channel, http.StatusOK, dispatchSummary(result), 0, source)
+	// Decode is skipped when no SSE subscribers to avoid protobuf decode cost on
+	// idle servers; recordings persist via their own path.
+	body := dispatchSummary(result)
+	if h.events != nil && h.events.HasLogSubscribers() {
+		decoded, decodeErr := h.decodeDispatchLogPayload(hint, payloadCache)
+		body = buildDispatchLogBody(result, decoded, decodeErr)
+	}
+	h.publishSocketEventWithSource("DISPATCH", channel, http.StatusOK, body, 0, source)
 	return result
+}
+
+func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCache map[string]adapterPayload) (*DecodedFrame, string) {
+	if hint.TypeName != "" {
+		decoded := &DecodedFrame{TypeName: hint.TypeName}
+		if h.schemas != nil {
+			for _, cached := range payloadCache {
+				if cached.err == nil && cached.payload.Kind == websocket.MessageBinary && len(cached.payload.Data) > 0 {
+					payload, err := h.schemas.Decode(hint.TypeName, cached.payload.Data)
+					if err != nil {
+						return decoded, err.Error()
+					}
+					decoded.PayloadJSON = payload
+					break
+				}
+			}
+		}
+		return decoded, ""
+	}
+	if len(hint.Payload) > 0 {
+		return &DecodedFrame{PayloadJSON: hint.Payload}, ""
+	}
+	return nil, ""
 }
 
 func (h *SocketHub) Snapshot() []SocketClientSnapshot {
@@ -855,6 +911,35 @@ func dispatchSummary(result SocketDispatchResult) string {
 	})
 	if err != nil {
 		return ""
+	}
+	return string(data)
+}
+
+func buildDispatchLogBody(result SocketDispatchResult, decoded *DecodedFrame, decodeErr string) string {
+	body := DispatchLogBody{
+		Delivered: result.Delivered,
+		Dropped:   len(result.Dropped),
+		Errors:    len(result.Errors),
+	}
+	if decoded != nil {
+		body.TypeName = decoded.TypeName
+		body.Alias = decoded.Alias
+		if len(decoded.PayloadJSON) > 0 {
+			if len(decoded.PayloadJSON) > dispatchPayloadMaxBytes {
+				truncated := string(decoded.PayloadJSON[:dispatchPayloadMaxBytes])
+				body.Payload, _ = json.Marshal(truncated)
+				body.Truncated = true
+			} else {
+				body.Payload = decoded.PayloadJSON
+			}
+		}
+	}
+	if decodeErr != "" {
+		body.DecodeError = decodeErr
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return dispatchSummary(result)
 	}
 	return string(data)
 }

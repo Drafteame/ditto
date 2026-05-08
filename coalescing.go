@@ -31,6 +31,13 @@ func NewCoalescingPublisher(bus *EventBus, jsonLogs bool) *CoalescingPublisher {
 	}
 }
 
+func (p *CoalescingPublisher) HasLogSubscribers() bool {
+	if p == nil || p.bus == nil {
+		return false
+	}
+	return p.bus.HasSubscribers()
+}
+
 func (p *CoalescingPublisher) Publish(event LogEvent) {
 	if event.Type != "SOCKET" || event.Method != "DISPATCH" {
 		p.publish(event)

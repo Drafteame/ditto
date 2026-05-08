@@ -9,6 +9,7 @@ import type {
   ServerInfo,
   SocketClient,
 } from '../types'
+import { parseDispatchLogBody } from '../types'
 import * as api from '../api'
 import { Braces, Download, Radio, Refresh, Send, X } from './icons'
 import { detectTemplateVariablesInValue, isBuiltinVariable } from './EventTemplatesPanel'
@@ -432,20 +433,7 @@ export function SocketPanel({
           <div className="socket-empty compact">Socket events will stream here through the existing SSE log.</div>
         ) : (
           <div className="socket-event-list">
-            {socketEntries.map(entry => (
-              <div key={entry.id} className={entry.method === 'DISPATCH_BURST' ? 'socket-event-row burst' : 'socket-event-row'}>
-                <span className="time">{entry.timestamp}</span>
-                <span className="method">{entry.method}</span>
-                <span className="path" title={entry.path}>{entry.path}</span>
-                <span className="status">{entry.status || '-'}</span>
-                {entry.method === 'DISPATCH_BURST' && <BurstBadge body={entry.response_body} />}
-                {entry.response_body && (
-                  <span className="payload" title={entry.response_body}>
-                    <Braces size={13} /> {entry.response_body}
-                  </span>
-                )}
-              </div>
-            ))}
+            {socketEntries.map(entry => <SocketEventRow key={entry.id} entry={entry} />)}
           </div>
         )}
       </section>
@@ -465,6 +453,48 @@ export function SocketPanel({
       )}
     </section>
   )
+}
+
+function SocketEventRow({ entry }: { entry: LogEntry }) {
+  const parsed = entry.method === 'DISPATCH' ? parseDispatchLogBody(entry.response_body) : null
+  const hasPayload = parsed && parsed.payload !== undefined
+  const label = parsed?.alias || parsed?.type_name || (hasPayload ? 'JSON' : '')
+  return (
+    <div className={entry.method === 'DISPATCH_BURST' ? 'socket-event-row burst' : 'socket-event-row'}>
+      <span className="time">{entry.timestamp}</span>
+      <span className="method">{entry.method}</span>
+      <span className="path" title={entry.path}>{entry.path}</span>
+      <span className="status">{entry.status || '-'}</span>
+      {entry.method === 'DISPATCH_BURST' && <BurstBadge body={entry.response_body} />}
+      {parsed ? (
+        <div className="payload dispatch-payload">
+          <span className="dispatch-counts" title={entry.response_body}>
+            {parsed.delivered} delivered | {parsed.dropped} dropped | {parsed.errors} errors
+          </span>
+          {label && <span className="payload-chip">{label}</span>}
+          {parsed.truncated && <span className="truncate-badge">truncated 4KB</span>}
+          {parsed.decode_error && (
+            <span className="decode-badge" title={parsed.decode_error}>decode</span>
+          )}
+          {hasPayload && (
+            <details className="payload-details">
+              <summary>payload</summary>
+              <pre>{formatPayload(parsed.payload)}</pre>
+            </details>
+          )}
+        </div>
+      ) : entry.response_body ? (
+        <span className="payload" title={entry.response_body}>
+          <Braces size={13} /> {entry.response_body}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function formatPayload(payload: unknown) {
+  if (typeof payload === 'string') return payload
+  return JSON.stringify(payload, null, 2)
 }
 
 function ChannelRateCapInput({

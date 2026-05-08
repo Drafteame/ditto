@@ -152,6 +152,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)
 	}
+	socketHub.SetSchemas(schemaRegistry)
 	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event template registry: %w", err)

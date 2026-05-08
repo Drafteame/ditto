@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -258,6 +260,127 @@ func TestSocketHubDispatchAdapterFilter(t *testing.T) {
 		}
 	default:
 		t.Fatalf("appsync client did not receive a frame")
+	}
+}
+
+func addRawTestSubscriber(hub *SocketHub, channel string) *SocketClient {
+	client := &SocketClient{
+		id:            "raw-1",
+		adapter:       "raw",
+		protocol:      RawAdapter{},
+		control:       make(chan EncodedServerMessage, 1),
+		send:          make(chan EncodedServerMessage, 8),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{channel: "sub-1"},
+	}
+	hub.addClient(client)
+	hub.registry.Subscribe(channel, client.id)
+	return client
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe(): %v", err)
+	}
+	os.Stdout = writer
+	defer func() { os.Stdout = old }()
+	fn()
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close stdout writer: %v", err)
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	return string(data)
+}
+
+func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
+	bus := NewEventBus()
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	hub := NewSocketHub(bus, false, nil)
+	addRawTestSubscriber(hub, "/log")
+
+	hub.Dispatch("/log", json.RawMessage(`{"score":7}`), "")
+
+	event := waitForSocketEvent(t, events, time.Second)
+	if event.Method != "DISPATCH" {
+		t.Fatalf("event method = %s, want DISPATCH", event.Method)
+	}
+	var body DispatchLogBody
+	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
+		t.Fatalf("response body invalid JSON: %v", err)
+	}
+	if body.Delivered != 1 || body.Dropped != 0 || body.Errors != 0 {
+		t.Fatalf("body counters = %#v", body)
+	}
+	var payload map[string]int
+	if err := json.Unmarshal(body.Payload, &payload); err != nil {
+		t.Fatalf("payload invalid JSON: %v", err)
+	}
+	if payload["score"] != 7 {
+		t.Fatalf("payload = %#v, want score 7", payload)
+	}
+}
+
+func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
+	bus := NewEventBus()
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	hub := NewSocketHub(bus, false, nil)
+	addRawTestSubscriber(hub, "/large")
+
+	large := json.RawMessage(`{"data":"` + strings.Repeat("x", dispatchPayloadMaxBytes+128) + `"}`)
+	hub.Dispatch("/large", large, "")
+
+	event := waitForSocketEvent(t, events, time.Second)
+	var body DispatchLogBody
+	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
+		t.Fatalf("response body invalid JSON: %v", err)
+	}
+	if !body.Truncated {
+		t.Fatalf("body.Truncated = false, want true")
+	}
+	var payload string
+	if err := json.Unmarshal(body.Payload, &payload); err != nil {
+		t.Fatalf("truncated payload should be JSON string: %v (%s)", err, body.Payload)
+	}
+	if len(payload) != dispatchPayloadMaxBytes {
+		t.Fatalf("truncated payload len = %d, want %d", len(payload), dispatchPayloadMaxBytes)
+	}
+}
+
+func TestDispatchLogSkipsDecodeWhenNoSubscribers(t *testing.T) {
+	bus := NewEventBus()
+	hub := NewSocketHub(bus, true, nil)
+	addRawTestSubscriber(hub, "/nosub")
+
+	output := captureStdout(t, func() {
+		hub.Dispatch("/nosub", json.RawMessage(`{"score":7}`), "")
+	})
+	var event LogEvent
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		var candidate LogEvent
+		if err := json.Unmarshal([]byte(line), &candidate); err == nil && candidate.Path == "/nosub" {
+			event = candidate
+		}
+	}
+	if event.ResponseBody == "" {
+		t.Fatalf("missing /nosub log event in %q", output)
+	}
+	var body DispatchLogBody
+	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
+		t.Fatalf("response body invalid JSON: %v", err)
+	}
+	if len(body.Payload) != 0 || body.TypeName != "" || body.Alias != "" {
+		t.Fatalf("body = %#v, want counters only", body)
 	}
 }
 

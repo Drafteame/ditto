@@ -456,6 +456,14 @@ func (r *Recorder) recoverInterrupted() error {
 func (r *Recorder) decodeFrame(channel, kind string, data []byte, adapter string) (*DecodedFrame, string) {
 	// See docs/adr/0004-recording-decoder-strategy.md: M5 records raw frames
 	// first and treats decoder output as optional metadata.
+	return DecodeWireFrame(r.schemas, kind, data, adapter)
+}
+
+func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*DecodedFrame, string) {
+	return decodeAppSyncEnvelope(r.schemas, profile, data)
+}
+
+func DecodeWireFrame(schemas *SchemaRegistry, kind string, data []byte, adapter string) (*DecodedFrame, string) {
 	if kind == "binary" {
 		return nil, "binary frame has no envelope decoder"
 	}
@@ -464,10 +472,10 @@ func (r *Recorder) decodeFrame(channel, kind string, data []byte, adapter string
 		profileName = "raw"
 	}
 	if profile, ok := adapterProfile(profileName); ok && profile.BaseAdapter == "appsync" {
-		return r.decodeAppSyncProfile(profile, data)
+		return decodeAppSyncEnvelope(schemas, profile, data)
 	}
 	if profileName == "appsync" {
-		return r.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, data)
+		return decodeAppSyncEnvelope(schemas, AdapterProfile{BaseAdapter: "appsync"}, data)
 	}
 	var payload json.RawMessage
 	if err := json.Unmarshal(data, &payload); err != nil {
@@ -476,7 +484,7 @@ func (r *Recorder) decodeFrame(channel, kind string, data []byte, adapter string
 	return &DecodedFrame{PayloadJSON: payload}, ""
 }
 
-func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*DecodedFrame, string) {
+func decodeAppSyncEnvelope(schemas *SchemaRegistry, profile AdapterProfile, data []byte) (*DecodedFrame, string) {
 	var outer map[string]any
 	if err := json.Unmarshal(data, &outer); err != nil {
 		return nil, err.Error()
@@ -526,10 +534,10 @@ func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*D
 	if typeName == "" {
 		typeName = alias
 	}
-	if r.schemas == nil || r.schemas.Descriptor(typeName) == nil {
+	if schemas == nil || schemas.Descriptor(typeName) == nil {
 		return &DecodedFrame{Alias: alias}, ""
 	}
-	payload, err := r.schemas.Decode(typeName, raw)
+	payload, err := schemas.Decode(typeName, raw)
 	if err != nil {
 		return nil, err.Error()
 	}

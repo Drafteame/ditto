@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,6 +157,41 @@ func TestLiveBridgeEmptyTargetLogsOnceUntilTargetChanges(t *testing.T) {
 			t.Fatalf("unexpected repeated empty-target error before target change: %#v", event)
 		}
 	case <-time.After(400 * time.Millisecond):
+	}
+}
+
+func TestForwardFromUpstreamLogsDecodedAppSyncFrame(t *testing.T) {
+	bus := NewEventBus()
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	hub := NewSocketHub(bus, false, nil)
+	client := &SocketClient{
+		id:            "appsync-1",
+		adapter:       "appsync",
+		protocol:      AppSyncAdapter{},
+		send:          make(chan EncodedServerMessage, 2),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{"/live": "sub-1"},
+	}
+	hub.addClient(client)
+	hub.registry.Subscribe("/live", client.id)
+	frame := []byte(`{"type":"data","payload":{"data":{"t":"my.Type","e":"` + base64.StdEncoding.EncodeToString([]byte("payload")) + `"}}}`)
+
+	hub.forwardFromUpstream("/live", websocket.MessageText, frame)
+
+	event := waitForSocketEvent(t, events, time.Second)
+	if event.Method != "DISPATCH" {
+		t.Fatalf("event method = %s, want DISPATCH", event.Method)
+	}
+	var body DispatchLogBody
+	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
+		t.Fatalf("response body invalid JSON: %v", err)
+	}
+	if body.Alias != "my.Type" {
+		t.Fatalf("body alias = %q, want my.Type; body %#v", body.Alias, body)
+	}
+	if body.Delivered != 1 {
+		t.Fatalf("delivered = %d, want 1", body.Delivered)
 	}
 }
 
