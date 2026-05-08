@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"nhooyr.io/websocket"
 )
 
 func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
@@ -69,6 +72,99 @@ func TestRecorderRateCapDrops(t *testing.T) {
 	}
 	if len(stopped.Channels) != 1 || stopped.Channels[0].Dropped == 0 {
 		t.Fatalf("drops = %#v, want at least one drop", stopped.Channels)
+	}
+}
+
+func TestRecorderRecordConcurrentWithStopDoesNotPanic(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		rec, err := NewRecorderWithOptions(t.TempDir(), nil, nil, nil, false, RecorderOptions{
+			FrameQueueCapacity: 8,
+			QueueSendTimeout:   time.Millisecond,
+		})
+		if err != nil {
+			t.Fatalf("NewRecorderWithOptions() error = %v", err)
+		}
+		manifest, err := rec.Start("Concurrent Stop", "")
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		var wg sync.WaitGroup
+		for worker := 0; worker < 4; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 25; j++ {
+					rec.Record(RecordFrameInput{
+						Channel: "/race", Direction: "upstream", Kind: "text", Data: []byte(`{"n":1}`),
+					})
+				}
+			}()
+		}
+		if _, err := rec.Stop(manifest.ID); err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+		wg.Wait()
+	}
+}
+
+func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
+	bus := NewEventBus()
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	if err := modes.Set(ChannelConfig{Channel: "/burst-record", Mode: ModeRecord}); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	rec, err := NewRecorder(t.TempDir(), nil, modes, bus, false)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	hub := NewSocketHub(bus, false, modes)
+	hub.SetRecorder(rec)
+	manifest, err := rec.Start("Burst Recording", "")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	for i := 0; i < 200; i++ {
+		hub.forwardFromUpstream("/burst-record", websocket.MessageText, []byte(`{"n":1}`))
+	}
+	if got := waitForBurstSummary(t, events, "/burst-record"); got != 200 {
+		t.Fatalf("burst total_frames = %d, want 200", got)
+	}
+	if _, err := rec.Stop(manifest.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	frames, err := rec.Frames(manifest.ID, "/burst-record", 0, 500)
+	if err != nil {
+		t.Fatalf("Frames() error = %v", err)
+	}
+	if len(frames) != 200 {
+		t.Fatalf("frames len = %d, want 200", len(frames))
+	}
+}
+
+func waitForBurstSummary(t *testing.T, events <-chan LogEvent, channel string) int {
+	t.Helper()
+	deadline := time.After(1500 * time.Millisecond)
+	for {
+		select {
+		case event := <-events:
+			if event.Type != "SOCKET" || event.Method != "DISPATCH_BURST" || event.Path != channel {
+				continue
+			}
+			var body struct {
+				TotalFrames int `json:"total_frames"`
+			}
+			if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
+				t.Fatalf("summary body invalid JSON: %v", err)
+			}
+			return body.TotalFrames
+		case <-deadline:
+			t.Fatalf("timed out waiting for DISPATCH_BURST")
+		}
 	}
 }
 

@@ -99,17 +99,20 @@ type Recorder struct {
 }
 
 type recordingSession struct {
-	mu       sync.Mutex
-	manifest RecordingManifest
-	dir      string
-	start    time.Time
-	frames   chan RecordedFrame
-	done     chan struct{}
-	writers  map[string]*recordingWriter
-	limits   map[string]*rateLimiter
-	recorder *Recorder
-	dirty    bool
-	options  RecorderOptions
+	mu        sync.Mutex
+	manifest  RecordingManifest
+	dir       string
+	start     time.Time
+	frames    chan RecordedFrame
+	closing   chan struct{}
+	done      chan struct{}
+	writers   map[string]*recordingWriter
+	limits    map[string]*rateLimiter
+	recorder  *Recorder
+	dirty     bool
+	options   RecorderOptions
+	stopping  bool
+	producers int
 }
 
 type recordingWriter struct {
@@ -184,6 +187,7 @@ func (r *Recorder) Start(name, description string) (RecordingManifest, error) {
 		dir:      dir,
 		start:    now,
 		frames:   make(chan RecordedFrame, r.options.FrameQueueCapacity),
+		closing:  make(chan struct{}),
 		done:     make(chan struct{}),
 		writers:  make(map[string]*recordingWriter),
 		limits:   make(map[string]*rateLimiter),
@@ -215,7 +219,7 @@ func (r *Recorder) Stop(id string) (RecordingManifest, error) {
 		return RecordingManifest{}, fmt.Errorf("active recording %q not found", id)
 	}
 	r.active = nil
-	close(session.frames)
+	session.beginClosing()
 	r.mu.Unlock()
 
 	select {
@@ -260,6 +264,10 @@ func (r *Recorder) Record(input RecordFrameInput) {
 	if session == nil {
 		return
 	}
+	if !session.beginRecord() {
+		return
+	}
+	defer session.endRecord()
 	channel := strings.TrimSpace(input.Channel)
 	if channel == "" {
 		return
@@ -280,6 +288,8 @@ func (r *Recorder) Record(input RecordFrameInput) {
 	}
 	frame.Decoded, frame.DecodeError = r.decodeFrame(channel, input.Kind, input.Data, input.Adapter)
 	select {
+	case <-session.closing:
+		return
 	case session.frames <- frame:
 		return
 	default:
@@ -291,6 +301,7 @@ func (r *Recorder) Record(input RecordFrameInput) {
 	timer := time.NewTimer(session.options.QueueSendTimeout)
 	defer timer.Stop()
 	select {
+	case <-session.closing:
 	case session.frames <- frame:
 	case <-timer.C:
 		session.addQueueDrop(channel, input.RateCapHz)
@@ -520,11 +531,60 @@ func (s *recordingSession) run() {
 	defer ticker.Stop()
 	for {
 		select {
-		case frame, ok := <-s.frames:
-			if !ok {
+		case frame := <-s.frames:
+			if err := s.write(frame); err != nil {
+				s.setError(err.Error())
+				if s.recorder != nil {
+					s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
+					s.recorder.clearActive(s)
+				}
+				return
+			}
+		case <-s.closing:
+			s.drainAndStop()
+			return
+		case <-ticker.C:
+			_ = s.flushManifest()
+		}
+	}
+}
+
+func (s *recordingSession) drainAndStop() {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case frame := <-s.frames:
+			if err := s.write(frame); err != nil {
+				s.setError(err.Error())
+				if s.recorder != nil {
+					s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
+					s.recorder.clearActive(s)
+				}
+				return
+			}
+			continue
+		default:
+		}
+		if s.noActiveProducers() {
+			select {
+			case frame := <-s.frames:
+				if err := s.write(frame); err != nil {
+					s.setError(err.Error())
+					if s.recorder != nil {
+						s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
+						s.recorder.clearActive(s)
+					}
+					return
+				}
+				continue
+			default:
 				_ = s.flushManifest()
 				return
 			}
+		}
+		select {
+		case frame := <-s.frames:
 			if err := s.write(frame); err != nil {
 				s.setError(err.Error())
 				if s.recorder != nil {
@@ -534,7 +594,6 @@ func (s *recordingSession) run() {
 				return
 			}
 		case <-ticker.C:
-			_ = s.flushManifest()
 		}
 	}
 }
@@ -558,6 +617,37 @@ func (s *recordingSession) closeWriters() {
 		_ = writer.file.Sync()
 		_ = writer.file.Close()
 	}
+}
+
+func (s *recordingSession) beginClosing() {
+	s.mu.Lock()
+	if !s.stopping {
+		s.stopping = true
+		close(s.closing)
+	}
+	s.mu.Unlock()
+}
+
+func (s *recordingSession) beginRecord() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		return false
+	}
+	s.producers++
+	return true
+}
+
+func (s *recordingSession) endRecord() {
+	s.mu.Lock()
+	s.producers--
+	s.mu.Unlock()
+}
+
+func (s *recordingSession) noActiveProducers() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.producers == 0
 }
 
 func (s *recordingSession) write(frame RecordedFrame) error {
