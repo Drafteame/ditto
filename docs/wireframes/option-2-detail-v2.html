@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ditto · Option 2 (detailed v2)</title>
+<style>
+  :root {
+    --bg: #141318;
+    --panel: #1a191e;
+    --panel-2: #16151a;
+    --line: #2f2c33;
+    --line-soft: #25232a;
+    --text: #f3efe9;
+    --muted: #8d8893;
+    --label: #aaa3b0;
+    --teal: #0fb5a8;
+    --teal-soft: rgba(15,181,168,.10);
+    --teal-bright: #9beae0;
+    --blue: #bfd0ff;
+    --green: #92c79b;
+    --magenta: #e29cd3;
+    --warn: #d97757;
+  }
+  html, body { margin: 0; padding: 0; background: #0c0b0f; color: var(--text); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  body { display: grid; place-items: center; min-height: 100vh; padding: 24px; box-sizing: border-box; }
+  .frame { width: 1640px; height: 1000px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 30px 80px -40px rgba(0,0,0,.8); }
+  .mono { font-family: 'JetBrains Mono', 'SF Mono', monospace; }
+
+  /* TOPBAR */
+  .topbar { height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .logo { width: 26px; height: 26px; border-radius: 7px; background: var(--teal); display: grid; place-items: center; color: #08322f; font-weight: 700; font-family: monospace; }
+  .brand { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.dev { color: #b9b3a9; }
+  .pill.connected { color: var(--teal-bright); border-color: rgba(15,181,168,.4); background: var(--teal-soft); }
+  .pill.connected::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 3px rgba(15,181,168,.18); }
+  .pill .strong { color: var(--teal-bright); font-weight: 600; }
+  .pill .arrow { opacity: .55; margin-left: 4px; }
+  .ctrl { color: var(--muted); font-size: 12.5px; padding: 6px 8px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; }
+  .ctrl:hover { color: var(--text); }
+  .spacer { flex: 1; }
+
+  /* MAIN GRID */
+  .main { flex: 1; display: grid; grid-template-columns: 300px 1fr 360px; min-height: 0; }
+  aside { display: flex; flex-direction: column; min-height: 0; }
+  .sidebar { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; }
+  .inspector { background: var(--panel); border-left: 1px solid var(--line); }
+
+  /* SIDEBAR sections */
+  .group { border-bottom: 1px solid var(--line); }
+  .group-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 8px; }
+  .group-title { font-size: 10.5px; letter-spacing: .12em; color: var(--label); font-weight: 600; text-transform: uppercase; display: inline-flex; align-items: center; gap: 8px; }
+  .group-title .chev { color: var(--muted); font-size: 10px; }
+  .new { color: var(--teal); font-size: 11.5px; cursor: pointer; }
+  .new:hover { text-decoration: underline; }
+
+  .field { padding: 0 16px 8px; display: grid; grid-template-columns: 64px 1fr; gap: 6px 10px; align-items: center; }
+  .field label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+  .input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--teal-bright); }
+
+  .sub { font-size: 10px; color: var(--muted); padding: 0 16px 6px; letter-spacing: .08em; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between; }
+  .sub .count { background: rgba(255,255,255,.05); border-radius: 999px; padding: 1px 7px; font-size: 9.5px; color: var(--muted); }
+
+  .item { display: flex; align-items: center; gap: 8px; padding: 7px 16px; font-size: 11.5px; cursor: pointer; }
+  .item:hover { background: rgba(255,255,255,.02); }
+  .badge { font-family: 'JetBrains Mono', monospace; font-size: 9.5px; font-weight: 600; padding: 2px 6px; border-radius: 4px; letter-spacing: .04em; }
+  .badge.GET { background: rgba(141,179,255,.12); color: #8db3ff; }
+  .badge.POST { background: rgba(146,199,155,.14); color: var(--green); }
+  .badge.WS  { background: rgba(155,234,224,.12); color: var(--teal-bright); }
+  .badge.SEQ { background: rgba(226,156,211,.14); color: var(--magenta); }
+  .badge.SCN { background: rgba(217,119,87,.14); color: var(--warn); }
+  .item .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); }
+  .item .meta { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); }
+  .item .toggle { width: 22px; height: 13px; border-radius: 999px; background: var(--teal); position: relative; }
+  .item .toggle::after { content: ""; position: absolute; right: 1.5px; top: 1.5px; width: 10px; height: 10px; border-radius: 50%; background: white; }
+  .item .toggle.off { background: #3a3741; }
+  .item .toggle.off::after { left: 1.5px; right: auto; }
+
+  .gear-row { display: flex; align-items: center; gap: 8px; padding: 7px 16px; font-size: 11.5px; color: var(--muted); cursor: pointer; }
+  .gear-row:hover { color: var(--text); background: rgba(255,255,255,.02); }
+  .gear-row .arrow { margin-left: auto; color: var(--muted); }
+
+  /* CENTER */
+  .center { display: grid; grid-template-rows: auto auto 1fr auto auto; min-height: 0; background: var(--bg); }
+
+  /* Active scenario banner */
+  .banner { display: flex; align-items: center; gap: 14px; padding: 10px 18px; background: linear-gradient(90deg, rgba(217,119,87,.14), rgba(217,119,87,.02)); border-bottom: 1px solid rgba(217,119,87,.25); }
+  .banner .play { width: 24px; height: 24px; border-radius: 50%; background: var(--warn); color: #2b1309; display: grid; place-items: center; font-size: 11px; }
+  .banner .scn-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .banner .scn-meta { font-size: 11px; color: #d9b8a8; font-family: 'JetBrains Mono', monospace; }
+  .banner .step { color: var(--warn); }
+  .banner .actions { margin-left: auto; display: inline-flex; gap: 6px; }
+  .banner button { background: rgba(255,255,255,.04); color: var(--text); border: 1px solid rgba(217,119,87,.4); border-radius: 6px; padding: 5px 12px; font-size: 11.5px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+  .banner button.primary { background: var(--warn); color: #2b1309; border-color: transparent; font-weight: 600; }
+
+  /* Tab strip Activity / Recordings */
+  .panel-tabs { display: flex; align-items: center; padding: 10px 18px 0; gap: 18px; border-bottom: 1px solid var(--line); }
+  .panel-tab { padding: 8px 0 10px; font-size: 13px; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; border-bottom: 2px solid transparent; }
+  .panel-tab.active { color: var(--text); border-bottom-color: var(--teal); }
+  .panel-tab .num { background: rgba(255,255,255,.06); border-radius: 999px; padding: 1px 7px; font-size: 10px; color: var(--muted); }
+  .panel-tab .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 3px rgba(15,181,168,.16); }
+
+  .activity-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-bottom: 1px solid var(--line-soft); }
+  .search { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 11.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+  .search .kbd { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--muted); }
+  .chip { font-size: 10.5px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .chip.active { color: var(--teal-bright); border-color: rgba(15,181,168,.45); background: var(--teal-soft); }
+  .chip .n { color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 9.5px; }
+  .chip.active .n { color: var(--teal-bright); }
+
+  /* Log */
+  .log { overflow: auto; min-height: 0; }
+  .log-row { display: grid; grid-template-columns: 70px 70px 56px 1fr 70px 80px; gap: 0; padding: 9px 18px; align-items: center; font-family: 'JetBrains Mono', monospace; font-size: 11px; border-bottom: 1px solid var(--line-soft); }
+  .log-row:hover { background: rgba(255,255,255,.02); }
+  .log-row.linked { background: rgba(217,119,87,.04); }
+  .log-row .time { color: var(--muted); font-size: 10.5px; }
+  .log-row .type { font-size: 9.5px; letter-spacing: .05em; }
+  .log-row .type.HTTP { color: var(--blue); }
+  .log-row .type.SOCKET { color: var(--teal-bright); }
+  .log-row .method { color: var(--muted); font-size: 10px; }
+  .log-row .path-cell { color: var(--text); display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .log-row .path-cell .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-row .link-arrow { color: var(--warn); font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(217,119,87,.1); border: 1px solid rgba(217,119,87,.3); white-space: nowrap; }
+  .log-row .status { color: var(--green); font-size: 10.5px; text-align: right; }
+  .log-row .source { font-size: 9.5px; text-align: right; color: var(--muted); letter-spacing: .04em; }
+  .log-row .source.MOCK { color: var(--green); }
+  .log-row .source.PROXY { color: var(--blue); }
+  .log-row .source.WS { color: var(--teal-bright); }
+  .log-row .source.TEMPL { color: var(--magenta); }
+  .log-row.coalesced { background: rgba(217,119,87,.05); color: var(--warn); }
+  .log-row.coalesced .text { color: var(--warn); }
+
+  /* Channels strip */
+  .channels { border-top: 1px solid var(--line); background: var(--panel-2); }
+  .channels-head { display: flex; align-items: center; gap: 12px; padding: 8px 18px; cursor: pointer; }
+  .channels-head .title { font-size: 11px; letter-spacing: .12em; color: var(--label); text-transform: uppercase; font-weight: 600; }
+  .channels-head .summary { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+  .channels-head .chev { color: var(--muted); margin-left: auto; }
+  .channels-grid { padding: 4px 0 8px; }
+  .channel-row { display: grid; grid-template-columns: 1fr 220px 110px 90px; gap: 12px; padding: 7px 18px; align-items: center; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .channel-row .ch { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mode-segs { display: inline-flex; gap: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .mode-segs span { padding: 4px 9px; font-size: 10px; color: var(--muted); cursor: pointer; }
+  .mode-segs span.active { background: rgba(15,181,168,.16); color: var(--teal-bright); }
+  .mode-segs span.disabled { opacity: .35; cursor: not-allowed; }
+  .mode-segs span.warn-active { background: rgba(217,119,87,.16); color: var(--warn); }
+  .channel-row .clients { font-size: 10.5px; color: var(--muted); }
+  .channel-row .rate { font-size: 10.5px; color: var(--muted); text-align: right; }
+  .channel-row .rate .hot { color: var(--warn); }
+
+  /* Dispatch */
+  .dispatch { display: grid; grid-template-columns: 56px 1fr; height: 220px; border-top: 1px solid var(--line); background: var(--panel); }
+  .mode-rail { border-right: 1px solid var(--line); padding: 12px 0; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .mode-rail .mode { width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--line); color: var(--muted); display: grid; place-items: center; font-size: 10px; cursor: pointer; text-align: center; }
+  .mode-rail .mode.active { border-color: var(--teal); color: var(--teal-bright); background: var(--teal-soft); }
+  .dispatch-body { padding: 12px 18px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .dispatch-head { display: flex; align-items: center; gap: 10px; }
+  .dispatch-head h4 { margin: 0; font-size: 13px; font-weight: 600; }
+  .dispatch-grid { display: grid; grid-template-columns: 1fr 200px; gap: 10px; flex: 1; min-height: 0; }
+  .dispatch-fields { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+  .row2 { display: grid; grid-template-columns: 1fr 160px; gap: 6px; }
+  .text-input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); }
+  .payload { flex: 1; min-height: 0; background: #0e0d12; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text); white-space: pre; overflow: auto; }
+  .recent { display: flex; flex-direction: column; gap: 6px; }
+  .recent .label { font-size: 10px; color: var(--label); letter-spacing: .1em; text-transform: uppercase; }
+  .recent .recent-item { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; }
+  .recent .recent-item:hover { color: var(--text); }
+  .recent .send { margin-top: auto; background: var(--teal); color: #08322f; padding: 8px 14px; border-radius: 6px; text-align: center; font-weight: 600; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+
+  /* Inspector */
+  .insp-head { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .insp-row { display: flex; align-items: center; gap: 8px; }
+  .insp-row .save { margin-left: auto; background: var(--teal); color: #08322f; padding: 4px 10px; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .insp-row .x { color: var(--muted); cursor: pointer; padding-left: 6px; }
+  .insp-path { margin-top: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--text); }
+  .insp-meta { margin-top: 4px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--muted); }
+  .insp-banner { margin: 12px 16px; padding: 10px 12px; border: 1px solid rgba(141,179,255,.3); background: rgba(141,179,255,.06); border-radius: 8px; display: flex; gap: 10px; align-items: flex-start; }
+  .insp-banner .ic { color: var(--blue); font-size: 14px; line-height: 1; }
+  .insp-banner .txt { font-size: 11.5px; color: #c9d3eb; }
+  .insp-banner .txt .url { font-family: 'JetBrains Mono', monospace; background: rgba(255,255,255,.04); padding: 1px 6px; border-radius: 4px; color: var(--blue); }
+  .insp-tabs { display: flex; gap: 18px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  .insp-tabs span { padding: 8px 0; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; }
+  .insp-tabs span.active { color: var(--text); border-bottom-color: var(--teal); }
+  .insp-search { margin: 10px 16px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 11px; }
+  .insp-json { margin: 0 16px 16px; flex: 1; overflow: auto; font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.55; color: var(--text); white-space: pre; padding: 10px; background: #0e0d12; border-radius: 8px; border: 1px solid var(--line); }
+  .insp-json .k { color: #d3d0c5; }
+  .insp-json .s { color: var(--green); }
+  .insp-json .n { color: #ff8a65; }
+  .insp-json .b { color: var(--warn); }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="logo">D</div>
+      <div class="brand">Ditto</div>
+      <span class="pill dev">dev</span>
+      <span class="pill connected">Connected · <span class="strong">2 ws clients</span><span class="arrow">4 channels ▾</span></span>
+      <div class="spacer"></div>
+      <span class="ctrl">⚙ Settings</span>
+      <span class="ctrl">⌗ QR</span>
+      <span class="ctrl">↻ Reload</span>
+      <span class="ctrl">🗑 Clear</span>
+    </div>
+
+    <div class="main">
+      <!-- LEFT SIDEBAR -->
+      <aside class="sidebar">
+        <!-- HTTP -->
+        <div class="group">
+          <div class="group-head">
+            <span class="group-title"><span class="chev">▾</span>HTTP</span>
+            <span class="new">+ New mock</span>
+          </div>
+          <div class="field"><label>Port</label><span class="input">8888</span></div>
+          <div class="field"><label>Target</label><span class="input">api.dev.draftea.com</span></div>
+          <div class="sub"><span>Mocks</span><span class="count">4</span></div>
+          <div class="item"><span class="toggle"></span><span class="badge GET">GET</span><span class="path">/api/v1/users</span><span class="meta">200</span></div>
+          <div class="item"><span class="toggle"></span><span class="badge POST">POST</span><span class="path">/api/v1/login</span><span class="meta">200</span></div>
+          <div class="item"><span class="toggle off"></span><span class="badge GET">GET</span><span class="path">/api/v1/wallet</span><span class="meta">503</span></div>
+          <div class="item"><span class="toggle off"></span><span class="badge GET">GET</span><span class="path">/me</span><span class="meta">200</span></div>
+        </div>
+
+        <!-- SOCKET -->
+        <div class="group">
+          <div class="group-head">
+            <span class="group-title"><span class="chev">▾</span>SOCKET</span>
+            <span class="new">+ New template</span>
+          </div>
+          <div class="field"><label>Port</label><span class="input">8888</span></div>
+          <div class="sub"><span>Event templates</span><span class="count">5</span></div>
+          <div class="item"><span class="badge WS">WS</span><span class="path">tickets · settled</span></div>
+          <div class="item"><span class="badge WS">WS</span><span class="path">tickets · cancelled</span></div>
+          <div class="item"><span class="badge WS">WS</span><span class="path">wallet · credited</span></div>
+          <div class="gear-row"><span>⚙</span><span>Schemas</span><span class="meta">2 packs</span><span class="arrow">→</span></div>
+          <div class="gear-row"><span>⚙</span><span>Adapter profiles</span><span class="meta">1</span><span class="arrow">→</span></div>
+        </div>
+
+        <!-- FLOWS -->
+        <div class="group" style="border-bottom:none">
+          <div class="group-head">
+            <span class="group-title"><span class="chev">▾</span>FLOWS</span>
+            <span class="new">+ New ▾</span>
+          </div>
+          <div class="sub"><span>Sequences</span><span class="count">3</span></div>
+          <div class="item"><span class="badge SEQ">SEQ</span><span class="path">place-bet → settle</span><span class="meta">5</span></div>
+          <div class="item"><span class="badge SEQ">SEQ</span><span class="path">onboarding</span><span class="meta">3</span></div>
+          <div class="sub" style="margin-top:6px"><span>Scenarios</span><span class="count">2</span></div>
+          <div class="item" style="background: rgba(217,119,87,.06)"><span class="badge SCN">SCN</span><span class="path">match-day · running</span><span class="meta" style="color:var(--warn)">▶</span></div>
+          <div class="item"><span class="badge SCN">SCN</span><span class="path">guest-checkout</span></div>
+        </div>
+      </aside>
+
+      <!-- CENTER -->
+      <main class="center">
+        <!-- Active scenario banner -->
+        <div class="banner">
+          <div class="play">▶</div>
+          <div>
+            <div class="scn-title">Scenario · <span style="color:var(--warn)">match-day</span></div>
+            <div class="scn-meta">step <span class="step">3/12</span> · "ticket · settled" in 4.2s · 4 mocks · 3 channels armed</div>
+          </div>
+          <div class="actions">
+            <button>⏸ Pause</button>
+            <button class="primary">■ Stop</button>
+          </div>
+        </div>
+
+        <!-- Activity / Recordings tabs -->
+        <div class="panel-tabs">
+          <span class="panel-tab active"><span class="live-dot"></span>Activity</span>
+          <span class="panel-tab">Recordings <span class="num">3</span></span>
+        </div>
+
+        <div class="activity-toolbar">
+          <div class="search">🔍 <span>filter by path, method…</span><span class="kbd">⌘K</span></div>
+          <span class="chip active">ALL <span class="n">38</span></span>
+          <span class="chip">HTTP <span class="n">22</span></span>
+          <span class="chip">WS <span class="n">14</span></span>
+          <span class="chip">MOCK <span class="n">17</span></span>
+          <span class="chip">PROXY <span class="n">19</span></span>
+          <span class="chip">MISS <span class="n">2</span></span>
+          <span class="chip" style="margin-left:auto">⏸ pause</span>
+          <span class="chip">↓ latest</span>
+        </div>
+
+        <!-- Log -->
+        <div class="log">
+          <div class="log-row">
+            <span class="time">19:29:20</span>
+            <span class="type HTTP">HTTP</span>
+            <span class="method">GET</span>
+            <span class="path-cell"><span class="text">/locations/config</span></span>
+            <span class="status">200</span>
+            <span class="source PROXY">PROXY</span>
+          </div>
+          <div class="log-row">
+            <span class="time">19:29:25</span>
+            <span class="type HTTP">HTTP</span>
+            <span class="method">POST</span>
+            <span class="path-cell"><span class="text">/users/refresh_session</span></span>
+            <span class="status">200</span>
+            <span class="source PROXY">PROXY</span>
+          </div>
+          <div class="log-row">
+            <span class="time">19:29:29</span>
+            <span class="type SOCKET">SOCKET</span>
+            <span class="method">SUB</span>
+            <span class="path-cell"><span class="text">/app/notifications/recoveries</span></span>
+            <span class="status">200</span>
+            <span class="source WS">WS</span>
+          </div>
+          <div class="log-row linked">
+            <span class="time">19:29:30</span>
+            <span class="type HTTP">HTTP</span>
+            <span class="method">POST</span>
+            <span class="path-cell"><span class="text">/osb/tickets/</span><span class="link-arrow">→ fires WS</span></span>
+            <span class="status">201</span>
+            <span class="source MOCK">MOCK</span>
+          </div>
+          <div class="log-row linked">
+            <span class="time">19:29:30</span>
+            <span class="type SOCKET">SOCKET</span>
+            <span class="method">EMIT</span>
+            <span class="path-cell"><span class="text">tickets · settled</span><span class="link-arrow">← from HTTP</span></span>
+            <span class="status">·</span>
+            <span class="source TEMPL">TEMPL</span>
+          </div>
+          <div class="log-row">
+            <span class="time">19:29:31</span>
+            <span class="type HTTP">HTTP</span>
+            <span class="method">GET</span>
+            <span class="path-cell"><span class="text">/api/v1/users</span></span>
+            <span class="status">200</span>
+            <span class="source MOCK">MOCK</span>
+          </div>
+          <div class="log-row coalesced">
+            <span class="time">19:29:32</span>
+            <span class="type SOCKET">SOCKET</span>
+            <span class="method">EMIT</span>
+            <span class="path-cell"><span class="text">/games/123/leagues/* — 42 frames in 1s (coalesced)</span></span>
+            <span class="status">·</span>
+            <span class="source WS">WS</span>
+          </div>
+          <div class="log-row">
+            <span class="time">19:29:33</span>
+            <span class="type HTTP">HTTP</span>
+            <span class="method">GET</span>
+            <span class="path-cell"><span class="text">/transactions?status=pending</span></span>
+            <span class="status">200</span>
+            <span class="source PROXY">PROXY</span>
+          </div>
+        </div>
+
+        <!-- Channels strip -->
+        <div class="channels">
+          <div class="channels-head">
+            <span class="title">Channels</span>
+            <span class="summary">3 active · 1 mock · 1 live · 1 record</span>
+            <span class="chev">▴</span>
+          </div>
+          <div class="channels-grid">
+            <div class="channel-row">
+              <span class="ch">/app/notifications/recoveries</span>
+              <span class="mode-segs"><span class="active">mock</span><span>live</span><span>record</span><span>mixed</span></span>
+              <span class="clients">3 clients</span>
+              <span class="rate">0/s · 0 dropped</span>
+            </div>
+            <div class="channel-row">
+              <span class="ch">/games/123/leagues/*</span>
+              <span class="mode-segs"><span>mock</span><span class="warn-active">live</span><span>record</span><span>mixed</span></span>
+              <span class="clients">1 client</span>
+              <span class="rate"><span class="hot">42/s</span> · 0 dropped</span>
+            </div>
+            <div class="channel-row">
+              <span class="ch">/livestats/61e1d6f6.../</span>
+              <span class="mode-segs"><span>mock</span><span>live</span><span class="warn-active">record</span><span>mixed</span></span>
+              <span class="clients">2 clients</span>
+              <span class="rate">8/s · 0 dropped</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dispatch dock -->
+        <div class="dispatch">
+          <div class="mode-rail">
+            <div class="mode active">Manual</div>
+            <div class="mode">Templ.</div>
+            <div class="mode">Seq.</div>
+          </div>
+          <div class="dispatch-body">
+            <div class="dispatch-head">
+              <h4>Dispatch</h4>
+              <span class="chip">manual</span>
+              <span style="flex:1"></span>
+              <span class="chip">target ▾ all clients (2)</span>
+            </div>
+            <div class="dispatch-grid">
+              <div class="dispatch-fields">
+                <div class="row2">
+                  <span class="text-input">/events/tickets</span>
+                  <span class="text-input">adapter ▾ default</span>
+                </div>
+                <div class="payload">{
+  "type": "example.event",
+  "message": "Hello from Ditto"
+}</div>
+              </div>
+              <div class="recent">
+                <span class="label">Recent</span>
+                <div class="recent-item">tickets · settled</div>
+                <div class="recent-item">wallet · credited</div>
+                <div class="recent-item">tickets · cancelled</div>
+                <span class="send">↗ Dispatch</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- INSPECTOR -->
+      <aside class="inspector">
+        <div class="insp-head">
+          <div class="insp-row">
+            <span class="badge" style="background: rgba(141,179,255,.12); color: var(--blue)">PROXY</span>
+            <span class="badge GET">GET</span>
+            <span class="mono" style="color: var(--green); font-size: 11.5px">200</span>
+            <span class="save">⌒ Save as mock</span>
+            <span class="x">×</span>
+          </div>
+          <div class="insp-path">/locations/config</div>
+          <div class="insp-meta">19:29:20 · 1446ms</div>
+        </div>
+        <div class="insp-banner">
+          <span class="ic">🌐</span>
+          <span class="txt"><b style="color:var(--blue)">Forwarded to target</b> — no mock matched, response came from <span class="url">https://api.dev.draftea.com</span></span>
+        </div>
+        <div class="insp-tabs">
+          <span class="active">Response</span><span>Request</span><span>Headers</span>
+        </div>
+        <div class="insp-search">🔍 Find…</div>
+        <div class="insp-json">{
+  <span class="k">"geoInfo"</span>: {
+    <span class="k">"countryCode"</span>: <span class="s">"MX"</span>,
+    <span class="k">"isVpn"</span>: <span class="b">false</span>,
+    <span class="k">"isHosting"</span>: <span class="b">false</span>,
+    <span class="k">"latitude"</span>: <span class="n">0</span>,
+    <span class="k">"longitude"</span>: <span class="n">0</span>
+  },
+  <span class="k">"guestUsersIds"</span>: [
+    <span class="s">"65eb4f16b8244b3f4d7dbc9e"</span>,
+    <span class="s">"65ef170d986a94ebc7c82b08"</span>,
+    <span class="s">"65ef1b17986a94ebc7c82b09"</span>
+  ],
+  <span class="k">"language"</span>: <span class="s">"es"</span>,
+  <span class="k">"currency"</span>: <span class="s">"MXN"</span>,
+  <span class="k">"currencySymbol"</span>: <span class="s">"$"</span>,
+  <span class="k">"minVersions"</span>: {
+    <span class="k">"ios"</span>: <span class="s">"395"</span>,
+    <span class="k">"android"</span>: <span class="s">"395"</span>
+  }
+}</div>
+      </aside>
+    </div>
+  </div>
+</body>
+</html>

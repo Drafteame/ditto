@@ -106,6 +106,26 @@ If the answer is no, we need to fix the UX before adding new capabilities.
 - ~~CI workflow added for PR/push validation (frontend + headless + Wails builds)~~
 - ~~Old `web/` and `desktop/` removed~~
 
+### v1.5.x — UI restructure
+
+Cosmetic / structural rework of the dashboard. **No features added, removed, or rewired** — same hooks, same stores, same backend contracts. The work moves existing components into a more semantic layout that stops feeling like "HTTP on one side, WebSocket on the other" and starts feeling like a single tool to reproduce complete app flows.
+
+Output: one workspace where the left sidebar is *everything you can configure* (HTTP / Socket / Flows), the center is *what is happening right now* (Activity log + Channels strip + Dispatch dock), and the right sidebar is *the inspector / recorder*.
+
+Plan: [docs/UI_RESTRUCTURE_PLAN.md](docs/UI_RESTRUCTURE_PLAN.md). Building-features guidelines: [docs/UI_GUIDELINES.md](docs/UI_GUIDELINES.md). Wireframe: [docs/wireframes/option-2-detail-v2.html](docs/wireframes/option-2-detail-v2.html).
+
+The plan ships in seven milestones. **Feature parity with today's UI is reached at UI-M5**; UI-M6 is polish + forward-compat scaffolding (empty slots that future roadmap milestones fill in place):
+
+- **UI-M0** — Inventory & component map (no code).
+- **UI-M1** — Sidebar split into HTTP / Socket / Flows.
+- **UI-M2** — Activity becomes the only live view, Recordings reachable via toggle.
+- **UI-M3** — Channels strip + Dispatch dock under Activity.
+- **UI-M4** — Connected clients move into the topbar pill; Settings modal absorbs Schemas / Adapter profiles / Workspace.
+- **UI-M5** — Remove the old tabs. *Feature parity.*
+- **UI-M6** — Polish + forward hooks (active-scenario banner slot, `linkedEventId` prop on log row, Scenarios sub-section, Workspace placeholder).
+
+Forward-compat slots reserved for: M7 Scenarios (active-scenario banner above Activity, Scenarios sub-section in Flows, HTTP→Socket trigger arrows in Activity rows), M6 Recording replay/edit (Recordings tab grows the timeline in place), M9 Adapter profile editor (Settings → Adapter profiles becomes editable), M8 `.dittopack` (Settings → Workspace).
+
 ### v1.5 — Sequences
 
 Return different responses on subsequent calls to the same endpoint. Essential for testing polling flows.
@@ -129,7 +149,7 @@ A scenario can carry any combination of:
 - **HTTP→Socket triggers** — when the app makes a matching HTTP call, fire a WS sequence. This is the bridge between both worlds: real backends often emit a socket event in response to an HTTP request, and triggers reproduce that without code.
 - **Adapter profile dependencies** — scenarios declare required profiles up front (`requires: { "adapter_profiles": [...] }`) so activation fails clearly before dispatching if a profile is missing.
 
-Activation is atomic: disables conflicting mocks/channels, enables the scenario's, arms triggers. UI: scenario cards in the sidebar, one-click activation, visual indicator of the active scenario, "Stop scenario" to revert.
+Activation is atomic: disables conflicting mocks/channels, enables the scenario's, arms triggers. UI lands in the slots reserved by **v1.5.x / UI-M6** — the active-scenario banner above Activity, the Scenarios sub-section under Sidebar → Flows, and the bidirectional HTTP↔WS trigger arrows on Activity rows (`linkedEventId` prop). See [docs/UI_GUIDELINES.md](docs/UI_GUIDELINES.md).
 
 Scenarios are JSON files in `scenarios/` (e.g., `scenarios/match_day_happy_path.json`).
 
@@ -213,17 +233,17 @@ Per-format docs: [docs/EVENT_TEMPLATES.md](docs/EVENT_TEMPLATES.md), [docs/EVENT
 
 **Goal:** open a recording, edit individual events, play it back as a sequence.
 
-- Timeline view for recordings (similar to the M4 player but with real chronological events).
+- Timeline view for recordings (similar to the M4 player but with real chronological events). Lands in the existing Recordings tab introduced by **v1.5.x / UI-M2** — no new region.
 - Per-event actions: edit payload, delete, duplicate, export-to-template, "send a copy now".
 - Recording-level operations: trim (cut start/end), splice (concatenate recordings), filter (only events from channels X).
-- Conversion: `recording → sequence` (generate an editable `EventSequence` from a recording).
+- Conversion: `recording → sequence` (generate an editable `EventSequence` from a recording) — the resulting sequence becomes a Flows → Sequences entry, the visible bridge from Recordings to Library.
 - Replay with original timing / compressed (multiplier) / sticky (skip long gaps).
 
 **Done when:** open a 10-minute recording, filter to one channel, edit one event, save as a sequence, play it back at 5x.
 
 #### Adapter profile UI (M9)
 
-**Goal:** create, edit, validate, and test adapter profiles from the dashboard. Today profiles are hand-written JSON files (see the [adapter profiles section](docs/WEBSOCKET_ARCHITECTURE.md#adapter-profiles) of the architecture doc); M9 adds the visual layer so a non-technical user can onboard a new backend without touching files.
+**Goal:** create, edit, validate, and test adapter profiles from the dashboard. Today profiles are hand-written JSON files (see the [adapter profiles section](docs/WEBSOCKET_ARCHITECTURE.md#adapter-profiles) of the architecture doc); M9 adds the visual layer so a non-technical user can onboard a new backend without touching files. Lives in the **Settings → Adapter profiles** section reserved by **v1.5.x / UI-M4** (read-only listing) — M9 turns it editable in place. See [docs/UI_GUIDELINES.md](docs/UI_GUIDELINES.md).
 
 - **Profile editor:** form-driven UI for `name`, `base_adapter`, `subprotocols`, envelope templates (with syntax highlighting), and the `type_aliases` mapping.
 - **Live preview pane:** pick a sample subscription ID, type, and payload — see exactly what frame will be sent on the wire as you edit.
@@ -240,7 +260,7 @@ Tests, documentation conventions, backward-compatibility, and performance expect
 
 ### v1.9 — Ditto Collections (`.dittopack`)
 
-Shareable, versioned bundles of Ditto configuration. Like Postman Collections, but for everything Ditto manages. Implementation lands as M8 of the WebSocket track.
+Shareable, versioned bundles of Ditto configuration. Like Postman Collections, but for everything Ditto manages. Implementation lands as M8 of the WebSocket track. UI surface is the **Settings → Workspace** section reserved by **v1.5.x / UI-M6** (placeholder there until M8 fills it). See [docs/UI_GUIDELINES.md](docs/UI_GUIDELINES.md).
 
 - Bundle format: zip with `manifest.json` (with `schemaVersion`) + structured folders (`mocks/`, `scenarios/`, `sequences/`, `descriptors/`, `recordings/`, `adapter_profiles/`, `event_templates/`). The compatibility contract has been honoured since M0 so every artifact produced from v1.6 onwards is bundle-compatible by construction. See the [`.dittopack` manifest format](docs/WEBSOCKET_ARCHITECTURE.md#dittopack-manifest-format) in the architecture doc.
 - Export granularity:
