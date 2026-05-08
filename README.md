@@ -65,6 +65,19 @@ That's enough to send arbitrary events to a connected app. The features below ar
 - **Reusable events** — save a composed event as a template with `{{vars}}` substitution. See [docs/EVENT_TEMPLATES.md](docs/EVENT_TEMPLATES.md).
 - **Timed sequences** — chain templates into a timeline with delays and play/pause/scrub/speed transport controls. See [docs/EVENT_SEQUENCES.md](docs/EVENT_SEQUENCES.md).
 
+### Live, record, and mixed modes
+
+To passthrough or record traffic against a real backend, set the upstream WebSocket URL with `--live-target`. The minimum CLI to launch Ditto wired up for WebSocket work:
+
+```bash
+# HTTP backend + WS upstream
+./ditto --target https://api.example.com --live-target wss://api.example.com/socket
+```
+
+The flag is also available in headless mode and is persisted to `config.json`, so subsequent launches pick it up. You can also set/change it at runtime from the dashboard's Live Target settings.
+
+Per-channel modes (`mock`, `live`, `record`, `mixed`) are configured from the Sockets tab. See [docs/CHANNEL_MODES.md](docs/CHANNEL_MODES.md) and [docs/RECORDINGS.md](docs/RECORDINGS.md) for the on-disk recording format.
+
 Full roadmap and milestone-by-milestone breakdown: see the v1.8 section in [ROADMAP.md](ROADMAP.md). Architecture, filesystem layout, and adapter profile spec: [docs/WEBSOCKET_ARCHITECTURE.md](docs/WEBSOCKET_ARCHITECTURE.md).
 
 ## Headless mode
@@ -88,6 +101,7 @@ For CI, servers, or terminal-only workflows. Runs without the desktop window but
 |------|---------|-------------|
 | `--port` | `8888` | Port to listen on |
 | `--target` | _(none)_ | Backend URL to forward unmatched requests to |
+| `--live-target` | _(none)_ | WebSocket upstream URL for `live`/`record`/`mixed` channel modes |
 | `--mocks` | _(persistent app data)_ | Directory containing mock JSON files |
 | `--headless` | `false` | Run without the desktop window (API stays available) |
 | `--log-format` | `text` | Log format: `text` or `json` |
