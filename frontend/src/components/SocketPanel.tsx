@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type {
   EventTemplate,
@@ -13,6 +13,8 @@ import * as api from '../api'
 import { Braces, Download, Radio, Refresh, Send, X } from './icons'
 import { detectTemplateVariablesInValue, isBuiltinVariable } from './EventTemplatesPanel'
 import { useSocketStore, buildAdapterOptions } from '../stores/useSocketStore'
+import { useChannelModeStore } from '../stores/useChannelModeStore'
+import type { ChannelMode } from '../types'
 
 interface SocketPanelProps {
   clients: SocketClient[]
@@ -69,6 +71,9 @@ export function SocketPanel({
   }, [clients])
 
   const adapterProfiles = useSocketStore(state => state.adapterProfiles)
+  const channelModes = useChannelModeStore(state => state.modes)
+  const setChannelMode = useChannelModeStore(state => state.setMode)
+  const liveTarget = useChannelModeStore(state => state.liveTarget || serverInfo?.live_target || '')
   const adapterOptions = useMemo(() => buildAdapterOptions(adapterProfiles), [adapterProfiles])
 
   const [channel, setChannel] = useState('')
@@ -109,6 +114,11 @@ export function SocketPanel({
   }, [selectedTemplate])
   const scheme = serverInfo?.https ? 'wss' : 'ws'
   const wsUrl = serverInfo ? `${scheme}://localhost:${serverInfo.port}` : ''
+  const visibleChannels = useMemo(() => {
+    const set = new Set(channels)
+    if (channel.trim()) set.add(channel.trim())
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [channel, channels])
 
   async function handleDispatch() {
     const selectedChannel = channel.trim()
@@ -241,6 +251,49 @@ export function SocketPanel({
             </div>
           ) : (
             clients.map(client => <ClientRow key={client.id} client={client} />)
+          )}
+        </section>
+
+        <section className="socket-modes">
+          <div className="panel-label">Channel modes</div>
+          {visibleChannels.length === 0 ? (
+            <div className="socket-empty compact">Subscribe or type a channel to configure its mode.</div>
+          ) : (
+            <div className="channel-mode-list">
+              {visibleChannels.map(item => {
+                const current = channelModes[item]?.mode ?? 'mock'
+                return (
+                  <div className="channel-mode-row" key={item}>
+                    <span title={item}>{item}</span>
+                    <select
+                      className="select"
+                      value={current}
+                      title={!liveTarget ? 'Configura un Live Target en Settings' : ''}
+                      onChange={async e => {
+                        const next = e.target.value as ChannelMode
+                        try {
+                          await setChannelMode(item, next, channelModes[item]?.rate_cap_hz ?? 0)
+                        } catch (err) {
+                          showToast(`Mode update failed: ${(err as Error).message}`, 'warn')
+                        }
+                      }}
+                    >
+                      <option value="mock">Mock</option>
+                      <option value="live" disabled={!liveTarget}>Live</option>
+                      <option value="record">Record</option>
+                      <option value="mixed" disabled={!liveTarget}>Mixed</option>
+                    </select>
+                    <ChannelRateCapInput
+                      value={channelModes[item]?.rate_cap_hz ?? 0}
+                      onCommit={async rate => {
+                        await setChannelMode(item, current, rate)
+                      }}
+                      showToast={showToast}
+                    />
+                  </div>
+                )
+              })}
+            </div>
           )}
         </section>
 
@@ -380,11 +433,12 @@ export function SocketPanel({
         ) : (
           <div className="socket-event-list">
             {socketEntries.map(entry => (
-              <div key={entry.id} className="socket-event-row">
+              <div key={entry.id} className={entry.method === 'DISPATCH_BURST' ? 'socket-event-row burst' : 'socket-event-row'}>
                 <span className="time">{entry.timestamp}</span>
                 <span className="method">{entry.method}</span>
                 <span className="path" title={entry.path}>{entry.path}</span>
                 <span className="status">{entry.status || '-'}</span>
+                {entry.method === 'DISPATCH_BURST' && <BurstBadge body={entry.response_body} />}
                 {entry.response_body && (
                   <span className="payload" title={entry.response_body}>
                     <Braces size={13} /> {entry.response_body}
@@ -413,11 +467,57 @@ export function SocketPanel({
   )
 }
 
+function ChannelRateCapInput({
+  value,
+  onCommit,
+  showToast,
+}: {
+  value: number
+  onCommit: (rate: number) => Promise<void>
+  showToast: (message: string, kind?: 'warn') => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  async function commit() {
+    const rate = Math.max(0, Number.parseInt(draft || '0', 10) || 0)
+    setDraft(String(rate))
+    if (rate === value) return
+    try {
+      await onCommit(rate)
+    } catch (err) {
+      setDraft(String(value))
+      showToast(`Rate cap update failed: ${(err as Error).message}`, 'warn')
+    }
+  }
+
+  return (
+    <input
+      className="input rate-cap"
+      type="number"
+      min="0"
+      value={draft}
+      title="Recording rate cap (Hz), 0 disables"
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur()
+        }
+      }}
+    />
+  )
+}
+
 function ClientRow({ client }: { client: SocketClient }) {
   return (
     <div className="socket-client-row">
       <div className="socket-client-main">
         <span className="client-id">{client.id}</span>
+        {!!client.dropped_to_client && <span className="drop-badge">{client.dropped_to_client} dropped</span>}
         <span className="client-adapter">{client.adapter}</span>
       </div>
       <div className="client-remote" title={client.remote_addr}>{client.remote_addr}</div>
@@ -432,6 +532,18 @@ function ClientRow({ client }: { client: SocketClient }) {
       </div>
     </div>
   )
+}
+
+function BurstBadge({ body }: { body?: string }) {
+  let label = 'burst'
+  try {
+    const parsed = JSON.parse(body || '{}') as { total_frames?: number; frames?: number; window_ms?: number }
+    const frames = parsed.total_frames ?? parsed.frames
+    if (frames) label = `${frames} total frames in ${Math.round((parsed.window_ms || 1000) / 1000)}s`
+  } catch {
+    label = 'burst'
+  }
+  return <span className="burst-badge">{label}</span>
 }
 
 function SchemaPacksModal({

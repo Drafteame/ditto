@@ -131,7 +131,7 @@ func TestAppSyncAdapterErrorPayloadUsesJSONString(t *testing.T) {
 }
 
 func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if IsWebSocketRequest(r) {
@@ -186,7 +186,7 @@ func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 }
 
 func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hub.ServeHTTP)
 	server := httptest.NewServer(mux)
@@ -220,7 +220,7 @@ func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
 }
 
 func TestSocketHubDispatchAdapterFilter(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	rawClient := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -262,7 +262,7 @@ func TestSocketHubDispatchAdapterFilter(t *testing.T) {
 }
 
 func TestSocketAPIRejectsCrossOriginTextPlainDispatch(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	mux := http.NewServeMux()
 	RegisterSocketRoutes(mux, hub)
 
@@ -344,7 +344,7 @@ func TestSocketOriginPolicy(t *testing.T) {
 }
 
 func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -367,7 +367,7 @@ func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
 }
 
 func TestSocketHubAllowsLocalhostCrossPortHandshake(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -440,7 +440,7 @@ func TestShouldProxyWebSocket(t *testing.T) {
 }
 
 func TestSocketHubSubscribeMissingChannelSendsError(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -467,7 +467,7 @@ func TestSocketHubSubscribeMissingChannelSendsError(t *testing.T) {
 
 func TestEnqueueControlPublishesErrorWhenClientClosed(t *testing.T) {
 	bus := NewEventBus()
-	hub := NewSocketHub(bus, false)
+	hub := NewSocketHub(bus, false, nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 
@@ -519,8 +519,55 @@ func TestSocketClientEnqueueRejectsAfterClose(t *testing.T) {
 	}
 }
 
+func TestSocketClientDropCounterInSnapshot(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false, nil)
+	client := &SocketClient{
+		id:            "raw-1",
+		adapter:       "raw",
+		protocol:      RawAdapter{},
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		connected:     time.Now(),
+		subscriptions: map[string]string{},
+	}
+	hub.addClient(client)
+	client.send <- textMessage([]byte(`{"queued":true}`))
+	if client.enqueue(textMessage([]byte(`{"dropped":true}`)), 0) {
+		t.Fatalf("enqueue() succeeded with full send queue")
+	}
+	snap := hub.Snapshot()
+	if len(snap) != 1 || snap[0].DroppedToClient != 1 {
+		t.Fatalf("snapshot = %#v, want one dropped_to_client", snap)
+	}
+}
+
+func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
+	bus := NewEventBus()
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	pub := NewCoalescingPublisher(bus, false)
+	for i := 0; i < SocketLogCoalesceThresholdPerSecond+5; i++ {
+		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK})
+	}
+	deadline := time.After(1500 * time.Millisecond)
+	summaries := 0
+	for {
+		select {
+		case event := <-events:
+			if event.Method == "DISPATCH_BURST" {
+				summaries++
+			}
+		case <-deadline:
+			if summaries != 1 {
+				t.Fatalf("burst summaries = %d, want 1", summaries)
+			}
+			return
+		}
+	}
+}
+
 func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	client := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -543,7 +590,7 @@ func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
 }
 
 func TestDispatchEncodesPayloadOncePerAdapter(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false)
+	hub := NewSocketHub(NewEventBus(), false, nil)
 	adapter := &countingAdapter{}
 	clientA := &SocketClient{
 		id:            "client-a",

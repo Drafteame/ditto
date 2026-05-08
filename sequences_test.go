@@ -206,7 +206,7 @@ func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
 	mux := http.NewServeMux()
 	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
 
@@ -270,7 +270,7 @@ func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(reg, reg.templates, nil, NewSocketHub(NewEventBus(), false), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(reg, reg.templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
 	mux := http.NewServeMux()
 	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
 

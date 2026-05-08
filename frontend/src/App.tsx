@@ -10,34 +10,42 @@ import { useEventTemplateStore } from './stores/useEventTemplateStore'
 import { useSequenceStore } from './stores/useSequenceStore'
 import { useSchemaStore } from './stores/useSchemaStore'
 import { useSocketStore } from './stores/useSocketStore'
+import { useChannelModeStore } from './stores/useChannelModeStore'
+import { useRecordingStore } from './stores/useRecordingStore'
 import { createNewMockState, createEditMockState } from './components/MockEditorModal'
 import { AppShell } from './components/AppShell'
 import { RequestsView } from './views/RequestsView'
 import { SocketsView } from './views/SocketsView'
 import { TemplatesView } from './views/TemplatesView'
 import { SequencesView } from './views/SequencesView'
+import { RecordingsView } from './views/RecordingsView'
 
 function isInsideWails(): boolean { return new URLSearchParams(window.location.search).get('desktop') === '1' }
 function isMobileDevice(): boolean { return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) }
 
-const views = { requests: RequestsView, sockets: SocketsView, templates: TemplatesView, sequences: SequencesView }
+const views = { requests: RequestsView, sockets: SocketsView, templates: TemplatesView, sequences: SequencesView, recordings: RecordingsView }
 
 export default function App() {
   const { mock, log, ui, counts } = useAppShellState()
   const { mocks, serverInfo, loadMocks, reloadMocks, advanceSequenceCursor } = mock
   const { logEntries, connected, selectedLogId, setConnected, appendLogEvent, clearLog, selectLog } = log
   const { sidebarOpen, sidebarCollapsed, activeView, drawerWidth, updateInfo, modalState, qrOpen, setSidebarOpen, toggleSidebarOpen, setSidebarCollapsed, toggleSidebarCollapsed, setDrawerWidth, setUpdateInfo, setModalState, setQrOpen, setActiveView } = ui
-  const { connectedClientCount, eventTemplateCount, sequenceCount } = counts
+  const { connectedClientCount, eventTemplateCount, sequenceCount, recordingCount } = counts
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
   const isMobile = useRef(isMobileDevice()).current
   const socketRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const modeRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const recordingRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refreshData = useCallback(() => {
     loadMocks()
     useSocketStore.getState().loadClients()
     useSocketStore.getState().loadAdapterProfiles()
+    useChannelModeStore.getState().loadModes()
+    useChannelModeStore.getState().loadLiveTarget()
+    useRecordingStore.getState().loadRecordings()
     useSchemaStore.getState().loadSchemas()
     useEventTemplateStore.getState().loadTemplates()
     useSequenceStore.getState().loadSequences()
@@ -53,6 +61,26 @@ export default function App() {
     }, 250)
   }, [])
 
+  const scheduleModeRefresh = useCallback(() => {
+    if (modeRefreshTimer.current) {
+      clearTimeout(modeRefreshTimer.current)
+    }
+    modeRefreshTimer.current = setTimeout(() => {
+      useChannelModeStore.getState().loadModes()
+      modeRefreshTimer.current = null
+    }, 250)
+  }, [])
+
+  const scheduleRecordingRefresh = useCallback(() => {
+    if (recordingRefreshTimer.current) {
+      clearTimeout(recordingRefreshTimer.current)
+    }
+    recordingRefreshTimer.current = setTimeout(() => {
+      useRecordingStore.getState().loadRecordings()
+      recordingRefreshTimer.current = null
+    }, 250)
+  }, [])
+
   useSSE(
     useCallback((event) => {
       appendLogEvent(event)
@@ -60,7 +88,13 @@ export default function App() {
       if (event.type === 'SOCKET') {
         scheduleSocketClientRefresh()
       }
-    }, [advanceSequenceCursor, appendLogEvent, scheduleSocketClientRefresh]),
+      if (event.type === 'MODE') {
+        scheduleModeRefresh()
+      }
+      if (event.type === 'RECORD') {
+        scheduleRecordingRefresh()
+      }
+    }, [advanceSequenceCursor, appendLogEvent, scheduleModeRefresh, scheduleRecordingRefresh, scheduleSocketClientRefresh]),
     useCallback(() => {
       setConnected(true)
       refreshData()
@@ -89,6 +123,12 @@ export default function App() {
     return () => {
       if (socketRefreshTimer.current) {
         clearTimeout(socketRefreshTimer.current)
+      }
+      if (modeRefreshTimer.current) {
+        clearTimeout(modeRefreshTimer.current)
+      }
+      if (recordingRefreshTimer.current) {
+        clearTimeout(recordingRefreshTimer.current)
       }
     }
   }, [])
@@ -151,6 +191,7 @@ export default function App() {
       qrOpen={qrOpen}
       selectedEntry={selectedEntry}
       sequenceCount={sequenceCount}
+      recordingCount={recordingCount}
       serverInfo={serverInfo}
       sidebarCollapsed={sidebarCollapsed}
       sidebarOpen={sidebarOpen}

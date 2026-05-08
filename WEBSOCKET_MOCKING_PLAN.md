@@ -110,8 +110,8 @@ Rules:
 | M2 — Schema packs + Protobuf encoding | ✅ Done |
 | M3 — Event templates + quick-fire palette | ✅ Done |
 | M4 — Event sequences + transport controls | ✅ Done |
-| M5 — Live mode + Recording | ⏳ Next |
-| M6 — Replay + recording editing | ⏳ |
+| M5 — Live mode + Recording | ✅ Done |
+| M6 — Replay + recording editing | ⏳ Next |
 | M7 — Scenarios | ⏳ |
 | M8 — Ditto Collections (`.dittopack`) | ⏳ |
 | M9 — Adapter profile UI | ⏳ |

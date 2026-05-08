@@ -9,15 +9,17 @@ import (
 
 // Config holds persistent user settings.
 type Config struct {
-	Port   int    `json:"port"`
-	Target string `json:"target"`
+	Port       int    `json:"port"`
+	Target     string `json:"target"`
+	LiveTarget string `json:"live_target,omitempty"`
 }
 
 // DefaultConfig returns the default settings.
 func DefaultConfig() Config {
 	return Config{
-		Port:   8888,
-		Target: "",
+		Port:       8888,
+		Target:     "",
+		LiveTarget: "",
 	}
 }
 
@@ -48,6 +50,7 @@ func NewConfigStore() (*ConfigStore, error) {
 				cs.config.Port = saved.Port
 			}
 			cs.config.Target = saved.Target
+			cs.config.LiveTarget = saved.LiveTarget
 		}
 	}
 
@@ -74,6 +77,14 @@ func (cs *ConfigStore) SetTarget(target string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.config.Target = target
+	return cs.save()
+}
+
+// SetLiveTarget updates the WebSocket upstream target and saves.
+func (cs *ConfigStore) SetLiveTarget(target string) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.config.LiveTarget = target
 	return cs.save()
 }
 

@@ -74,31 +74,37 @@ func (pm *ProxyManager) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 
 // ServerConfig holds all the parameters needed to create and run the HTTP server.
 type ServerConfig struct {
-	Port     int
-	Target   string
-	MocksDir string
-	Layout   DataLayout
-	HTTPS    bool
-	CertDir  string
-	ServeUI  bool
-	JSONLogs bool
+	Port        int
+	Target      string
+	LiveTarget  string
+	MocksDir    string
+	Layout      DataLayout
+	HTTPS       bool
+	CertDir     string
+	ServeUI     bool
+	JSONLogs    bool
+	ConfigStore *ConfigStore
 }
 
 // Server holds the running server state.
 type Server struct {
-	Mux       *http.ServeMux
-	Store     *MockStore
-	Bus       *EventBus
-	ProxyMgr  *ProxyManager
-	SocketHub *SocketHub
-	Schemas   *SchemaRegistry
-	Templates *EventTemplateRegistry
-	Sequences *EventSequenceRegistry
-	Player    *SequencePlayer
-	Info      ServerInfo
-	Config    ServerConfig
-	CertPath  string
-	KeyPath   string
+	Mux        *http.ServeMux
+	Store      *MockStore
+	Bus        *EventBus
+	ProxyMgr   *ProxyManager
+	SocketHub  *SocketHub
+	Modes      *ChannelModeRegistry
+	Recorder   *Recorder
+	Live       *LiveBridge
+	LiveTarget *LiveTargetManager
+	Schemas    *SchemaRegistry
+	Templates  *EventTemplateRegistry
+	Sequences  *EventSequenceRegistry
+	Player     *SequencePlayer
+	Info       ServerInfo
+	Config     ServerConfig
+	CertPath   string
+	KeyPath    string
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -121,6 +127,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Layout.AdapterProfilesDir == "" {
 		return nil, fmt.Errorf("server config layout with adapter profiles dir is required")
 	}
+	if cfg.Layout.RecordingsDir == "" {
+		return nil, fmt.Errorf("server config layout with recordings dir is required")
+	}
+	if cfg.Layout.ChannelModesDir == "" {
+		return nil, fmt.Errorf("server config layout with channel modes dir is required")
+	}
 
 	store := NewMockStore(cfg.MocksDir)
 	if err := store.Load(); err != nil {
@@ -130,7 +142,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	bus := NewEventBus()
 	proxyMgr := NewProxyManager(cfg.Target)
 	jsonLogs := cfg.JSONLogs
-	socketHub := NewSocketHub(bus, jsonLogs)
+	modeRegistry, err := NewChannelModeRegistry(cfg.Layout.ChannelModesDir, bus, jsonLogs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load channel mode registry: %w", err)
+	}
+	socketHub := NewSocketHub(bus, jsonLogs, modeRegistry)
 	descriptorsDir := cfg.Layout.DescriptorsDir
 	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
 	if err != nil {
@@ -147,6 +163,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err := LoadAdapterProfiles(cfg.Layout.AdapterProfilesDir); err != nil {
 		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
 	}
+	recorder, err := NewRecorder(cfg.Layout.RecordingsDir, schemaRegistry, modeRegistry, bus, jsonLogs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load recorder: %w", err)
+	}
+	modeRegistry.OnChange(recorder.HandleModeChange)
+	socketHub.SetRecorder(recorder)
+	liveTargets := NewLiveTargetManager(cfg.LiveTarget, cfg.ConfigStore)
+	liveBridge := NewLiveBridge(liveTargets, socketHub)
+	socketHub.SetLiveBridge(liveBridge)
 	playerBroadcaster := NewPlayerBroadcaster()
 	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster, nil)
 
@@ -166,16 +191,20 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		ipStrings = append(ipStrings, ip.String())
 	}
 	info := ServerInfo{
-		Port:     cfg.Port,
-		Target:   cfg.Target,
-		HTTPS:    cfg.HTTPS,
-		MocksDir: cfg.MocksDir,
-		LocalIPs: ipStrings,
-		Version:  version,
+		Port:       cfg.Port,
+		Target:     cfg.Target,
+		LiveTarget: cfg.LiveTarget,
+		HTTPS:      cfg.HTTPS,
+		MocksDir:   cfg.MocksDir,
+		LocalIPs:   ipStrings,
+		Version:    version,
 	}
 
-	RegisterUI(mux, store, bus, proxyMgr, info, cfg.ServeUI)
+	RegisterUI(mux, store, bus, proxyMgr, liveTargets.Target, info, cfg.ServeUI)
 	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
+	RegisterChannelModeRoutes(mux, modeRegistry)
+	RegisterLiveTargetRoutes(mux, liveTargets)
+	RegisterRecordingRoutes(mux, recorder)
 	RegisterSchemaRoutes(mux, schemaRegistry)
 	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub, schemaRegistry)
 	RegisterSequenceRoutes(mux, eventSequences, sequencePlayer, playerBroadcaster)
@@ -294,19 +323,23 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	})
 
 	return &Server{
-		Mux:       mux,
-		Store:     store,
-		Bus:       bus,
-		ProxyMgr:  proxyMgr,
-		SocketHub: socketHub,
-		Schemas:   schemaRegistry,
-		Templates: eventTemplates,
-		Sequences: eventSequences,
-		Player:    sequencePlayer,
-		Info:      info,
-		Config:    cfg,
-		CertPath:  certPath,
-		KeyPath:   keyPath,
+		Mux:        mux,
+		Store:      store,
+		Bus:        bus,
+		ProxyMgr:   proxyMgr,
+		SocketHub:  socketHub,
+		Modes:      modeRegistry,
+		Recorder:   recorder,
+		Live:       liveBridge,
+		LiveTarget: liveTargets,
+		Schemas:    schemaRegistry,
+		Templates:  eventTemplates,
+		Sequences:  eventSequences,
+		Player:     sequencePlayer,
+		Info:       info,
+		Config:     cfg,
+		CertPath:   certPath,
+		KeyPath:    keyPath,
 	}, nil
 }
 
