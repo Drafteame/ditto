@@ -30,7 +30,7 @@ export default function App() {
   const { mocks, serverInfo, loadMocks, reloadMocks, advanceSequenceCursor } = mock
   const { logEntries, connected, selectedLogId, setConnected, appendLogEvent, clearLog, selectLog } = log
   const { sidebarOpen, sidebarCollapsed, activeView, drawerWidth, updateInfo, modalState, qrOpen, setSidebarOpen, toggleSidebarOpen, setSidebarCollapsed, toggleSidebarCollapsed, setDrawerWidth, setUpdateInfo, setModalState, setQrOpen, setActiveView } = ui
-  const { connectedClientCount, eventTemplateCount, sequenceCount, recordingCount } = counts
+  const { connectedClientCount, channelCount, eventTemplateCount, sequenceCount, recordingCount } = counts
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
@@ -180,6 +180,7 @@ export default function App() {
   return (
     <AppShell
       activeView={activeView}
+      channelCount={channelCount}
       connected={connected}
       connectedClientCount={connectedClientCount}
       drawerWidth={drawerWidth}

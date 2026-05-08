@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"time"
 )
+
+var ErrChannelModeNotFound = errors.New("channel mode not found")
 
 type ChannelMode string
 
@@ -100,11 +103,7 @@ func (r *ChannelModeRegistry) Set(cfg ChannelConfig) error {
 	if cfg.Mode == "" {
 		cfg.Mode = ModeMock
 	}
-	if cfg.Mode == ModeMock && cfg.RecordingID == "" && cfg.RateCapHz == 0 {
-		delete(r.channels, cfg.Channel)
-	} else {
-		r.channels[cfg.Channel] = cfg
-	}
+	r.channels[cfg.Channel] = cfg
 	snapshot := r.snapshotLocked()
 	listeners := append([]func(ChannelConfig){}, r.listeners...)
 	r.mu.Unlock()
@@ -112,9 +111,41 @@ func (r *ChannelModeRegistry) Set(cfg ChannelConfig) error {
 	if err := r.writeState(snapshot); err != nil {
 		return err
 	}
-	r.publishModeEvent(cfg)
+	r.publishModeEvent("SET", cfg)
 	for _, listener := range listeners {
 		listener(cfg)
+	}
+	return nil
+}
+
+func (r *ChannelModeRegistry) Delete(channel string) error {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return fmt.Errorf("channel is required")
+	}
+	if strings.ContainsAny(channel, "\r\n") {
+		return fmt.Errorf("channel cannot contain newlines")
+	}
+	now := time.Now().UTC()
+	listenerCfg := ChannelConfig{Channel: channel, Mode: ModeMock, UpdatedAt: now}
+	eventCfg := ChannelConfig{Channel: channel, UpdatedAt: now}
+
+	r.mu.Lock()
+	if _, ok := r.channels[channel]; !ok {
+		r.mu.Unlock()
+		return ErrChannelModeNotFound
+	}
+	delete(r.channels, channel)
+	snapshot := r.snapshotLocked()
+	listeners := append([]func(ChannelConfig){}, r.listeners...)
+	r.mu.Unlock()
+
+	if err := r.writeState(snapshot); err != nil {
+		return err
+	}
+	r.publishModeEvent(http.MethodDelete, eventCfg)
+	for _, listener := range listeners {
+		listener(listenerCfg)
 	}
 	return nil
 }
@@ -162,7 +193,13 @@ func (r *ChannelModeRegistry) load() error {
 	}
 	for _, cfg := range state.Channels {
 		cfg.Channel = strings.TrimSpace(cfg.Channel)
-		if cfg.Channel == "" || !isChannelMode(cfg.Mode) {
+		if cfg.Channel == "" {
+			continue
+		}
+		if cfg.Mode == "" {
+			cfg.Mode = ModeMock
+		}
+		if !isChannelMode(cfg.Mode) {
 			continue
 		}
 		r.channels[cfg.Channel] = cfg
@@ -182,7 +219,7 @@ func writeChannelModeState(path string, channels []ChannelConfig) error {
 	return atomicWriteFile(path, data, 0o644)
 }
 
-func (r *ChannelModeRegistry) publishModeEvent(cfg ChannelConfig) {
+func (r *ChannelModeRegistry) publishModeEvent(method string, cfg ChannelConfig) {
 	if r.bus == nil {
 		return
 	}
@@ -190,7 +227,7 @@ func (r *ChannelModeRegistry) publishModeEvent(cfg ChannelConfig) {
 	event := LogEvent{
 		Timestamp:    time.Now().Format("15:04:05"),
 		Type:         "MODE",
-		Method:       "SET",
+		Method:       method,
 		Path:         cfg.Channel,
 		Status:       http.StatusOK,
 		ResponseBody: string(body),
@@ -237,6 +274,17 @@ func RegisterChannelModeRoutes(mux *http.ServeMux, registry *ChannelModeRegistry
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(registry.Get(cfg.Channel))
+		case http.MethodDelete:
+			channel := r.URL.Query().Get("channel")
+			if err := registry.Delete(channel); err != nil {
+				if errors.Is(err, ErrChannelModeNotFound) {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

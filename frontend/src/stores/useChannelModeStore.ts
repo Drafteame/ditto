@@ -2,10 +2,6 @@ import { create } from 'zustand'
 import * as api from '../api'
 import type { ChannelConfig, ChannelMode } from '../types'
 
-function isDefaultChannelMode(config: ChannelConfig) {
-  return config.mode === 'mock' && !config.recording_id && !config.rate_cap_hz
-}
-
 interface ChannelModeStore {
   modes: Record<string, ChannelConfig>
   liveTarget: string
@@ -13,6 +9,8 @@ interface ChannelModeStore {
   error: string
   loadModes: () => Promise<void>
   setMode: (channel: string, mode: ChannelMode, rateCapHz?: number) => Promise<void>
+  addChannel: (channel: string, mode?: ChannelMode, rateCapHz?: number) => Promise<void>
+  deleteChannel: (channel: string) => Promise<void>
   loadLiveTarget: () => Promise<void>
   setLiveTarget: (target: string) => Promise<void>
 }
@@ -47,13 +45,26 @@ export const useChannelModeStore = create<ChannelModeStore>((set, get) => ({
       const saved = await api.setChannelMode({ channel, mode, rate_cap_hz: rateCapHz })
       set(current => {
         const modes = { ...current.modes }
-        if (isDefaultChannelMode(saved)) {
-          delete modes[channel]
-        } else {
-          modes[channel] = saved
-        }
+        modes[channel] = saved
         return { modes }
       })
+    } catch (err) {
+      set({ modes: previous, error: (err as Error).message })
+      throw err
+    }
+  },
+  addChannel: async (channel, mode = 'mock', rateCapHz = 0) => {
+    await get().setMode(channel, mode, rateCapHz)
+  },
+  deleteChannel: async (channel) => {
+    const previous = get().modes
+    set(current => {
+      const modes = { ...current.modes }
+      delete modes[channel]
+      return { modes, error: '' }
+    })
+    try {
+      await api.deleteChannelMode(channel)
     } catch (err) {
       set({ modes: previous, error: (err as Error).message })
       throw err

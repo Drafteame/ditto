@@ -212,6 +212,15 @@ export async function setChannelMode(config: Partial<ChannelConfig> & { channel:
   return res.json()
 }
 
+export async function deleteChannelMode(channel: string): Promise<void> {
+  const params = new URLSearchParams({ channel })
+  const res = await fetch(`${API_BASE}/channel-modes?${params}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+}
+
 export async function fetchRecordings(): Promise<RecordingsResponse> {
   const res = await fetch(`${API_BASE}/recordings`)
   if (!res.ok) {

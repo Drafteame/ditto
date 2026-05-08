@@ -6,6 +6,7 @@ import { useMockStore } from '../stores/useMockStore'
 import { useSequenceStore } from '../stores/useSequenceStore'
 import { useSocketStore } from '../stores/useSocketStore'
 import { useRecordingStore } from '../stores/useRecordingStore'
+import { useChannelModeStore } from '../stores/useChannelModeStore'
 
 export function useAppShellState() {
   const mock = useMockStore(useShallow(state => ({
@@ -49,6 +50,7 @@ export function useAppShellState() {
     ui,
     counts: {
       connectedClientCount: useSocketStore(state => state.connectedClients.length),
+      channelCount: useChannelModeStore(state => Object.keys(state.modes).length),
       eventTemplateCount: useEventTemplateStore(state => state.templates.length),
       sequenceCount: useSequenceStore(state => state.sequences.length),
       recordingCount: useRecordingStore(state => state.recordings?.length ?? 0),

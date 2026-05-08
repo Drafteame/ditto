@@ -27,3 +27,15 @@ the cap. Dropped recording frames are counted in the recording manifest.
 High-volume socket log entries are coalesced per channel in one-second windows:
 the first events up to the threshold are still emitted, then Ditto publishes a
 `DISPATCH_BURST` summary whose `total_frames` is the full window count.
+
+## Saved Channels
+
+Channels can be registered manually from the sidebar without waiting for a
+client to subscribe. Saved channels are persisted in `channel_modes/state.json`
+with their mode and optional `rate_cap_hz`, then shown both in the sidebar and
+in the Sockets view's Channel modes list.
+
+Calling `Get` for an unregistered channel still returns the implicit default
+`mock` mode. Explicitly saving a channel as `mock` keeps it in the registry; use
+the sidebar delete action or `DELETE /__ditto__/api/channel-modes?channel=...`
+to remove it.

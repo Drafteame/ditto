@@ -115,10 +115,10 @@ export function SocketPanel({
   const scheme = serverInfo?.https ? 'wss' : 'ws'
   const wsUrl = serverInfo ? `${scheme}://localhost:${serverInfo.port}` : ''
   const visibleChannels = useMemo(() => {
-    const set = new Set(channels)
+    const set = new Set([...channels, ...Object.keys(channelModes)])
     if (channel.trim()) set.add(channel.trim())
     return [...set].sort((a, b) => a.localeCompare(b))
-  }, [channel, channels])
+  }, [channel, channels, channelModes])
 
   async function handleDispatch() {
     const selectedChannel = channel.trim()
@@ -310,7 +310,7 @@ export function SocketPanel({
                 placeholder="/events/example"
               />
               <datalist id="socket-channels">
-                {channels.map(item => <option key={item} value={item} />)}
+                {visibleChannels.map(item => <option key={item} value={item} />)}
               </datalist>
             </label>
             <label>

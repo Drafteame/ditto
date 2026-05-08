@@ -2,6 +2,7 @@ type MainView = 'requests' | 'sockets' | 'templates' | 'sequences' | 'recordings
 
 interface MainTabsProps {
   activeView: MainView
+  channelCount: number
   connectedClientCount: number
   eventTemplateCount: number
   sequenceCount: number
@@ -11,6 +12,7 @@ interface MainTabsProps {
 
 export function MainTabs({
   activeView,
+  channelCount,
   connectedClientCount,
   eventTemplateCount,
   sequenceCount,
@@ -24,7 +26,9 @@ export function MainTabs({
       </button>
       <button type="button" className={activeView === 'sockets' ? 'active' : ''} onClick={() => onChange('sockets')}>
         Sockets
-        <span className="c">{connectedClientCount}</span>
+        <span className="c" title={`${connectedClientCount} connected, ${channelCount} saved`}>
+          {connectedClientCount + channelCount}
+        </span>
       </button>
       <button type="button" className={activeView === 'templates' ? 'active' : ''} onClick={() => onChange('templates')}>
         Event Templates

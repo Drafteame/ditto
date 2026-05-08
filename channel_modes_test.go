@@ -2,8 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -75,6 +79,102 @@ func TestChannelModeRegistrySetPreservesRecordingID(t *testing.T) {
 	got := reg.Get("/recorded")
 	if got.RecordingID != "rec-12345678" || got.Mode != ModeLive || got.RateCapHz != 25 {
 		t.Fatalf("Get() = %#v, want recording id preserved with updated mode/rate", got)
+	}
+}
+
+func TestChannelModeRegistryPersistsExplicitMockMode(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := NewChannelModeRegistry(dir, nil, false)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	if err := reg.Set(ChannelConfig{Channel: "/known", Mode: ModeMock}); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if got := reg.Snapshot(); len(got) != 1 || got[0].Channel != "/known" || got[0].Mode != ModeMock {
+		t.Fatalf("Snapshot() = %#v, want explicit mock channel", got)
+	}
+	reloaded, err := NewChannelModeRegistry(dir, nil, false)
+	if err != nil {
+		t.Fatalf("reload error = %v", err)
+	}
+	if got := reloaded.Snapshot(); len(got) != 1 || got[0].Channel != "/known" || got[0].Mode != ModeMock {
+		t.Fatalf("reloaded Snapshot() = %#v, want explicit mock channel", got)
+	}
+}
+
+func TestChannelModeRegistryDelete(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := NewChannelModeRegistry(dir, nil, false)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	if err := reg.Set(ChannelConfig{Channel: "/gone", Mode: ModeLive}); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if err := reg.Delete("/gone"); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if got := reg.Snapshot(); len(got) != 0 {
+		t.Fatalf("Snapshot() = %#v, want empty", got)
+	}
+	reloaded, err := NewChannelModeRegistry(dir, nil, false)
+	if err != nil {
+		t.Fatalf("reload error = %v", err)
+	}
+	if got := reloaded.Snapshot(); len(got) != 0 {
+		t.Fatalf("reloaded Snapshot() = %#v, want empty", got)
+	}
+}
+
+func TestChannelModeRegistryDeleteNotFound(t *testing.T) {
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	if err := reg.Delete("/missing"); !errors.Is(err, ErrChannelModeNotFound) {
+		t.Fatalf("Delete() error = %v, want ErrChannelModeNotFound", err)
+	}
+}
+
+func TestChannelModeRouteDelete(t *testing.T) {
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	mux := http.NewServeMux()
+	RegisterChannelModeRoutes(mux, reg)
+
+	put := httptest.NewRequest(http.MethodPut, "/__ditto__/api/channel-modes", strings.NewReader(`{"channel":"/saved","mode":"mock"}`))
+	put.Header.Set("Content-Type", "application/json")
+	put.Header.Set("Origin", "http://example.com")
+	putRec := httptest.NewRecorder()
+	mux.ServeHTTP(putRec, put)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body %q", putRec.Code, putRec.Body.String())
+	}
+
+	del := httptest.NewRequest(http.MethodDelete, "/__ditto__/api/channel-modes?channel=%2Fsaved", nil)
+	del.Header.Set("Origin", "http://example.com")
+	delRec := httptest.NewRecorder()
+	mux.ServeHTTP(delRec, del)
+	if delRec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d, body %q", delRec.Code, delRec.Body.String())
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/__ditto__/api/channel-modes", nil)
+	get.Header.Set("Origin", "http://example.com")
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, get)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body %q", getRec.Code, getRec.Body.String())
+	}
+	var body channelModeState
+	if err := json.Unmarshal(getRec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("GET body invalid JSON: %v", err)
+	}
+	if len(body.Channels) != 0 {
+		t.Fatalf("GET channels = %#v, want empty", body.Channels)
 	}
 }
 

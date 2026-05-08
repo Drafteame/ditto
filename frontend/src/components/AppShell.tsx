@@ -15,6 +15,7 @@ type MainView = 'requests' | 'sockets' | 'templates' | 'sequences' | 'recordings
 interface AppShellProps {
   children: ReactNode
   activeView: MainView
+  channelCount: number
   connected: boolean
   connectedClientCount: number
   drawerWidth: number
@@ -53,6 +54,7 @@ interface AppShellProps {
 export function AppShell({
   children,
   activeView,
+  channelCount,
   connected,
   connectedClientCount,
   drawerWidth,
@@ -119,6 +121,7 @@ export function AppShell({
         <section className="flex-1 flex flex-col min-w-0 min-h-0">
           <MainTabs
             activeView={activeView}
+            channelCount={channelCount}
             connectedClientCount={connectedClientCount}
             eventTemplateCount={eventTemplateCount}
             sequenceCount={sequenceCount}
