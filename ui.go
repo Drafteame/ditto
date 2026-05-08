@@ -93,7 +93,7 @@ type ServerInfo struct {
 
 // RegisterUI sets up the dashboard routes on the given mux.
 // If serveUI is true, the embedded static files are served; otherwise only the API is available.
-func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *ProxyManager, info ServerInfo, serveUI bool) {
+func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *ProxyManager, liveTarget func() string, info ServerInfo, serveUI bool) {
 	// Serve embedded static files at /__ditto__/ (only when UI is enabled)
 	if serveUI {
 		webContent, _ := fs.Sub(webFS, "frontend/dist")
@@ -148,13 +148,17 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 					}
 				}
 			}
+			currentLiveTarget := info.LiveTarget
+			if liveTarget != nil {
+				currentLiveTarget = liveTarget()
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"mocks": store.All(),
 				"info": ServerInfo{
 					Port:       actualPort,
 					Target:     proxyMgr.Target(),
-					LiveTarget: info.LiveTarget,
+					LiveTarget: currentLiveTarget,
 					HTTPS:      info.HTTPS,
 					MocksDir:   info.MocksDir,
 					LocalIPs:   info.LocalIPs,

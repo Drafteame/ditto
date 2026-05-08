@@ -106,12 +106,20 @@ export const RecordingsView = memo(function RecordingsView({ showToast }: Record
             const events = item.channels.reduce((sum, channel) => sum + channel.events, 0)
             const stopped = item.stopped_at ? new Date(item.stopped_at).getTime() : Date.now()
             const duration = Math.max(0, stopped - new Date(item.started_at).getTime())
+            const rowClass = selectedId === item.id ? 'recording-row active' : 'recording-row'
             return (
-              <button
+              <div
                 key={item.id}
-                type="button"
-                className={selectedId === item.id ? 'recording-row active' : 'recording-row'}
+                role="button"
+                tabIndex={0}
+                className={rowClass}
                 onClick={() => selectRecording(item.id)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    selectRecording(item.id)
+                  }
+                }}
               >
                 <span className="recording-name">{item.name}</span>
                 <span>{item.channels.length} channels</span>
@@ -121,17 +129,18 @@ export const RecordingsView = memo(function RecordingsView({ showToast }: Record
                   {item.stopped_at ? 'Stopped' : 'Active'}
                 </span>
                 {!item.stopped_at && (
-                  <span
-                    className="btn small"
+                  <button
+                    type="button"
+                    className="btn small recording-stop"
                     onClick={e => {
                       e.stopPropagation()
                       handleStop(item.id)
                     }}
                   >
                     Stop
-                  </span>
+                  </button>
                 )}
-              </button>
+              </div>
             )
           })}
         </section>

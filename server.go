@@ -200,7 +200,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Version:    version,
 	}
 
-	RegisterUI(mux, store, bus, proxyMgr, info, cfg.ServeUI)
+	RegisterUI(mux, store, bus, proxyMgr, liveTargets.Target, info, cfg.ServeUI)
 	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
 	RegisterChannelModeRoutes(mux, modeRegistry)
 	RegisterLiveTargetRoutes(mux, liveTargets)

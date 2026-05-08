@@ -18,6 +18,8 @@ without knowing the active mode.
 
 Live and mixed modes use the server-level Live Target configured in Settings or
 with `--live-target ws://...`. The target is not stored in adapter profiles.
+Live Target dials whatever you point it at, including private and loopback
+hosts. Treat the Ditto dashboard as trusted.
 
 Recording rate caps are configured per channel with `rate_cap_hz`; `0` disables
 the cap. Dropped recording frames are counted in the recording manifest.

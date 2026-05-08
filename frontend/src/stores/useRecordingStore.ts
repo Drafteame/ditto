@@ -16,7 +16,7 @@ interface RecordingStore {
   loadFrames: (id: string, channel: string, offset?: number) => Promise<void>
 }
 
-export const useRecordingStore = create<RecordingStore>((set) => ({
+export const useRecordingStore = create<RecordingStore>((set, get) => ({
   recordings: [],
   activeId: '',
   selected: null,
@@ -27,7 +27,11 @@ export const useRecordingStore = create<RecordingStore>((set) => ({
     set({ loading: true, error: '' })
     try {
       const data = await api.fetchRecordings()
-      set({ recordings: data.recordings, activeId: data.active_id, loading: false })
+      const selectedId = get().selected?.id
+      const selected = selectedId
+        ? data.recordings.find(recording => recording.id === selectedId) ?? get().selected
+        : get().selected
+      set({ recordings: data.recordings, activeId: data.active_id, selected, loading: false })
     } catch (err) {
       set({ loading: false, error: (err as Error).message })
     }
@@ -46,7 +50,10 @@ export const useRecordingStore = create<RecordingStore>((set) => ({
   stopRecording: async (id) => {
     await api.stopRecording(id)
     const data = await api.fetchRecordings()
-    set({ recordings: data.recordings, activeId: data.active_id })
+    const selected = get().selected?.id
+      ? data.recordings.find(recording => recording.id === get().selected?.id) ?? get().selected
+      : get().selected
+    set({ recordings: data.recordings, activeId: data.active_id, selected })
   },
   loadRecording: async (id) => {
     const manifest = await api.fetchRecording(id)

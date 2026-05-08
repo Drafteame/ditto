@@ -221,6 +221,10 @@ func (r *Recorder) Stop(id string) (RecordingManifest, error) {
 	case <-session.done:
 	case <-time.After(5 * time.Second):
 		session.setError("stop timed out while draining frames")
+		select {
+		case <-session.done:
+		case <-time.After(5 * time.Second):
+		}
 	}
 	now := time.Now().UTC()
 	session.mu.Lock()
@@ -358,6 +362,8 @@ func (r *Recorder) Frames(id, channel string, offset, limit int) ([]RecordedFram
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
+	// TODO(M6): add a sidecar .idx file with byte offsets so large recordings
+	// can seek directly instead of decoding from the beginning for each page.
 	path := filepath.Join(r.dir, id, channelFileName(channel))
 	file, err := os.Open(path)
 	if err != nil {
@@ -391,8 +397,13 @@ func (r *Recorder) recoverInterrupted() error {
 	if err != nil {
 		return err
 	}
+	cutoff := time.Now().Add(-30 * 24 * time.Hour)
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil && info.ModTime().Before(cutoff) {
 			continue
 		}
 		dir := filepath.Join(r.dir, entry.Name())

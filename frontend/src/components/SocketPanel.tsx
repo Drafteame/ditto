@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type {
   EventTemplate,
@@ -283,20 +283,12 @@ export function SocketPanel({
                       <option value="record">Record</option>
                       <option value="mixed" disabled={!liveTarget}>Mixed</option>
                     </select>
-                    <input
-                      className="input rate-cap"
-                      type="number"
-                      min="0"
+                    <ChannelRateCapInput
                       value={channelModes[item]?.rate_cap_hz ?? 0}
-                      title="Recording rate cap (Hz), 0 disables"
-                      onChange={async e => {
-                        const rate = Number(e.target.value) || 0
-                        try {
-                          await setChannelMode(item, current, rate)
-                        } catch (err) {
-                          showToast(`Rate cap update failed: ${(err as Error).message}`, 'warn')
-                        }
+                      onCommit={async rate => {
+                        await setChannelMode(item, current, rate)
                       }}
+                      showToast={showToast}
                     />
                   </div>
                 )
@@ -472,6 +464,51 @@ export function SocketPanel({
         />
       )}
     </section>
+  )
+}
+
+function ChannelRateCapInput({
+  value,
+  onCommit,
+  showToast,
+}: {
+  value: number
+  onCommit: (rate: number) => Promise<void>
+  showToast: (message: string, kind?: 'warn') => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+
+  useEffect(() => {
+    setDraft(String(value))
+  }, [value])
+
+  async function commit() {
+    const rate = Math.max(0, Number.parseInt(draft || '0', 10) || 0)
+    setDraft(String(rate))
+    if (rate === value) return
+    try {
+      await onCommit(rate)
+    } catch (err) {
+      setDraft(String(value))
+      showToast(`Rate cap update failed: ${(err as Error).message}`, 'warn')
+    }
+  }
+
+  return (
+    <input
+      className="input rate-cap"
+      type="number"
+      min="0"
+      value={draft}
+      title="Recording rate cap (Hz), 0 disables"
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') {
+          e.currentTarget.blur()
+        }
+      }}
+    />
   )
 }
 

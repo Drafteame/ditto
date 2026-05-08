@@ -83,15 +83,23 @@ func (r *ChannelModeRegistry) Set(cfg ChannelConfig) error {
 	if cfg.RateCapHz < 0 {
 		return fmt.Errorf("rate_cap_hz cannot be negative")
 	}
-	if cfg.Mode == "" {
-		cfg.Mode = ModeMock
-	}
-	if !isChannelMode(cfg.Mode) {
+	if cfg.Mode != "" && !isChannelMode(cfg.Mode) {
 		return fmt.Errorf("unsupported channel mode %q", cfg.Mode)
 	}
 	cfg.UpdatedAt = time.Now().UTC()
 
 	r.mu.Lock()
+	if existing, ok := r.channels[cfg.Channel]; ok {
+		if cfg.Mode == "" {
+			cfg.Mode = existing.Mode
+		}
+		if cfg.RecordingID == "" {
+			cfg.RecordingID = existing.RecordingID
+		}
+	}
+	if cfg.Mode == "" {
+		cfg.Mode = ModeMock
+	}
 	if cfg.Mode == ModeMock && cfg.RecordingID == "" && cfg.RateCapHz == 0 {
 		delete(r.channels, cfg.Channel)
 	} else {

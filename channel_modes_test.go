@@ -61,6 +61,23 @@ func TestChannelModeRegistryConcurrentSetGet(t *testing.T) {
 	wg.Wait()
 }
 
+func TestChannelModeRegistrySetPreservesRecordingID(t *testing.T) {
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	if err := reg.Set(ChannelConfig{Channel: "/recorded", Mode: ModeMixed, RecordingID: "rec-12345678", RateCapHz: 10}); err != nil {
+		t.Fatalf("initial Set() error = %v", err)
+	}
+	if err := reg.Set(ChannelConfig{Channel: "/recorded", Mode: ModeLive, RateCapHz: 25}); err != nil {
+		t.Fatalf("update Set() error = %v", err)
+	}
+	got := reg.Get("/recorded")
+	if got.RecordingID != "rec-12345678" || got.Mode != ModeLive || got.RateCapHz != 25 {
+		t.Fatalf("Get() = %#v, want recording id preserved with updated mode/rate", got)
+	}
+}
+
 func TestDispatchRenderedSuppressedByMode(t *testing.T) {
 	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
 	if err != nil {

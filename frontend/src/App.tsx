@@ -36,6 +36,8 @@ export default function App() {
   const isDesktop = useRef(isInsideWails()).current
   const isMobile = useRef(isMobileDevice()).current
   const socketRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const modeRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const recordingRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refreshData = useCallback(() => {
     loadMocks()
@@ -59,6 +61,26 @@ export default function App() {
     }, 250)
   }, [])
 
+  const scheduleModeRefresh = useCallback(() => {
+    if (modeRefreshTimer.current) {
+      clearTimeout(modeRefreshTimer.current)
+    }
+    modeRefreshTimer.current = setTimeout(() => {
+      useChannelModeStore.getState().loadModes()
+      modeRefreshTimer.current = null
+    }, 250)
+  }, [])
+
+  const scheduleRecordingRefresh = useCallback(() => {
+    if (recordingRefreshTimer.current) {
+      clearTimeout(recordingRefreshTimer.current)
+    }
+    recordingRefreshTimer.current = setTimeout(() => {
+      useRecordingStore.getState().loadRecordings()
+      recordingRefreshTimer.current = null
+    }, 250)
+  }, [])
+
   useSSE(
     useCallback((event) => {
       appendLogEvent(event)
@@ -67,12 +89,12 @@ export default function App() {
         scheduleSocketClientRefresh()
       }
       if (event.type === 'MODE') {
-        useChannelModeStore.getState().loadModes()
+        scheduleModeRefresh()
       }
       if (event.type === 'RECORD') {
-        useRecordingStore.getState().loadRecordings()
+        scheduleRecordingRefresh()
       }
-    }, [advanceSequenceCursor, appendLogEvent, scheduleSocketClientRefresh]),
+    }, [advanceSequenceCursor, appendLogEvent, scheduleModeRefresh, scheduleRecordingRefresh, scheduleSocketClientRefresh]),
     useCallback(() => {
       setConnected(true)
       refreshData()
@@ -101,6 +123,12 @@ export default function App() {
     return () => {
       if (socketRefreshTimer.current) {
         clearTimeout(socketRefreshTimer.current)
+      }
+      if (modeRefreshTimer.current) {
+        clearTimeout(modeRefreshTimer.current)
+      }
+      if (recordingRefreshTimer.current) {
+        clearTimeout(recordingRefreshTimer.current)
       }
     }
   }, [])
