@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,8 +99,94 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 	}
 }
 
+func TestLiveBridgeDetachAttachStressKeepsNewClient(t *testing.T) {
+	bridge := NewLiveBridge(NewLiveTargetManager("", nil), NewSocketHub(NewEventBus(), false))
+	for i := 0; i < 250; i++ {
+		channel := "/race"
+		oldClient := testSocketClient("old")
+		newClient := testSocketClient("new")
+		bridge.Attach(channel, oldClient)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			bridge.Detach(channel, oldClient.id)
+		}()
+		go func() {
+			defer wg.Done()
+			bridge.Attach(channel, newClient)
+		}()
+		wg.Wait()
+
+		bridge.mu.Lock()
+		ch := bridge.chans[channel]
+		bridge.mu.Unlock()
+		if ch == nil {
+			t.Fatalf("iteration %d: channel deleted after reattach", i)
+		}
+		ch.mu.RLock()
+		_, ok := ch.clients[newClient.id]
+		ch.mu.RUnlock()
+		if !ok {
+			t.Fatalf("iteration %d: new client missing after reattach", i)
+		}
+		bridge.DetachChannel(channel)
+	}
+}
+
+func TestLiveBridgeEmptyTargetLogsOnceUntilTargetChanges(t *testing.T) {
+	bus := NewEventBus()
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	manager := NewLiveTargetManager("", nil)
+	hub := NewSocketHub(bus, false)
+	bridge := NewLiveBridge(manager, hub)
+
+	bridge.Attach("/empty", testSocketClient("client"))
+	defer bridge.DetachChannel("/empty")
+
+	if event := waitForSocketEvent(t, events, time.Second); event.Method != "ERROR" {
+		t.Fatalf("first event = %#v, want ERROR", event)
+	}
+	select {
+	case event := <-events:
+		if event.Type == "SOCKET" && event.Method == "ERROR" && event.Path == "/empty" {
+			t.Fatalf("unexpected repeated empty-target error before target change: %#v", event)
+		}
+	case <-time.After(400 * time.Millisecond):
+	}
+}
+
 func httpToWS(raw string) string {
 	return "ws" + strings.TrimPrefix(raw, "http")
+}
+
+func testSocketClient(id string) *SocketClient {
+	return &SocketClient{
+		id:            id,
+		adapter:       "raw",
+		protocol:      RawAdapter{},
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{},
+	}
+}
+
+func waitForSocketEvent(t *testing.T, events <-chan LogEvent, timeout time.Duration) LogEvent {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case event := <-events:
+			if event.Type == "SOCKET" {
+				return event
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for socket event")
+		}
+	}
 }
 
 func bridgeChannelClientCount(bridge *LiveBridge, channel string) int {

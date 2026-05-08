@@ -634,7 +634,7 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 			h.enqueueControl(client, ServerMsg{Type: "subscribe_ack", ID: subID, Channel: channel})
 			h.publishSocketEvent("SUBSCRIBE", channel, http.StatusOK, client.id, 0)
 			if h.isLiveMode(channel) && h.live != nil {
-				h.live.Attach(ctx, channel, client)
+				h.live.Attach(channel, client)
 			}
 			h.forwardLiveFromClient(ctx, client, channel, typ, data)
 		case "unsubscribe":
@@ -712,9 +712,10 @@ func (h *SocketHub) attachLiveSubscribers(channel string) {
 	if h.live == nil {
 		return
 	}
+	// Clients returns a snapshot; a client can disconnect before lookup below.
 	for _, id := range h.registry.Clients(channel) {
 		if client := h.client(id); client != nil {
-			h.live.Attach(context.Background(), channel, client)
+			h.live.Attach(channel, client)
 		}
 	}
 }

@@ -470,9 +470,13 @@ func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*D
 	if alias == "" {
 		return nil, "appsync alias missing"
 	}
-	encoded, ok := inner["e"].(string)
+	rawValue, exists := inner["e"]
+	if !exists {
+		return nil, "appsync payload missing"
+	}
+	encoded, ok := rawValue.(string)
 	if !ok {
-		payload, err := json.Marshal(inner["e"])
+		payload, err := json.Marshal(rawValue)
 		if err != nil {
 			return nil, err.Error()
 		}
@@ -484,10 +488,10 @@ func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*D
 	}
 	typeName := reverseAlias(profile.TypeAliases, alias)
 	if typeName == "" {
-		return nil, "schema unloaded"
+		typeName = alias
 	}
 	if r.schemas == nil || r.schemas.Descriptor(typeName) == nil {
-		return nil, "schema unloaded"
+		return &DecodedFrame{Alias: alias}, ""
 	}
 	payload, err := r.schemas.Decode(typeName, raw)
 	if err != nil {

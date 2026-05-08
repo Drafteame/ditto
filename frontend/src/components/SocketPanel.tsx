@@ -500,8 +500,9 @@ function ClientRow({ client }: { client: SocketClient }) {
 function BurstBadge({ body }: { body?: string }) {
   let label = 'burst'
   try {
-    const parsed = JSON.parse(body || '{}') as { frames?: number; window_ms?: number }
-    if (parsed.frames) label = `${parsed.frames} frames in ${Math.round((parsed.window_ms || 1000) / 1000)}s`
+    const parsed = JSON.parse(body || '{}') as { total_frames?: number; frames?: number; window_ms?: number }
+    const frames = parsed.total_frames ?? parsed.frames
+    if (frames) label = `${frames} total frames in ${Math.round((parsed.window_ms || 1000) / 1000)}s`
   } catch {
     label = 'burst'
   }

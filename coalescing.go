@@ -75,7 +75,7 @@ func (p *CoalescingPublisher) flush(key, path string) {
 	if !suppressed {
 		return
 	}
-	body, _ := json.Marshal(map[string]any{"frames": frames, "window_ms": 1000})
+	body, _ := json.Marshal(map[string]any{"total_frames": frames, "window_ms": 1000})
 	p.publish(LogEvent{
 		Timestamp:    time.Now().Format("15:04:05"),
 		Type:         "SOCKET",

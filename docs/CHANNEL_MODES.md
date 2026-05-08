@@ -21,3 +21,7 @@ with `--live-target ws://...`. The target is not stored in adapter profiles.
 
 Recording rate caps are configured per channel with `rate_cap_hz`; `0` disables
 the cap. Dropped recording frames are counted in the recording manifest.
+
+High-volume socket log entries are coalesced per channel in one-second windows:
+the first events up to the threshold are still emitted, then Ditto publishes a
+`DISPATCH_BURST` summary whose `total_frames` is the full window count.

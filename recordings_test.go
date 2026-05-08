@@ -113,6 +113,37 @@ func TestRecorderQueueDropsAreSeparateFromRateCapDrops(t *testing.T) {
 	}
 }
 
+func TestAppSyncDecoderKeepsBuiltInAliasWhenSchemaMissing(t *testing.T) {
+	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	decoded, decodeErr := rec.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, []byte(`{
+		"type":"data",
+		"payload":{"data":{"t":"example.Event","e":"AAAA"}}
+	}`))
+	if decodeErr != "" {
+		t.Fatalf("decodeErr = %q, want empty fallback", decodeErr)
+	}
+	if decoded == nil || decoded.Alias != "example.Event" || decoded.TypeName != "" {
+		t.Fatalf("decoded = %#v, want alias-only fallback", decoded)
+	}
+}
+
+func TestAppSyncDecoderReportsMissingPayload(t *testing.T) {
+	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	decoded, decodeErr := rec.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, []byte(`{
+		"type":"data",
+		"payload":{"data":{"t":"example.Event"}}
+	}`))
+	if decoded != nil || decodeErr != "appsync payload missing" {
+		t.Fatalf("decoded=%#v decodeErr=%q, want missing payload error", decoded, decodeErr)
+	}
+}
+
 func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
 	bus := NewEventBus()
 	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
