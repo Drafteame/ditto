@@ -215,26 +215,23 @@ Implementation notes:
 
 ---
 
-### M5 — Live mode + Recording
+### M5 — Live mode + Recording ✅
 
 **Goal:** Ditto can pass WS traffic through to a real backend and record it.
 
-- WS reverse proxy (per-channel routing): when a channel is in `live` mode, Ditto opens an upstream connection and forwards both directions.
-- Per-channel modes (config persisted): `mock` (default), `live`, `record`, `mixed` (live + permits additional injection).
-- `Recorder`: when a channel is in `record` mode, persist each incoming event with relative timestamp to `recordings/{name}/{channel}.jsonl`.
-- Decode to JSON using schema registry if a descriptor exists; otherwise store raw bytes + base64.
-- Adapter-profile recordings use a profile-aware envelope decoder. Store the raw frame plus the decoded inner payload; replay re-wraps through the current adapter profile so edited events still flow through `WrapData`. Before implementation, write an ADR for the recording decoder strategy (heuristic per base adapter vs explicit inverse templates vs raw-frame-first hybrid).
-- Live upstream URL is server-level config (`--target` / saved target), not part of adapter profiles. If a backend later needs custom upgrade headers, add profile-level `upgrade_headers` separately.
-- **Throttling for high-volume traffic.** Until M4 the user was the rate limiter (manual dispatch, sequences). Live mode and recording introduce uncontrolled upstream rates, so this milestone owns the throttling story:
-  - **UI log coalescing.** SOCKET frames in the live event log coalesce per channel when they exceed a threshold (default 20/sec) into a single `LogEvent` summarising the burst (e.g. `"42 frames in 1s"`). Individual frames remain inspectable on demand from the recording or a per-channel detail view.
-  - **Visible downstream backpressure.** When a connected client's `send` queue overflows in `enqueue` (`socket.go`), drops surface in the Sockets tab as a per-client counter instead of being silently discarded.
-  - **Recording rate cap per channel.** Configurable max events/sec (default off, opt-in per channel). Excess events are dropped with a counter persisted alongside the recording so a pathological channel cannot silently fill disk during a long QA session.
-- Frontend:
-  - In the channel view: 4-mode selector.
-  - "Recordings" view: list of recordings, metadata (duration, # events, channels involved), stop button if active.
-  - Throttling indicators: coalesced-frames badge in the log, dropped-frames counter on each client row.
+Delivered in #19:
 
-**Done when:** point Ditto at a real backend, configure target channels in `record` mode, exercise the app, stop recording. A navigable recording exists on disk. Under sustained >100 frames/sec on a channel, the dashboard remains responsive (coalesced log) and any dropped downstream frames are visible to the user, not silent.
+- `ChannelModeRegistry` persists per-channel config in `channel_modes/state.json` and keeps the ADR 0001 invariant: every mode decision sits behind `dispatchRendered`, so manual dispatch, templates, and sequences share the same exit point.
+- Modes are `mock` (default), `live`, `record`, and `mixed`. `live` and `record` suppress local mock injection; `mixed` allows local injection while also forwarding/recording live traffic.
+- Live mode uses a server-level `LiveTarget` (`--live-target` and `/__ditto__/api/socket/live-target`), not adapter-profile config. A shared per-channel `LiveBridge` opens one upstream connection per active channel, refcounts local subscribers, forwards raw frames both directions, retries with backoff, and hot-switches when modes change.
+- Recording writes bundle-compatible artifacts under `recordings/<recording-id>/`: `manifest.json` plus one JSONL file per channel. Each `RecordedFrame` keeps `raw_b64` for the complete original frame and optional decoded metadata.
+- Recording decode strategy is documented in `docs/adr/0004-recording-decoder-strategy.md`: M5 uses base-adapter heuristics now, keeps raw-frame-first as the stable fallback, and leaves inverse templates for M6/M9.
+- Recorder backpressure is explicit: per-channel rate caps count `dropped`, a bounded queue counts `queue_dropped`, and `Stop` drains safely with a real timeout/force-stop path.
+- High-volume socket logs coalesce into `DISPATCH_BURST` summaries while recordings still keep individual frames on disk. Client send-queue drops surface as per-client counters in the Sockets panel.
+- Frontend adds channel mode controls, Live Target settings, a Recordings tab with start/stop/list/detail skeleton, burst badges in the log, and dropped-to-client badges.
+- Docs added: `docs/CHANNEL_MODES.md`, `docs/RECORDINGS.md`, and `docs/adr/0004-recording-decoder-strategy.md`.
+
+**Done when:** point Ditto at a real backend, configure target channels in `record` or `mixed` mode, exercise the app, stop recording, and inspect the manifest/JSONL capture. Under sustained high-volume traffic, the dashboard remains responsive through coalesced logs and any downstream or recording drops are visible.
 
 ---
 

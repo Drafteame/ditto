@@ -192,6 +192,9 @@ Capabilities, in incremental order (✅ = delivered, see milestone tag):
 - ✅ **Event sequences** (M4): timed event timelines with transport controls (play/pause/scrub/speed).
 - ✅ **Per-channel modes + live target** (M5): each channel can be `mock`, `live` (passthrough to real backend), `record`, or `mixed`, using a server-level WS upstream.
 - ✅ **Recordings capture** (M5): capture raw-frame-first WS sessions to disk with manifests, JSONL frames, decode metadata, rate caps, and visible drop counters.
+- ✅ **Live bridge + mixed mode** (M5): share one upstream WS connection per active channel, forward raw frames both directions, and keep local injections available in `mixed` mode.
+- ✅ **Recording operations UI** (M5): configure channel modes/rate caps, set the Live Target, start/stop recordings, browse recording manifests, and prepare paged frame loading for M6.
+- ✅ **WS throttling + backpressure visibility** (M5): coalesced burst logs, recorder queue-drop counters, recording rate-cap drops, and per-client dropped-frame badges.
 - ⏳ **Recording replay/editing** (M6): open captured sessions, edit frames, convert to sequences, splice, trim, and replay.
 - ⏳ **Scenarios** (M7, extends v1.6): combine HTTP mocks + sequences + channel modes + HTTP→Socket triggers into one atomic activation. Lets you simulate complete flows (e.g. a full sports match, a casino session) by composition, with no domain-specific code.
 
