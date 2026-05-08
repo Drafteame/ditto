@@ -27,7 +27,7 @@ export function MainTabs({
       <button type="button" className={activeView === 'sockets' ? 'active' : ''} onClick={() => onChange('sockets')}>
         Sockets
         <span className="c" title={`${connectedClientCount} connected, ${channelCount} saved`}>
-          {connectedClientCount + channelCount}
+          {channelCount || connectedClientCount}
         </span>
       </button>
       <button type="button" className={activeView === 'templates' ? 'active' : ''} onClick={() => onChange('templates')}>

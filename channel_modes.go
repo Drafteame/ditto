@@ -127,11 +127,10 @@ func (r *ChannelModeRegistry) Delete(channel string) error {
 		return fmt.Errorf("channel cannot contain newlines")
 	}
 	now := time.Now().UTC()
-	listenerCfg := ChannelConfig{Channel: channel, Mode: ModeMock, UpdatedAt: now}
-	eventCfg := ChannelConfig{Channel: channel, UpdatedAt: now}
 
 	r.mu.Lock()
-	if _, ok := r.channels[channel]; !ok {
+	previous, ok := r.channels[channel]
+	if !ok {
 		r.mu.Unlock()
 		return ErrChannelModeNotFound
 	}
@@ -139,6 +138,11 @@ func (r *ChannelModeRegistry) Delete(channel string) error {
 	snapshot := r.snapshotLocked()
 	listeners := append([]func(ChannelConfig){}, r.listeners...)
 	r.mu.Unlock()
+
+	listenerCfg := previous
+	listenerCfg.Mode = ModeMock
+	listenerCfg.UpdatedAt = now
+	eventCfg := listenerCfg
 
 	if err := r.writeState(snapshot); err != nil {
 		return err
