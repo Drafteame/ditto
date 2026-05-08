@@ -1,6 +1,6 @@
 export interface LogEvent {
   timestamp: string
-  type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET'
+  type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET' | 'MODE' | 'RECORD'
   method: string
   path: string
   status: number
@@ -54,6 +54,7 @@ export interface Mock {
 export interface ServerInfo {
   port: number
   target: string
+  live_target?: string
   https: boolean
   mocks_dir: string
   local_ips: string[]
@@ -84,6 +85,7 @@ export interface SocketClient {
   remote_addr: string
   connected_at: string
   subscriptions: string[]
+  dropped_to_client?: number
 }
 
 export interface SocketClientsResponse {
@@ -259,4 +261,64 @@ export interface SchemaPacksResponse {
 
 export interface SchemaTypesResponse {
   types: SchemaTypeDescriptor[]
+}
+
+export type ChannelMode = 'mock' | 'live' | 'record' | 'mixed'
+
+export interface ChannelConfig {
+  channel: string
+  mode: ChannelMode
+  recording_id?: string
+  rate_cap_hz?: number
+  updated_at: string
+}
+
+export interface ChannelModesResponse {
+  channels: ChannelConfig[]
+}
+
+export interface RecordingProfileChange {
+  ts_ms: number
+  profile: string
+}
+
+export interface RecordingChannelManifest {
+  channel: string
+  events: number
+  dropped: number
+  rate_cap_hz: number
+  adapter_profile?: string
+  profile_changes?: RecordingProfileChange[]
+}
+
+export interface RecordingManifest {
+  version: number
+  id: string
+  name: string
+  description: string
+  started_at: string
+  stopped_at?: string | null
+  channels: RecordingChannelManifest[]
+  adapter_profile?: string
+  schema_pack_ids: string[]
+  error?: string
+}
+
+export interface RecordedFrame {
+  ts_ms: number
+  direction: 'upstream' | 'local'
+  channel: string
+  frame_kind: 'text' | 'binary'
+  raw_b64: string
+  decoded?: {
+    type_name?: string
+    payload_json?: unknown
+    alias?: string
+  }
+  decode_error: string
+}
+
+export interface RecordingsResponse {
+  recordings: RecordingManifest[]
+  active_id: string
 }

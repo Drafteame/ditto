@@ -120,6 +120,10 @@ type SocketHub struct {
 	registry *SubscriptionRegistry
 	bus      *EventBus
 	jsonLogs bool
+	modes    *ChannelModeRegistry
+	live     *LiveBridge
+	recorder *Recorder
+	events   *CoalescingPublisher
 
 	mu      sync.RWMutex
 	clients map[string]*SocketClient
@@ -127,28 +131,30 @@ type SocketHub struct {
 }
 
 type SocketClient struct {
-	id         string
-	adapter    string
-	protocol   ProtocolAdapter
-	remoteAddr string
-	connected  time.Time
-	conn       *websocket.Conn
-	control    chan EncodedServerMessage
-	send       chan EncodedServerMessage
-	done       chan struct{}
-	closed     atomic.Bool
-	closeOnce  sync.Once
+	id              string
+	adapter         string
+	protocol        ProtocolAdapter
+	remoteAddr      string
+	connected       time.Time
+	conn            *websocket.Conn
+	control         chan EncodedServerMessage
+	send            chan EncodedServerMessage
+	done            chan struct{}
+	closed          atomic.Bool
+	closeOnce       sync.Once
+	droppedToClient atomic.Uint64
 
 	mu            sync.RWMutex
 	subscriptions map[string]string
 }
 
 type SocketClientSnapshot struct {
-	ID            string   `json:"id"`
-	Adapter       string   `json:"adapter"`
-	RemoteAddr    string   `json:"remote_addr"`
-	ConnectedAt   string   `json:"connected_at"`
-	Subscriptions []string `json:"subscriptions"`
+	ID              string   `json:"id"`
+	Adapter         string   `json:"adapter"`
+	RemoteAddr      string   `json:"remote_addr"`
+	ConnectedAt     string   `json:"connected_at"`
+	Subscriptions   []string `json:"subscriptions"`
+	DroppedToClient uint64   `json:"dropped_to_client"`
 }
 
 type socketDispatchRequest struct {
@@ -176,13 +182,40 @@ type RenderedDispatch struct {
 	InvalidCasts   []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
 }
 
-func NewSocketHub(bus *EventBus, jsonLogs bool) *SocketHub {
-	return &SocketHub{
+func NewSocketHub(bus *EventBus, jsonLogs bool, modes ...*ChannelModeRegistry) *SocketHub {
+	var modeRegistry *ChannelModeRegistry
+	if len(modes) > 0 {
+		modeRegistry = modes[0]
+	}
+	hub := &SocketHub{
 		registry: NewSubscriptionRegistry(),
 		bus:      bus,
 		jsonLogs: jsonLogs,
+		modes:    modeRegistry,
+		events:   NewCoalescingPublisher(bus, jsonLogs),
 		clients:  make(map[string]*SocketClient),
 	}
+	if modeRegistry != nil {
+		modeRegistry.OnChange(func(cfg ChannelConfig) {
+			if hub.live == nil {
+				return
+			}
+			if cfg.Mode == ModeLive || cfg.Mode == ModeMixed {
+				hub.attachLiveSubscribers(cfg.Channel)
+				return
+			}
+			hub.live.DetachChannel(cfg.Channel)
+		})
+	}
+	return hub
+}
+
+func (h *SocketHub) SetLiveBridge(live *LiveBridge) {
+	h.live = live
+}
+
+func (h *SocketHub) SetRecorder(recorder *Recorder) {
+	h.recorder = recorder
 }
 
 func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*SchemaRegistry) {
@@ -293,6 +326,11 @@ func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered Rendered
 	}
 	if strings.ContainsAny(channel, "\r\n") {
 		return SocketDispatchResult{}, fmt.Errorf("channel cannot contain newlines")
+	}
+	if hub.modes != nil && !hub.modes.AllowsLocalDispatch(channel) {
+		mode := hub.modes.Get(channel).Mode
+		msg := fmt.Sprintf("channel mode %s suppressed local dispatch", mode)
+		return SocketDispatchResult{Errors: []string{msg}}, nil
 	}
 	adapter = normalizeAdapter(adapter)
 	if _, err := NewProtocolAdapter(adapter); err != nil {
@@ -510,11 +548,12 @@ func (h *SocketHub) Snapshot() []SocketClientSnapshot {
 	snapshots := make([]SocketClientSnapshot, 0, len(clients))
 	for _, client := range clients {
 		snapshots = append(snapshots, SocketClientSnapshot{
-			ID:            client.id,
-			Adapter:       client.adapter,
-			RemoteAddr:    client.remoteAddr,
-			ConnectedAt:   client.connected.Format(time.RFC3339),
-			Subscriptions: client.subscriptionList(),
+			ID:              client.id,
+			Adapter:         client.adapter,
+			RemoteAddr:      client.remoteAddr,
+			ConnectedAt:     client.connected.Format(time.RFC3339),
+			Subscriptions:   client.subscriptionList(),
+			DroppedToClient: client.droppedToClient.Load(),
 		})
 	}
 	return snapshots
@@ -527,6 +566,11 @@ func (h *SocketHub) addClient(client *SocketClient) {
 }
 
 func (h *SocketHub) removeClient(client *SocketClient) {
+	for _, channel := range client.subscriptionList() {
+		if h.live != nil {
+			h.live.Detach(channel, client.id)
+		}
+	}
 	h.registry.RemoveClient(client.id)
 	h.mu.Lock()
 	delete(h.clients, client.id)
@@ -551,6 +595,9 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 
 		msg, err := client.protocol.ParseClientMessage(data)
 		if err != nil {
+			if h.forwardToLiveSubscriptions(ctx, client, typ, data) {
+				continue
+			}
 			h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, err.Error(), 0)
 			continue
 		}
@@ -575,6 +622,10 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 			h.registry.Subscribe(channel, client.id)
 			h.enqueueControl(client, ServerMsg{Type: "subscribe_ack", ID: subID, Channel: channel})
 			h.publishSocketEvent("SUBSCRIBE", channel, http.StatusOK, client.id, 0)
+			h.forwardLiveFromClient(ctx, client, channel, typ, data)
+			if h.isLiveMode(channel) && h.live != nil {
+				h.live.Attach(ctx, channel, client)
+			}
 		case "unsubscribe":
 			channel := strings.TrimSpace(msg.Channel)
 			if channel == "" {
@@ -585,9 +636,74 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 			}
 			client.removeSubscription(channel)
 			h.registry.Unsubscribe(channel, client.id)
+			if h.live != nil {
+				h.live.Detach(channel, client.id)
+			}
 			h.publishSocketEvent("UNSUBSCRIBE", channel, http.StatusOK, client.id, 0)
 		case "ping":
 			h.enqueueControl(client, ServerMsg{Type: "pong"})
+		default:
+			channel := strings.TrimSpace(msg.Channel)
+			if channel == "" {
+				channel = strings.TrimSpace(msg.SubscriptionID)
+			}
+			if channel != "" {
+				h.forwardLiveFromClient(ctx, client, channel, typ, data)
+			}
+		}
+	}
+}
+
+func (h *SocketHub) forwardToLiveSubscriptions(ctx context.Context, client *SocketClient, typ websocket.MessageType, data []byte) bool {
+	for _, channel := range client.subscriptionList() {
+		if h.isLiveMode(channel) {
+			h.forwardLiveFromClient(ctx, client, channel, typ, data)
+			return true
+		}
+	}
+	return false
+}
+
+func (h *SocketHub) isLiveMode(channel string) bool {
+	if h.modes == nil {
+		return false
+	}
+	mode := h.modes.Get(channel).Mode
+	return mode == ModeLive || mode == ModeMixed
+}
+
+func (h *SocketHub) isRecordingMode(channel string) bool {
+	if h.modes == nil {
+		return false
+	}
+	mode := h.modes.Get(channel).Mode
+	return mode == ModeRecord || mode == ModeMixed
+}
+
+func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketClient, channel string, typ websocket.MessageType, data []byte) {
+	if !h.isLiveMode(channel) {
+		return
+	}
+	if h.recorder != nil && h.modes.Get(channel).Mode == ModeMixed {
+		h.recorder.Record(RecordFrameInput{
+			Channel: channel, Direction: "local", Kind: frameKind(typ), Data: data,
+			Adapter: client.adapter, RateCapHz: h.modes.Get(channel).RateCapHz,
+		})
+	}
+	if h.live == nil {
+		h.publishSocketEventWithSource("ERROR", channel, http.StatusServiceUnavailable, "live target is not configured", 0, "live-disconnected")
+		return
+	}
+	h.live.ForwardFromClient(ctx, channel, typ, data)
+}
+
+func (h *SocketHub) attachLiveSubscribers(channel string) {
+	if h.live == nil {
+		return
+	}
+	for _, id := range h.registry.Clients(channel) {
+		if client := h.client(id); client != nil {
+			h.live.Attach(context.Background(), channel, client)
 		}
 	}
 }
@@ -686,8 +802,7 @@ func (h *SocketHub) publishSocketEventWithSource(method, path string, status int
 		ResponseBody: body,
 		Source:       strings.TrimSpace(source),
 	}
-	logRequest(h.jsonLogs, event)
-	h.bus.Publish(event)
+	h.events.Publish(event)
 }
 
 func dispatchSummary(result SocketDispatchResult) string {
@@ -772,6 +887,9 @@ func (c *SocketClient) enqueueOn(ch chan EncodedServerMessage, msg EncodedServer
 		case ch <- msg:
 			return true
 		default:
+			if ch == c.send {
+				c.droppedToClient.Add(1)
+			}
 			return false
 		}
 	}

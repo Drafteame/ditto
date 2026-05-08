@@ -519,6 +519,53 @@ func TestSocketClientEnqueueRejectsAfterClose(t *testing.T) {
 	}
 }
 
+func TestSocketClientDropCounterInSnapshot(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false)
+	client := &SocketClient{
+		id:            "raw-1",
+		adapter:       "raw",
+		protocol:      RawAdapter{},
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		connected:     time.Now(),
+		subscriptions: map[string]string{},
+	}
+	hub.addClient(client)
+	client.send <- textMessage([]byte(`{"queued":true}`))
+	if client.enqueue(textMessage([]byte(`{"dropped":true}`)), 0) {
+		t.Fatalf("enqueue() succeeded with full send queue")
+	}
+	snap := hub.Snapshot()
+	if len(snap) != 1 || snap[0].DroppedToClient != 1 {
+		t.Fatalf("snapshot = %#v, want one dropped_to_client", snap)
+	}
+}
+
+func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
+	bus := NewEventBus()
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	pub := NewCoalescingPublisher(bus, false)
+	for i := 0; i < SocketLogCoalesceThresholdPerSecond+5; i++ {
+		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK})
+	}
+	deadline := time.After(1500 * time.Millisecond)
+	summaries := 0
+	for {
+		select {
+		case event := <-events:
+			if event.Method == "DISPATCH_BURST" {
+				summaries++
+			}
+		case <-deadline:
+			if summaries != 1 {
+				t.Fatalf("burst summaries = %d, want 1", summaries)
+			}
+			return
+		}
+	}
+}
+
 func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
 	hub := NewSocketHub(NewEventBus(), false)
 	client := &SocketClient{

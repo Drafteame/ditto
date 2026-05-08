@@ -10,7 +10,7 @@ import { MockEditorModal } from './MockEditorModal'
 import { QRModal } from './QRModal'
 import { ToastContainer } from './ToastContainer'
 
-type MainView = 'requests' | 'sockets' | 'templates' | 'sequences'
+type MainView = 'requests' | 'sockets' | 'templates' | 'sequences' | 'recordings'
 
 interface AppShellProps {
   children: ReactNode
@@ -26,6 +26,7 @@ interface AppShellProps {
   qrOpen: boolean
   selectedEntry: LogEntry | null
   sequenceCount: number
+  recordingCount: number
   serverInfo: ServerInfo | null
   sidebarCollapsed: boolean
   sidebarOpen: boolean
@@ -63,6 +64,7 @@ export function AppShell({
   qrOpen,
   selectedEntry,
   sequenceCount,
+  recordingCount,
   serverInfo,
   sidebarCollapsed,
   sidebarOpen,
@@ -120,6 +122,7 @@ export function AppShell({
             connectedClientCount={connectedClientCount}
             eventTemplateCount={eventTemplateCount}
             sequenceCount={sequenceCount}
+            recordingCount={recordingCount}
             onChange={onChangeView}
           />
           {children}

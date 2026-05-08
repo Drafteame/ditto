@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import type { Mock, ServerInfo } from '../types'
 import * as api from '../api'
+import { useChannelModeStore } from '../stores/useChannelModeStore'
 import { describeSequence } from '../sequence'
 import { statusClass } from '../status'
 import { ChevronLeft, ChevronRight, Copy, Edit, Sequence, Trash, X } from './icons'
@@ -201,7 +202,11 @@ function TargetPanel({
   showToast: (message: string, kind?: 'warn') => void
 }) {
   const [targetValue, setTargetValue] = useState<string | null>(null)
+  const [liveTargetValue, setLiveTargetValue] = useState<string | null>(null)
+  const liveTarget = useChannelModeStore(state => state.liveTarget)
+  const setLiveTarget = useChannelModeStore(state => state.setLiveTarget)
   const displayTarget = targetValue ?? serverInfo?.target ?? ''
+  const displayLiveTarget = liveTargetValue ?? liveTarget ?? serverInfo?.live_target ?? ''
 
   const handleUpdate = useCallback(async () => {
     const url = displayTarget.trim()
@@ -213,6 +218,21 @@ function TargetPanel({
       showToast(`Failed to set target: ${(err as Error).message}`, 'warn')
     }
   }, [displayTarget, onChanged, showToast])
+
+  const handleLiveUpdate = useCallback(async () => {
+    const url = displayLiveTarget.trim()
+    if (url && !/^wss?:\/\//i.test(url)) {
+      showToast('Live Target must start with ws:// or wss://', 'warn')
+      return
+    }
+    try {
+      await setLiveTarget(url)
+      setLiveTargetValue(null)
+      showToast('Live Target updated')
+    } catch (err) {
+      showToast(`Failed to set Live Target: ${(err as Error).message}`, 'warn')
+    }
+  }, [displayLiveTarget, setLiveTarget, showToast])
 
   return (
     <div className="sb-section">
@@ -227,6 +247,20 @@ function TargetPanel({
           onKeyDown={e => e.key === 'Enter' && handleUpdate()}
         />
         <button type="button" onClick={handleUpdate} className="btn">
+          Set
+        </button>
+      </div>
+      <div className="sb-label mt-3">Live Target (WS upstream)</div>
+      <div className="field">
+        <input
+          type="text"
+          value={displayLiveTarget}
+          onChange={e => setLiveTargetValue(e.target.value)}
+          placeholder="wss://ws.example.com"
+          className="input"
+          onKeyDown={e => e.key === 'Enter' && handleLiveUpdate()}
+        />
+        <button type="button" onClick={handleLiveUpdate} className="btn">
           Set
         </button>
       </div>

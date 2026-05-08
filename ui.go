@@ -23,7 +23,7 @@ var webFS embed.FS
 // LogEvent represents a single request passing through Ditto.
 type LogEvent struct {
 	Timestamp      string              `json:"timestamp"`
-	Type           string              `json:"type"` // MOCK, PROXY, MISS, SOCKET
+	Type           string              `json:"type"` // MOCK, PROXY, MISS, SOCKET, MODE, RECORD
 	Method         string              `json:"method"`
 	Path           string              `json:"path"`
 	Status         int                 `json:"status"`
@@ -82,12 +82,13 @@ func (b *EventBus) Publish(event LogEvent) {
 
 // ServerInfo holds metadata shown in the UI footer and connect panel.
 type ServerInfo struct {
-	Port     int      `json:"port"`
-	Target   string   `json:"target"`
-	HTTPS    bool     `json:"https"`
-	MocksDir string   `json:"mocks_dir"`
-	LocalIPs []string `json:"local_ips"`
-	Version  string   `json:"version"`
+	Port       int      `json:"port"`
+	Target     string   `json:"target"`
+	LiveTarget string   `json:"live_target,omitempty"`
+	HTTPS      bool     `json:"https"`
+	MocksDir   string   `json:"mocks_dir"`
+	LocalIPs   []string `json:"local_ips"`
+	Version    string   `json:"version"`
 }
 
 // RegisterUI sets up the dashboard routes on the given mux.
@@ -151,12 +152,13 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 			json.NewEncoder(w).Encode(map[string]any{
 				"mocks": store.All(),
 				"info": ServerInfo{
-					Port:     actualPort,
-					Target:   proxyMgr.Target(),
-					HTTPS:    info.HTTPS,
-					MocksDir: info.MocksDir,
-					LocalIPs: info.LocalIPs,
-					Version:  info.Version,
+					Port:       actualPort,
+					Target:     proxyMgr.Target(),
+					LiveTarget: info.LiveTarget,
+					HTTPS:      info.HTTPS,
+					MocksDir:   info.MocksDir,
+					LocalIPs:   info.LocalIPs,
+					Version:    info.Version,
 				},
 			})
 

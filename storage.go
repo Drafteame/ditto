@@ -16,6 +16,7 @@ type DataLayout struct {
 	SequencesDir       string
 	AdapterProfilesDir string
 	RecordingsDir      string
+	ChannelModesDir    string
 	ScenariosDir       string
 }
 
@@ -31,6 +32,7 @@ var dataSubdirs = []dataSubdir{
 	{"event_templates", func(layout *DataLayout, path string) { layout.EventTemplatesDir = path }},
 	{"sequences", func(layout *DataLayout, path string) { layout.SequencesDir = path }},
 	{"recordings", func(layout *DataLayout, path string) { layout.RecordingsDir = path }},
+	{"channel_modes", func(layout *DataLayout, path string) { layout.ChannelModesDir = path }},
 	{"scenarios", func(layout *DataLayout, path string) { layout.ScenariosDir = path }},
 }
 

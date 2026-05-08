@@ -1,5 +1,7 @@
 import type {
   AdapterProfilesResponse,
+  ChannelConfig,
+  ChannelModesResponse,
   Mock,
   MocksResponse,
   EventTemplate,
@@ -15,6 +17,9 @@ import type {
   SchemaPacksResponse,
   SchemaPack,
   SchemaTypesResponse,
+  RecordedFrame,
+  RecordingManifest,
+  RecordingsResponse,
   SocketClientsResponse,
   SocketDispatchRequest,
   SocketDispatchResult,
@@ -88,6 +93,27 @@ export async function updateTarget(target: string): Promise<void> {
   }
 }
 
+export async function fetchLiveTarget(): Promise<{ live_target: string }> {
+  const res = await fetch(`${API_BASE}/socket/live-target`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function updateLiveTarget(liveTarget: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/socket/live-target`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ live_target: liveTarget }),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+}
+
 export async function changePort(port: number): Promise<{
   port?: number
   error?: string
@@ -157,6 +183,78 @@ export async function dispatchSocketEvent(req: SocketDispatchRequest): Promise<S
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchChannelModes(): Promise<ChannelModesResponse> {
+  const res = await fetch(`${API_BASE}/channel-modes`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function setChannelMode(config: Partial<ChannelConfig> & { channel: string }): Promise<ChannelConfig> {
+  const res = await fetch(`${API_BASE}/channel-modes`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchRecordings(): Promise<RecordingsResponse> {
+  const res = await fetch(`${API_BASE}/recordings`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function startRecording(req: { name: string; description?: string }): Promise<RecordingManifest> {
+  const res = await fetch(`${API_BASE}/recordings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function stopRecording(id: string): Promise<RecordingManifest> {
+  const res = await fetch(`${API_BASE}/recordings/${encodeURIComponent(id)}/stop`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchRecording(id: string): Promise<RecordingManifest> {
+  const res = await fetch(`${API_BASE}/recordings/${encodeURIComponent(id)}`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function fetchRecordingFrames(id: string, channel: string, offset = 0, limit = 100): Promise<{ frames: RecordedFrame[]; offset: number; limit: number }> {
+  const params = new URLSearchParams({ channel, offset: String(offset), limit: String(limit) })
+  const res = await fetch(`${API_BASE}/recordings/${encodeURIComponent(id)}/frames?${params}`)
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `HTTP ${res.status}`)

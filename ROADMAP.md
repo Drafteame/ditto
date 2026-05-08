@@ -190,8 +190,9 @@ Capabilities, in incremental order (✅ = delivered, see milestone tag):
 - ✅ **Schema packs** (M2): load `.proto` files at runtime (dynamic descriptors, no codegen). UI shows type dropdown + JSON editor with schema-aware autocomplete; Ditto serializes to Protobuf at dispatch.
 - ✅ **Event templates** (M3): save reusable parameterized events (`{{ticketId}}`, `{{userId}}`, etc.).
 - ✅ **Event sequences** (M4): timed event timelines with transport controls (play/pause/scrub/speed).
-- ⏳ **Per-channel modes** (M5): each channel can be `mock`, `live` (passthrough to real backend), `record`, or `mixed`.
-- ⏳ **Recordings** (M5/M6): capture real WS sessions to disk, then edit, splice, and replay.
+- ✅ **Per-channel modes + live target** (M5): each channel can be `mock`, `live` (passthrough to real backend), `record`, or `mixed`, using a server-level WS upstream.
+- ✅ **Recordings capture** (M5): capture raw-frame-first WS sessions to disk with manifests, JSONL frames, decode metadata, rate caps, and visible drop counters.
+- ⏳ **Recording replay/editing** (M6): open captured sessions, edit frames, convert to sequences, splice, trim, and replay.
 - ⏳ **Scenarios** (M7, extends v1.6): combine HTTP mocks + sequences + channel modes + HTTP→Socket triggers into one atomic activation. Lets you simulate complete flows (e.g. a full sports match, a casino session) by composition, with no domain-specific code.
 
 See [WEBSOCKET_MOCKING_PLAN.md](WEBSOCKET_MOCKING_PLAN.md) for the full milestone-by-milestone plan.
