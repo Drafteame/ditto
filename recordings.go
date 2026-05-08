@@ -21,6 +21,18 @@ import (
 	"nhooyr.io/websocket"
 )
 
+const (
+	recordingFrameQueueCapacity = 4096
+	recordingManifestFlushEvery = 2 * time.Second
+	recordingQueueSendTimeout   = 50 * time.Millisecond
+)
+
+type RecorderOptions struct {
+	FrameQueueCapacity int
+	ManifestFlushEvery time.Duration
+	QueueSendTimeout   time.Duration
+}
+
 type RecordingManifest struct {
 	Version        int                        `json:"version"`
 	ID             string                     `json:"id"`
@@ -38,6 +50,7 @@ type RecordingChannelManifest struct {
 	Channel        string                   `json:"channel"`
 	Events         int                      `json:"events"`
 	Dropped        int                      `json:"dropped"`
+	QueueDropped   int                      `json:"queue_dropped,omitempty"`
 	RateCapHz      int                      `json:"rate_cap_hz"`
 	AdapterProfile string                   `json:"adapter_profile,omitempty"`
 	ProfileChanges []RecordingProfileChange `json:"profile_changes,omitempty"`
@@ -81,6 +94,7 @@ type Recorder struct {
 	bus      *EventBus
 	jsonLogs bool
 	active   *recordingSession
+	options  RecorderOptions
 }
 
 type recordingSession struct {
@@ -93,6 +107,8 @@ type recordingSession struct {
 	writers  map[string]*recordingWriter
 	limits   map[string]*rateLimiter
 	recorder *Recorder
+	dirty    bool
+	options  RecorderOptions
 }
 
 type recordingWriter struct {
@@ -106,17 +122,35 @@ type rateLimiter struct {
 }
 
 func NewRecorder(dir string, schemas *SchemaRegistry, modes *ChannelModeRegistry, bus *EventBus, jsonLogs bool) (*Recorder, error) {
+	return NewRecorderWithOptions(dir, schemas, modes, bus, jsonLogs, RecorderOptions{})
+}
+
+func NewRecorderWithOptions(dir string, schemas *SchemaRegistry, modes *ChannelModeRegistry, bus *EventBus, jsonLogs bool, options RecorderOptions) (*Recorder, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, fmt.Errorf("recordings dir is required")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	r := &Recorder{dir: dir, schemas: schemas, modes: modes, bus: bus, jsonLogs: jsonLogs}
+	options = normalizeRecorderOptions(options)
+	r := &Recorder{dir: dir, schemas: schemas, modes: modes, bus: bus, jsonLogs: jsonLogs, options: options}
 	if err := r.recoverInterrupted(); err != nil {
 		return nil, err
 	}
 	return r, nil
+}
+
+func normalizeRecorderOptions(options RecorderOptions) RecorderOptions {
+	if options.FrameQueueCapacity <= 0 {
+		options.FrameQueueCapacity = recordingFrameQueueCapacity
+	}
+	if options.ManifestFlushEvery <= 0 {
+		options.ManifestFlushEvery = recordingManifestFlushEvery
+	}
+	if options.QueueSendTimeout <= 0 {
+		options.QueueSendTimeout = recordingQueueSendTimeout
+	}
+	return options
 }
 
 func (r *Recorder) Start(name, description string) (RecordingManifest, error) {
@@ -148,11 +182,12 @@ func (r *Recorder) Start(name, description string) (RecordingManifest, error) {
 		manifest: manifest,
 		dir:      dir,
 		start:    now,
-		frames:   make(chan RecordedFrame, 64),
+		frames:   make(chan RecordedFrame, r.options.FrameQueueCapacity),
 		done:     make(chan struct{}),
 		writers:  make(map[string]*recordingWriter),
 		limits:   make(map[string]*rateLimiter),
 		recorder: r,
+		options:  r.options,
 	}
 	r.active = session
 	if r.modes != nil {
@@ -208,6 +243,14 @@ func (r *Recorder) ActiveID() string {
 	return r.active.manifest.ID
 }
 
+func (r *Recorder) clearActive(session *recordingSession) {
+	r.mu.Lock()
+	if r.active == session {
+		r.active = nil
+	}
+	r.mu.Unlock()
+}
+
 func (r *Recorder) Record(input RecordFrameInput) {
 	r.mu.Lock()
 	session := r.active
@@ -219,9 +262,11 @@ func (r *Recorder) Record(input RecordFrameInput) {
 	if channel == "" {
 		return
 	}
-	session.ensureChannel(channel, input.RateCapHz, input.Adapter)
+	if session.ensureChannel(channel, input.RateCapHz, input.Adapter) {
+		_ = session.flushManifest()
+	}
 	if !session.allow(channel, input.RateCapHz) {
-		session.addDrop(channel, input.RateCapHz)
+		session.addRateDrop(channel, input.RateCapHz)
 		return
 	}
 	frame := RecordedFrame{
@@ -234,8 +279,19 @@ func (r *Recorder) Record(input RecordFrameInput) {
 	frame.Decoded, frame.DecodeError = r.decodeFrame(channel, input.Kind, input.Data, input.Adapter)
 	select {
 	case session.frames <- frame:
+		return
 	default:
-		session.addDrop(channel, input.RateCapHz)
+	}
+	if input.RateCapHz > 0 {
+		session.addQueueDrop(channel, input.RateCapHz)
+		return
+	}
+	timer := time.NewTimer(session.options.QueueSendTimeout)
+	defer timer.Stop()
+	select {
+	case session.frames <- frame:
+	case <-timer.C:
+		session.addQueueDrop(channel, input.RateCapHz)
 	}
 }
 
@@ -249,11 +305,9 @@ func (r *Recorder) HandleModeChange(cfg ChannelConfig) {
 	if session == nil {
 		return
 	}
-	session.ensureChannel(cfg.Channel, cfg.RateCapHz, "")
-	session.mu.Lock()
-	manifest := cloneRecordingManifest(session.manifest)
-	session.mu.Unlock()
-	_ = writeRecordingManifest(session.dir, manifest)
+	if session.ensureChannel(cfg.Channel, cfg.RateCapHz, "") {
+		_ = session.flushManifest()
+	}
 }
 
 func (r *Recorder) List() ([]RecordingManifest, error) {
@@ -444,15 +498,31 @@ func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*D
 
 func (s *recordingSession) run() {
 	defer close(s.done)
-	for frame := range s.frames {
-		if err := s.write(frame); err != nil {
-			s.setError(err.Error())
-			if s.recorder != nil {
-				s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
+	defer s.closeWriters()
+	ticker := time.NewTicker(s.options.ManifestFlushEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case frame, ok := <-s.frames:
+			if !ok {
+				_ = s.flushManifest()
+				return
 			}
-			break
+			if err := s.write(frame); err != nil {
+				s.setError(err.Error())
+				if s.recorder != nil {
+					s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
+					s.recorder.clearActive(s)
+				}
+				return
+			}
+		case <-ticker.C:
+			_ = s.flushManifest()
 		}
 	}
+}
+
+func (s *recordingSession) closeWriters() {
 	for _, writer := range s.writers {
 		_ = writer.writer.Flush()
 		_ = writer.file.Sync()
@@ -462,7 +532,6 @@ func (s *recordingSession) run() {
 
 func (s *recordingSession) write(frame RecordedFrame) error {
 	s.mu.Lock()
-	s.ensureChannelLocked(frame.Channel, 0, "")
 	name := channelFileName(frame.Channel)
 	writer := s.writers[name]
 	if writer == nil {
@@ -486,39 +555,44 @@ func (s *recordingSession) write(frame RecordedFrame) error {
 	for i := range s.manifest.Channels {
 		if s.manifest.Channels[i].Channel == frame.Channel {
 			s.manifest.Channels[i].Events++
+			s.dirty = true
 			break
 		}
 	}
-	manifest := cloneRecordingManifest(s.manifest)
 	s.mu.Unlock()
-	return writeRecordingManifest(s.dir, manifest)
+	return nil
 }
 
-func (s *recordingSession) ensureChannel(channel string, rateCapHz int, profile string) {
+func (s *recordingSession) ensureChannel(channel string, rateCapHz int, profile string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ensureChannelLocked(channel, rateCapHz, profile)
+	return s.ensureChannelLocked(channel, rateCapHz, profile)
 }
 
-func (s *recordingSession) ensureChannelLocked(channel string, rateCapHz int, profile string) {
+func (s *recordingSession) ensureChannelLocked(channel string, rateCapHz int, profile string) bool {
 	channel = strings.TrimSpace(channel)
 	if channel == "" {
-		return
+		return false
 	}
 	for i := range s.manifest.Channels {
 		if s.manifest.Channels[i].Channel == channel {
+			changed := false
 			if rateCapHz > 0 {
+				changed = changed || s.manifest.Channels[i].RateCapHz != rateCapHz
 				s.manifest.Channels[i].RateCapHz = rateCapHz
 			}
 			if profile != "" && s.manifest.Channels[i].AdapterProfile != "" && s.manifest.Channels[i].AdapterProfile != profile {
 				s.manifest.Channels[i].ProfileChanges = append(s.manifest.Channels[i].ProfileChanges, RecordingProfileChange{
 					TsMs: time.Since(s.start).Milliseconds(), Profile: profile,
 				})
+				changed = true
 			}
 			if profile != "" && s.manifest.Channels[i].AdapterProfile == "" {
 				s.manifest.Channels[i].AdapterProfile = profile
+				changed = true
 			}
-			return
+			s.dirty = s.dirty || changed
+			return changed
 		}
 	}
 	s.manifest.Channels = append(s.manifest.Channels, RecordingChannelManifest{
@@ -527,9 +601,11 @@ func (s *recordingSession) ensureChannelLocked(channel string, rateCapHz int, pr
 	sort.Slice(s.manifest.Channels, func(i, j int) bool {
 		return s.manifest.Channels[i].Channel < s.manifest.Channels[j].Channel
 	})
+	s.dirty = true
+	return true
 }
 
-func (s *recordingSession) addDrop(channel string, rateCapHz int) {
+func (s *recordingSession) addRateDrop(channel string, rateCapHz int) {
 	s.mu.Lock()
 	s.ensureChannelLocked(channel, rateCapHz, "")
 	for i := range s.manifest.Channels {
@@ -538,9 +614,21 @@ func (s *recordingSession) addDrop(channel string, rateCapHz int) {
 			break
 		}
 	}
-	manifest := cloneRecordingManifest(s.manifest)
+	s.dirty = true
 	s.mu.Unlock()
-	_ = writeRecordingManifest(s.dir, manifest)
+}
+
+func (s *recordingSession) addQueueDrop(channel string, rateCapHz int) {
+	s.mu.Lock()
+	s.ensureChannelLocked(channel, rateCapHz, "")
+	for i := range s.manifest.Channels {
+		if s.manifest.Channels[i].Channel == channel {
+			s.manifest.Channels[i].QueueDropped++
+			break
+		}
+	}
+	s.dirty = true
+	s.mu.Unlock()
 }
 
 func (s *recordingSession) allow(channel string, capHz int) bool {
@@ -573,6 +661,18 @@ func (s *recordingSession) setError(message string) {
 	manifest := cloneRecordingManifest(s.manifest)
 	s.mu.Unlock()
 	_ = writeRecordingManifest(s.dir, manifest)
+}
+
+func (s *recordingSession) flushManifest() error {
+	s.mu.Lock()
+	if !s.dirty {
+		s.mu.Unlock()
+		return nil
+	}
+	manifest := cloneRecordingManifest(s.manifest)
+	s.dirty = false
+	s.mu.Unlock()
+	return writeRecordingManifest(s.dir, manifest)
 }
 
 func readRecordingManifest(dir string) (RecordingManifest, error) {

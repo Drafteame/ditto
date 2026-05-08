@@ -494,6 +494,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 		err     error
 	}
 	payloadCache := make(map[string]adapterPayload)
+	recordedAdapters := make(map[string]struct{})
 	for _, id := range ids {
 		client := h.client(id)
 		if client == nil {
@@ -522,6 +523,16 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 		if data.Kind == 0 {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: adapter returned empty websocket message type", client.id))
 			continue
+		}
+		if h.recorder != nil && h.isRecordingMode(channel) {
+			if _, recorded := recordedAdapters[client.adapter]; !recorded {
+				cfg := h.modes.Get(channel)
+				h.recorder.Record(RecordFrameInput{
+					Channel: channel, Direction: "local", Kind: frameKind(data.Kind), Data: data.Data,
+					Adapter: client.adapter, RateCapHz: cfg.RateCapHz,
+				})
+				recordedAdapters[client.adapter] = struct{}{}
+			}
 		}
 		if client.enqueue(data, 0) {
 			result.Delivered++
@@ -622,10 +633,10 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 			h.registry.Subscribe(channel, client.id)
 			h.enqueueControl(client, ServerMsg{Type: "subscribe_ack", ID: subID, Channel: channel})
 			h.publishSocketEvent("SUBSCRIBE", channel, http.StatusOK, client.id, 0)
-			h.forwardLiveFromClient(ctx, client, channel, typ, data)
 			if h.isLiveMode(channel) && h.live != nil {
 				h.live.Attach(ctx, channel, client)
 			}
+			h.forwardLiveFromClient(ctx, client, channel, typ, data)
 		case "unsubscribe":
 			channel := strings.TrimSpace(msg.Channel)
 			if channel == "" {

@@ -169,7 +169,7 @@ function RecordingDetail({
         {manifest.channels.map(channel => (
           <button key={channel.channel} type="button" className="quick-template" onClick={() => onLoadFrames(id, channel.channel, 0)}>
             <span>{channel.channel}</span>
-            <small>{channel.events} events / {channel.dropped} dropped</small>
+            <small>{channel.events} events / {channel.dropped} capped / {channel.queue_dropped ?? 0} queued</small>
           </button>
         ))}
       </div>

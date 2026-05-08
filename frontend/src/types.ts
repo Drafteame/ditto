@@ -286,6 +286,7 @@ export interface RecordingChannelManifest {
   channel: string
   events: number
   dropped: number
+  queue_dropped?: number
   rate_cap_hz: number
   adapter_profile?: string
   profile_changes?: RecordingProfileChange[]

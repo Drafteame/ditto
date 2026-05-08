@@ -27,6 +27,7 @@ recordings/
       "channel": "/games/123",
       "events": 142,
       "dropped": 0,
+      "queue_dropped": 0,
       "rate_cap_hz": 50,
       "adapter_profile": "appsync-profile",
       "profile_changes": []
@@ -64,3 +65,18 @@ Each channel file is JSONL. One line is one `RecordedFrame`.
 `decoded` is optional best-effort metadata; `decode_error` explains why it is
 missing. This keeps M6 free to replay original frames or build editable events
 from decoded payloads when schemas are available.
+
+M5 records four frame sources:
+
+- upstream -> Ditto live frames, with `direction: "upstream"`;
+- client -> Ditto frames forwarded to a live upstream in mixed mode, with
+  `direction: "local"`;
+- Ditto -> client local injections from manual dispatch, templates, or
+  sequences in mixed mode, recorded after adapter wrapping with
+  `direction: "local"`;
+- Ditto -> client live-forwarded frames, represented by the upstream source
+  above so the original upstream bytes stay intact.
+
+`dropped` counts frames rejected by a configured `rate_cap_hz`.
+`queue_dropped` counts frames lost because the recorder queue stayed full after
+the brief backpressure window.

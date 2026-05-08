@@ -134,20 +134,12 @@ func (b *LiveBridge) ForwardFromClient(ctx context.Context, channel string, typ 
 		}
 		return
 	}
-	ch.mu.RLock()
-	connected := ch.connected
-	ch.mu.RUnlock()
-	if !connected {
-		if b.hub != nil {
-			b.hub.publishSocketEventWithSource("DROP", channel, http.StatusServiceUnavailable, "live upstream disconnected", 0, "live-disconnected")
-		}
-		return
-	}
 	// M5 intentionally forwards raw frames both ways. Adapter envelopes remain
 	// only for local injections through dispatchRendered/WrapData.
 	select {
 	case ch.out <- EncodedServerMessage{Kind: typ, Data: append([]byte(nil), data...)}:
 	case <-ctx.Done():
+	case <-ch.ctx.Done():
 	default:
 		if b.hub != nil {
 			b.hub.publishSocketEventWithSource("DROP", channel, http.StatusServiceUnavailable, "live upstream send queue full", 0, "live-disconnected")

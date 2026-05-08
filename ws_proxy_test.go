@@ -12,6 +12,7 @@ import (
 )
 
 func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
+	upstreamFrames := make(chan []byte, 4)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -22,6 +23,10 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 			typ, data, err := conn.Read(r.Context())
 			if err != nil {
 				return
+			}
+			select {
+			case upstreamFrames <- append([]byte(nil), data...):
+			default:
 			}
 			_ = conn.Write(r.Context(), typ, data)
 		}
@@ -50,8 +55,17 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 		t.Fatalf("Dial local: %v", err)
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
-	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"subscribe","id":"sub","channel":"/live"}`)); err != nil {
+	subscribeFrame := []byte(`{"type":"subscribe","id":"sub","channel":"/live"}`)
+	if err := conn.Write(ctx, websocket.MessageText, subscribeFrame); err != nil {
 		t.Fatalf("subscribe write: %v", err)
+	}
+	select {
+	case got := <-upstreamFrames:
+		if string(got) != string(subscribeFrame) {
+			t.Fatalf("upstream first frame = %s, want subscribe %s", got, subscribeFrame)
+		}
+	case <-ctx.Done():
+		t.Fatalf("upstream did not receive subscribe frame: %v", ctx.Err())
 	}
 	_, _, _ = conn.Read(ctx)
 	time.Sleep(100 * time.Millisecond)
