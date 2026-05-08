@@ -51,7 +51,7 @@ export function useAppShellState() {
       connectedClientCount: useSocketStore(state => state.connectedClients.length),
       eventTemplateCount: useEventTemplateStore(state => state.templates.length),
       sequenceCount: useSequenceStore(state => state.sequences.length),
-      recordingCount: useRecordingStore(state => state.recordings.length),
+      recordingCount: useRecordingStore(state => state.recordings?.length ?? 0),
     },
   }
 }

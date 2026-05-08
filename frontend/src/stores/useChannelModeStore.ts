@@ -27,7 +27,8 @@ export const useChannelModeStore = create<ChannelModeStore>((set, get) => ({
     try {
       const data = await api.fetchChannelModes()
       const modes: Record<string, ChannelConfig> = {}
-      data.channels.forEach(config => { modes[config.channel] = config })
+      const channels = Array.isArray(data.channels) ? data.channels : []
+      channels.forEach(config => { modes[config.channel] = config })
       set({ modes, loading: false })
     } catch (err) {
       set({ loading: false, error: (err as Error).message })

@@ -26,12 +26,14 @@ const (
 	recordingFrameQueueCapacity = 4096
 	recordingManifestFlushEvery = 2 * time.Second
 	recordingQueueSendTimeout   = 50 * time.Millisecond
+	recordingStopTimeout        = 5 * time.Second
 )
 
 type RecorderOptions struct {
 	FrameQueueCapacity int
 	ManifestFlushEvery time.Duration
 	QueueSendTimeout   time.Duration
+	StopTimeout        time.Duration
 }
 
 type RecordingManifest struct {
@@ -99,20 +101,24 @@ type Recorder struct {
 }
 
 type recordingSession struct {
-	mu        sync.Mutex
-	manifest  RecordingManifest
-	dir       string
-	start     time.Time
-	frames    chan RecordedFrame
-	closing   chan struct{}
-	done      chan struct{}
-	writers   map[string]*recordingWriter
-	limits    map[string]*rateLimiter
-	recorder  *Recorder
-	dirty     bool
-	options   RecorderOptions
-	stopping  bool
-	producers int
+	mu                sync.Mutex
+	manifest          RecordingManifest
+	dir               string
+	start             time.Time
+	frames            chan RecordedFrame
+	closing           chan struct{}
+	forceStop         chan struct{}
+	done              chan struct{}
+	producersDone     chan struct{}
+	producersDoneOnce sync.Once
+	forceStopOnce     sync.Once
+	writers           map[string]*recordingWriter
+	limits            map[string]*rateLimiter
+	recorder          *Recorder
+	dirty             bool
+	options           RecorderOptions
+	stopping          bool
+	producers         int
 }
 
 type recordingWriter struct {
@@ -154,6 +160,9 @@ func normalizeRecorderOptions(options RecorderOptions) RecorderOptions {
 	if options.QueueSendTimeout <= 0 {
 		options.QueueSendTimeout = recordingQueueSendTimeout
 	}
+	if options.StopTimeout <= 0 {
+		options.StopTimeout = recordingStopTimeout
+	}
 	return options
 }
 
@@ -183,16 +192,18 @@ func (r *Recorder) Start(name, description string) (RecordingManifest, error) {
 		SchemaPackIDs: schemaPackIDs(r.schemas),
 	}
 	session := &recordingSession{
-		manifest: manifest,
-		dir:      dir,
-		start:    now,
-		frames:   make(chan RecordedFrame, r.options.FrameQueueCapacity),
-		closing:  make(chan struct{}),
-		done:     make(chan struct{}),
-		writers:  make(map[string]*recordingWriter),
-		limits:   make(map[string]*rateLimiter),
-		recorder: r,
-		options:  r.options,
+		manifest:      manifest,
+		dir:           dir,
+		start:         now,
+		frames:        make(chan RecordedFrame, r.options.FrameQueueCapacity),
+		closing:       make(chan struct{}),
+		forceStop:     make(chan struct{}),
+		done:          make(chan struct{}),
+		producersDone: make(chan struct{}),
+		writers:       make(map[string]*recordingWriter),
+		limits:        make(map[string]*rateLimiter),
+		recorder:      r,
+		options:       r.options,
 	}
 	r.active = session
 	if r.modes != nil {
@@ -224,8 +235,9 @@ func (r *Recorder) Stop(id string) (RecordingManifest, error) {
 
 	select {
 	case <-session.done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(session.options.StopTimeout):
 		session.setError("stop timed out while draining frames")
+		session.forceStopDrain()
 		<-session.done
 	}
 	now := time.Now().UTC()
@@ -328,7 +340,7 @@ func (r *Recorder) List() ([]RecordingManifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []RecordingManifest
+	out := make([]RecordingManifest, 0)
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -384,7 +396,7 @@ func (r *Recorder) Frames(id, channel string, offset, limit int) ([]RecordedFram
 	}
 	defer file.Close()
 	dec := json.NewDecoder(file)
-	var out []RecordedFrame
+	out := make([]RecordedFrame, 0)
 	index := 0
 	for {
 		var frame RecordedFrame
@@ -532,12 +544,7 @@ func (s *recordingSession) run() {
 	for {
 		select {
 		case frame := <-s.frames:
-			if err := s.write(frame); err != nil {
-				s.setError(err.Error())
-				if s.recorder != nil {
-					s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
-					s.recorder.clearActive(s)
-				}
+			if !s.writeFrame(frame) {
 				return
 			}
 		case <-s.closing:
@@ -550,52 +557,45 @@ func (s *recordingSession) run() {
 }
 
 func (s *recordingSession) drainAndStop() {
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
 	for {
 		select {
 		case frame := <-s.frames:
-			if err := s.write(frame); err != nil {
-				s.setError(err.Error())
-				if s.recorder != nil {
-					s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
-					s.recorder.clearActive(s)
-				}
+			if !s.writeFrame(frame) {
 				return
 			}
-			continue
-		default:
-		}
-		if s.noActiveProducers() {
-			select {
-			case frame := <-s.frames:
-				if err := s.write(frame); err != nil {
-					s.setError(err.Error())
-					if s.recorder != nil {
-						s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
-						s.recorder.clearActive(s)
-					}
-					return
-				}
-				continue
-			default:
-				_ = s.flushManifest()
-				return
-			}
-		}
-		select {
-		case frame := <-s.frames:
-			if err := s.write(frame); err != nil {
-				s.setError(err.Error())
-				if s.recorder != nil {
-					s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
-					s.recorder.clearActive(s)
-				}
-				return
-			}
-		case <-ticker.C:
+		case <-s.producersDone:
+			s.drainBuffered()
+			return
+		case <-s.forceStop:
+			return
 		}
 	}
+}
+
+func (s *recordingSession) drainBuffered() {
+	for {
+		select {
+		case frame := <-s.frames:
+			if !s.writeFrame(frame) {
+				return
+			}
+		default:
+			_ = s.flushManifest()
+			return
+		}
+	}
+}
+
+func (s *recordingSession) writeFrame(frame RecordedFrame) bool {
+	if err := s.write(frame); err != nil {
+		s.setError(err.Error())
+		if s.recorder != nil {
+			s.recorder.publish("ERROR", s.manifest.ID, http.StatusInsufficientStorage, err.Error())
+			s.recorder.clearActive(s)
+		}
+		return false
+	}
+	return true
 }
 
 func (s *recordingSession) runSafe() {
@@ -624,8 +624,15 @@ func (s *recordingSession) beginClosing() {
 	if !s.stopping {
 		s.stopping = true
 		close(s.closing)
+		if s.producers == 0 {
+			s.producersDoneOnce.Do(func() { close(s.producersDone) })
+		}
 	}
 	s.mu.Unlock()
+}
+
+func (s *recordingSession) forceStopDrain() {
+	s.forceStopOnce.Do(func() { close(s.forceStop) })
 }
 
 func (s *recordingSession) beginRecord() bool {
@@ -641,13 +648,10 @@ func (s *recordingSession) beginRecord() bool {
 func (s *recordingSession) endRecord() {
 	s.mu.Lock()
 	s.producers--
+	if s.stopping && s.producers == 0 {
+		s.producersDoneOnce.Do(func() { close(s.producersDone) })
+	}
 	s.mu.Unlock()
-}
-
-func (s *recordingSession) noActiveProducers() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.producers == 0
 }
 
 func (s *recordingSession) write(frame RecordedFrame) error {
@@ -806,6 +810,12 @@ func readRecordingManifest(dir string) (RecordingManifest, error) {
 	}
 	if manifest.Version != 1 || !isSafeEventTemplateID(manifest.ID) {
 		return RecordingManifest{}, fmt.Errorf("invalid recording manifest")
+	}
+	if manifest.Channels == nil {
+		manifest.Channels = make([]RecordingChannelManifest, 0)
+	}
+	if manifest.SchemaPackIDs == nil {
+		manifest.SchemaPackIDs = make([]string, 0)
 	}
 	return manifest, nil
 }

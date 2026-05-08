@@ -52,6 +52,23 @@ func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRecorderListReturnsEmptySlice(t *testing.T) {
+	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	recordings, err := rec.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if recordings == nil {
+		t.Fatalf("List() returned nil, want empty slice")
+	}
+	if len(recordings) != 0 {
+		t.Fatalf("List() returned %d recordings, want 0", len(recordings))
+	}
+}
+
 func TestRecorderRateCapDrops(t *testing.T) {
 	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
 	if err != nil {
@@ -104,6 +121,57 @@ func TestRecorderRecordConcurrentWithStopDoesNotPanic(t *testing.T) {
 			t.Fatalf("Stop() error = %v", err)
 		}
 		wg.Wait()
+	}
+}
+
+func TestRecorderStopTimeoutForceStopsDrain(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorderWithOptions(dir, nil, nil, nil, false, RecorderOptions{
+		StopTimeout: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorderWithOptions() error = %v", err)
+	}
+	id := "stuck-drain-12345678"
+	sessionDir := filepath.Join(dir, id)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	session := &recordingSession{
+		manifest: RecordingManifest{
+			Version: 1, ID: id, Name: "Stuck Drain", StartedAt: time.Now().UTC(), Channels: []RecordingChannelManifest{},
+		},
+		dir:           sessionDir,
+		start:         time.Now().UTC(),
+		frames:        make(chan RecordedFrame, 1),
+		closing:       make(chan struct{}),
+		forceStop:     make(chan struct{}),
+		done:          make(chan struct{}),
+		producersDone: make(chan struct{}),
+		writers:       make(map[string]*recordingWriter),
+		limits:        make(map[string]*rateLimiter),
+		recorder:      rec,
+		options:       rec.options,
+		producers:     1,
+	}
+	rec.mu.Lock()
+	rec.active = session
+	rec.mu.Unlock()
+	go session.runSafe()
+
+	started := time.Now()
+	stopped, err := rec.Stop(id)
+	if err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Stop() took %v, want force stop before 1s", elapsed)
+	}
+	if stopped.Error != "stop timed out while draining frames" {
+		t.Fatalf("stopped error = %q", stopped.Error)
+	}
+	if stopped.StoppedAt == nil {
+		t.Fatalf("stopped_at was not set")
 	}
 }
 
