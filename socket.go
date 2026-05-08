@@ -143,6 +143,7 @@ type SocketClient struct {
 	closed          atomic.Bool
 	closeOnce       sync.Once
 	droppedToClient atomic.Uint64
+	upstreamHeaders http.Header
 
 	mu            sync.RWMutex
 	subscriptions map[string]string
@@ -285,6 +286,38 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*Sch
 
 func IsWebSocketRequest(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
+// extractUpstreamHeaders clones the inbound client headers, dropping the ones
+// that the WebSocket handshake or HTTP transport must control on the upstream
+// dial. Everything else (Authorization, Cookie, Host overrides via custom
+// headers, X-* etc.) is forwarded verbatim so the upstream sees the same
+// request the client would send directly.
+func extractUpstreamHeaders(src http.Header) http.Header {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(http.Header, len(src))
+	for k, vs := range src {
+		canonical := http.CanonicalHeaderKey(k)
+		switch canonical {
+		case "Connection",
+			"Upgrade",
+			"Host",
+			"Content-Length",
+			"Sec-Websocket-Key",
+			"Sec-Websocket-Version",
+			"Sec-Websocket-Extensions",
+			"Sec-Websocket-Accept",
+			"Sec-Websocket-Protocol",
+			"X-Ditto-Ws-Mode":
+			continue
+		}
+		copied := make([]string, len(vs))
+		copy(copied, vs)
+		out[canonical] = copied
+	}
+	return out
 }
 
 func shouldProxyWebSocket(r *http.Request) bool {
@@ -431,16 +464,17 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	id := fmt.Sprintf("ws-%d", h.nextID.Add(1))
 	client := &SocketClient{
-		id:            id,
-		adapter:       adapterName,
-		protocol:      adapter,
-		remoteAddr:    r.RemoteAddr,
-		connected:     time.Now(),
-		conn:          conn,
-		control:       make(chan EncodedServerMessage, 16),
-		send:          make(chan EncodedServerMessage, 64),
-		done:          make(chan struct{}),
-		subscriptions: make(map[string]string),
+		id:              id,
+		adapter:         adapterName,
+		protocol:        adapter,
+		remoteAddr:      r.RemoteAddr,
+		connected:       time.Now(),
+		conn:            conn,
+		control:         make(chan EncodedServerMessage, 16),
+		send:            make(chan EncodedServerMessage, 64),
+		done:            make(chan struct{}),
+		subscriptions:   make(map[string]string),
+		upstreamHeaders: extractUpstreamHeaders(r.Header),
 	}
 	h.addClient(client)
 	h.publishSocketEvent("CONNECT", r.URL.RequestURI(), http.StatusSwitchingProtocols, "", 0)

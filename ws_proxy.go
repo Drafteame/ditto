@@ -187,11 +187,14 @@ func (ch *liveChannel) run() {
 		loggedEmptyTarget = false
 		client := ch.firstClient()
 		var subprotocols []string
+		var headers http.Header
 		if client != nil {
 			subprotocols = client.protocol.Subprotocols()
+			headers = client.upstreamHeaders
 		}
 		conn, _, err := websocket.Dial(ch.ctx, target, &websocket.DialOptions{
 			Subprotocols: subprotocols,
+			HTTPHeader:   headers,
 		})
 		if err != nil {
 			ch.bridge.hub.publishSocketEventWithSource("ERROR", ch.channel, http.StatusBadGateway, err.Error(), 0, "live-disconnected")
