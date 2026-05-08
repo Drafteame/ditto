@@ -101,6 +101,82 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 	}
 }
 
+func TestLiveBridgeForwardsAuthHeaders(t *testing.T) {
+	received := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.Header.Clone()
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	bus := NewEventBus()
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	hub := NewSocketHub(bus, false, modes)
+	hub.SetLiveBridge(NewLiveBridge(NewLiveTargetManager(httpToWS(upstream.URL), nil), hub))
+	if err := modes.Set(ChannelConfig{Channel: "/auth", Mode: ModeLive}); err != nil {
+		t.Fatalf("Set live mode: %v", err)
+	}
+	local := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
+	defer local.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, httpToWS(local.URL)+"/__ditto__/socket?adapter=raw", &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization":       []string{"Bearer xyz"},
+			"Cookie":              []string{"session=abc"},
+			"X-Custom-Auth":       []string{"custom"},
+			"Origin":              []string{"http://localhost:8888"},
+			"Sec-Websocket-Key":   []string{"client-owned"},
+			"X-Ditto-Ws-Mode":     []string{"live"},
+			"Sec-Websocket-Trace": []string{"should-filter"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Dial local: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"subscribe","id":"sub","channel":"/auth"}`)); err != nil {
+		t.Fatalf("subscribe write: %v", err)
+	}
+
+	var headers http.Header
+	select {
+	case headers = <-received:
+	case <-ctx.Done():
+		t.Fatalf("upstream did not receive headers: %v", ctx.Err())
+	}
+	if got := headers.Get("Authorization"); got != "Bearer xyz" {
+		t.Fatalf("Authorization = %q, want Bearer xyz", got)
+	}
+	if got := headers.Get("Cookie"); got != "session=abc" {
+		t.Fatalf("Cookie = %q, want session=abc", got)
+	}
+	if got := headers.Get("X-Custom-Auth"); got != "custom" {
+		t.Fatalf("X-Custom-Auth = %q, want custom", got)
+	}
+	for _, name := range []string{"Origin", "X-Ditto-Ws-Mode", "Sec-Websocket-Key"} {
+		if got := headers.Get(name); name == "Sec-Websocket-Key" {
+			if got == "client-owned" {
+				t.Fatalf("%s forwarded client-owned value", name)
+			}
+		} else if got != "" {
+			t.Fatalf("%s = %q, want filtered", name, got)
+		}
+	}
+	if got := headers.Get("Sec-Websocket-Trace"); got != "" {
+		t.Fatalf("Sec-Websocket-Trace = %q, want filtered", got)
+	}
+}
+
 func TestLiveBridgeDetachAttachStressKeepsNewClient(t *testing.T) {
 	bridge := NewLiveBridge(NewLiveTargetManager("", nil), NewSocketHub(NewEventBus(), false, nil))
 	for i := 0; i < 250; i++ {

@@ -320,9 +320,8 @@ func IsWebSocketRequest(r *http.Request) bool {
 
 // extractUpstreamHeaders clones the inbound client headers, dropping the ones
 // that the WebSocket handshake or HTTP transport must control on the upstream
-// dial. Everything else (Authorization, Cookie, Host overrides via custom
-// headers, X-* etc.) is forwarded verbatim so the upstream sees the same
-// request the client would send directly.
+// dial. Everything else (Authorization, Cookie, X-* etc.) is forwarded
+// verbatim so the upstream sees the same request the client would send directly.
 func extractUpstreamHeaders(src http.Header) http.Header {
 	if len(src) == 0 {
 		return nil
@@ -330,16 +329,15 @@ func extractUpstreamHeaders(src http.Header) http.Header {
 	out := make(http.Header, len(src))
 	for k, vs := range src {
 		canonical := http.CanonicalHeaderKey(k)
+		if strings.HasPrefix(canonical, "Sec-Websocket-") {
+			continue
+		}
 		switch canonical {
 		case "Connection",
 			"Upgrade",
 			"Host",
+			"Origin",
 			"Content-Length",
-			"Sec-Websocket-Key",
-			"Sec-Websocket-Version",
-			"Sec-Websocket-Extensions",
-			"Sec-Websocket-Accept",
-			"Sec-Websocket-Protocol",
 			"X-Ditto-Ws-Mode":
 			continue
 		}
