@@ -65,12 +65,6 @@ func (b *EventBus) Unsubscribe(ch chan LogEvent) {
 	b.mu.Unlock()
 }
 
-func (b *EventBus) HasSubscribers() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.clients) > 0
-}
-
 func (b *EventBus) Publish(event LogEvent) {
 	b.mu.Lock()
 	clients := make([]chan LogEvent, 0, len(b.clients))

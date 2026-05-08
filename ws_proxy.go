@@ -294,13 +294,8 @@ func (h *SocketHub) forwardFromUpstream(channel string, typ websocket.MessageTyp
 			result.Dropped = append(result.Dropped, id)
 		}
 	}
-	body := dispatchSummary(result)
-	// Decode is skipped when no SSE subscribers to avoid protobuf decode cost on
-	// idle servers; recordings persist via their own path.
-	if h.events != nil && h.events.HasLogSubscribers() {
-		decoded, decodeErr := DecodeWireFrame(h.schemas, frameKind(typ), data, adapterName)
-		body = buildDispatchLogBody(result, decoded, decodeErr)
-	}
+	decoded, decodeErr := DecodeWireFrame(h.schemas, frameKind(typ), data, adapterName)
+	body := buildDispatchLogBody(result, decoded, decodeErr)
 	h.publishSocketEventWithSource("DISPATCH", channel, http.StatusOK, body, 0, "live")
 }
 

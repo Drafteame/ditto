@@ -50,9 +50,10 @@ to remove it.
 
 ## Live Log Payloads
 
-When at least one SSE client is consuming `/__ditto__/events`, Ditto decodes
-upstream frames (`live`/`mixed`) and local dispatches (`mock`/`mixed`) with the
-adapter profiles and schema registry, then includes the JSON payload in the live
-socket log. Payloads larger than 4KB are truncated in the SSE body; use a
-recording when you need the complete frame. If no SSE clients are connected,
-Ditto skips this decode work to keep idle live proxy traffic cheap.
+Ditto decodes upstream frames (`live`/`mixed`) and local dispatches
+(`mock`/`mixed`) with the adapter profiles and schema registry on every
+dispatch, then includes the JSON payload in the live socket log. Payloads
+larger than 4KB are truncated in the body; use a recording when you need the
+complete frame. The decode runs even when no SSE clients are watching, so
+headless logs (`--log-format=json`) capture the same enriched payload visible
+in the dashboard.

@@ -594,13 +594,8 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 			result.Dropped = append(result.Dropped, client.id)
 		}
 	}
-	// Decode is skipped when no SSE subscribers to avoid protobuf decode cost on
-	// idle servers; recordings persist via their own path.
-	body := dispatchSummary(result)
-	if h.events != nil && h.events.HasLogSubscribers() {
-		decoded, decodeErr := h.decodeDispatchLogPayload(hint, payloadCache)
-		body = buildDispatchLogBody(result, decoded, decodeErr)
-	}
+	decoded, decodeErr := h.decodeDispatchLogPayload(hint, payloadCache)
+	body := buildDispatchLogBody(result, decoded, decodeErr)
 	h.publishSocketEventWithSource("DISPATCH", channel, http.StatusOK, body, 0, source)
 	return result
 }
