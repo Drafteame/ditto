@@ -865,14 +865,23 @@ svg {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.socket-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.socket-error-banner {
+  margin: 12px 12px 0;
+}
 .socket-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 0.75fr) minmax(360px, 1.25fr) minmax(240px, 0.75fr);
+  grid-template-columns: minmax(240px, 0.85fr) minmax(360px, 1.3fr) minmax(260px, 0.85fr);
   gap: 12px;
   padding: 12px;
   border-bottom: 1px solid var(--line);
 }
-.socket-clients,
 .socket-dispatcher,
 .socket-templates,
 .socket-modes,
@@ -882,7 +891,6 @@ svg {
   border-radius: var(--r-md);
   background: var(--bg-1);
 }
-.socket-clients,
 .socket-dispatcher,
 .socket-templates,
 .socket-modes {
@@ -916,11 +924,10 @@ svg {
   padding-inline: 8px;
 }
 
-.drop-badge,
 .burst-badge {
-  border: 1px solid color-mix(in oklch, var(--err) 45%, var(--line));
-  color: var(--err);
-  background: color-mix(in oklch, var(--err) 12%, transparent);
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 10px;
@@ -928,14 +935,18 @@ svg {
   font-weight: 700;
 }
 
-.burst-badge {
-  border-color: color-mix(in oklch, var(--accent) 45%, var(--line));
-  color: var(--accent);
-  background: color-mix(in oklch, var(--accent) 10%, transparent);
-}
-
 .socket-event-row.burst {
   background: color-mix(in oklch, var(--accent) 8%, transparent);
+}
+
+.recording-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
 }
 
 .recording-start-row {
@@ -957,7 +968,7 @@ svg {
   border: 1px solid var(--line);
   background: var(--bg-1);
   border-radius: 8px;
-  padding: 12px;
+  padding: 14px 16px;
   min-height: 280px;
 }
 
@@ -965,15 +976,21 @@ svg {
   width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 78px 78px 48px 70px auto;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
-  min-height: 38px;
+  min-height: 42px;
+  padding: 4px 6px;
+  margin-inline: -6px;
   border: 0;
   border-bottom: 1px solid var(--line);
   background: transparent;
   color: var(--text-1);
   text-align: left;
   cursor: pointer;
+}
+
+.recording-row:last-child {
+  border-bottom: 0;
 }
 
 .recording-row.active {
@@ -1031,58 +1048,6 @@ svg {
   margin-bottom: 8px;
   color: var(--err);
   font-size: 12px;
-}
-.socket-client-row {
-  padding: 9px 0;
-  border-top: 1px solid color-mix(in oklch, var(--line) 65%, transparent);
-}
-.socket-client-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.client-id {
-  color: var(--fg-0);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-.client-adapter {
-  padding: 1px 6px;
-  border-radius: 999px;
-  color: var(--accent);
-  background: color-mix(in oklch, var(--accent) 12%, transparent);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-.client-remote {
-  margin-top: 3px;
-  color: var(--fg-3);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.client-subs {
-  margin-top: 7px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.sub {
-  max-width: 100%;
-  padding: 2px 6px;
-  border-radius: var(--r-sm);
-  color: var(--fg-1);
-  background: var(--bg-2);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.empty-sub {
-  color: var(--fg-3);
 }
 .socket-form-row {
   display: grid;
@@ -1255,17 +1220,11 @@ svg {
 }
 .socket-events {
   margin: 12px;
-  min-height: 0;
-  flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   padding: 12px;
 }
 .socket-event-list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
   border-top: 1px solid color-mix(in oklch, var(--line) 65%, transparent);
   font-family: var(--font-mono);
 }
@@ -1367,6 +1326,10 @@ svg {
 .schema-modal {
   width: 860px;
 }
+.schema-modal.is-drag {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
 .schema-upload-row {
   display: flex;
   align-items: center;
@@ -1375,6 +1338,44 @@ svg {
 }
 .schema-upload-row input {
   display: none;
+}
+.schema-dropzone {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-0);
+  color: var(--fg-1);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.schema-dropzone:hover {
+  border-color: color-mix(in oklch, var(--accent) 60%, var(--line));
+}
+.schema-dropzone.is-drag {
+  border-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 8%, var(--bg-0));
+}
+.schema-dropzone input {
+  display: none;
+}
+.schema-dropzone-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.schema-dropzone-text strong {
+  color: var(--fg-0);
+  font-size: 13px;
+  font-weight: 600;
+}
+.schema-dropzone-text span {
+  color: var(--fg-3);
+  font-size: 11.5px;
 }
 .schema-modal-grid {
   display: grid;

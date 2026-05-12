@@ -89,68 +89,70 @@ export const RecordingsView = memo(function RecordingsView({ showToast }: Record
         </button>
       </div>
 
-      <div className="recording-start-row">
-        <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Recording name" />
-        <input className="input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Description" />
-        <button type="button" className="btn primary" onClick={handleStart} disabled={!!activeId || loading}>
-          <Send /> Start
-        </button>
-      </div>
-      {error && <div className="socket-error">{error}</div>}
+      <div className="recording-body">
+        <div className="recording-start-row">
+          <input className="input" value={name} onChange={e => setName(e.target.value)} placeholder="Recording name" />
+          <input className="input" value={description} onChange={e => setDescription(e.target.value)} placeholder="Description" />
+          <button type="button" className="btn primary" onClick={handleStart} disabled={!!activeId || loading}>
+            <Send /> Start
+          </button>
+        </div>
+        {error && <div className="socket-error">{error}</div>}
 
-      <div className="recording-grid">
-        <section className="recording-list">
-          {recordings.length === 0 ? (
-            <div className="socket-empty">No recordings yet.</div>
-          ) : recordings.map(item => {
-            const events = item.channels.reduce((sum, channel) => sum + channel.events, 0)
-            const stopped = item.stopped_at ? new Date(item.stopped_at).getTime() : Date.now()
-            const duration = Math.max(0, stopped - new Date(item.started_at).getTime())
-            const rowClass = selectedId === item.id ? 'recording-row active' : 'recording-row'
-            return (
-              <div
-                key={item.id}
-                role="button"
-                tabIndex={0}
-                className={rowClass}
-                onClick={() => selectRecording(item.id)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    selectRecording(item.id)
-                  }
-                }}
-              >
-                <span className="recording-name">{item.name}</span>
-                <span>{item.channels.length} channels</span>
-                <span>{events} events</span>
-                <span>{Math.round(duration / 1000)}s</span>
-                <span className={item.stopped_at ? 'recording-state' : 'recording-state live'}>
-                  {item.stopped_at ? 'Stopped' : 'Active'}
-                </span>
-                {!item.stopped_at && (
-                  <button
-                    type="button"
-                    className="btn small recording-stop"
-                    onClick={e => {
-                      e.stopPropagation()
-                      handleStop(item.id)
-                    }}
-                  >
-                    Stop
-                  </button>
-                )}
-              </div>
-            )
-          })}
-        </section>
+        <div className="recording-grid">
+          <section className="recording-list">
+            {recordings.length === 0 ? (
+              <div className="socket-empty">No recordings yet.</div>
+            ) : recordings.map(item => {
+              const events = item.channels.reduce((sum, channel) => sum + channel.events, 0)
+              const stopped = item.stopped_at ? new Date(item.stopped_at).getTime() : Date.now()
+              const duration = Math.max(0, stopped - new Date(item.started_at).getTime())
+              const rowClass = selectedId === item.id ? 'recording-row active' : 'recording-row'
+              return (
+                <div
+                  key={item.id}
+                  role="button"
+                  tabIndex={0}
+                  className={rowClass}
+                  onClick={() => selectRecording(item.id)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      selectRecording(item.id)
+                    }
+                  }}
+                >
+                  <span className="recording-name">{item.name}</span>
+                  <span>{item.channels.length} channels</span>
+                  <span>{events} events</span>
+                  <span>{Math.round(duration / 1000)}s</span>
+                  <span className={item.stopped_at ? 'recording-state' : 'recording-state live'}>
+                    {item.stopped_at ? 'Stopped' : 'Active'}
+                  </span>
+                  {!item.stopped_at && (
+                    <button
+                      type="button"
+                      className="btn small recording-stop"
+                      onClick={e => {
+                        e.stopPropagation()
+                        handleStop(item.id)
+                      }}
+                    >
+                      Stop
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </section>
 
-        <RecordingDetail
-          id={selectedId}
-          manifest={selected ?? selectedRecording}
-          frames={frames}
-          onLoadFrames={loadFrames}
-        />
+          <RecordingDetail
+            id={selectedId}
+            manifest={selected ?? selectedRecording}
+            frames={frames}
+            onLoadFrames={loadFrames}
+          />
+        </div>
       </div>
     </section>
   )

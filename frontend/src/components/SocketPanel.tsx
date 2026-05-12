@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { ChangeEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent, DragEvent } from 'react'
 import type {
   EventTemplate,
   EventTemplateDispatchResult,
@@ -242,19 +242,9 @@ export function SocketPanel({
         </button>
       </div>
 
-      <div className="socket-grid">
-        <section className="socket-clients">
-          <div className="panel-label">Connected clients</div>
-          {error && <div className="socket-error">{error}</div>}
-          {clients.length === 0 ? (
-            <div className="socket-empty">
-              Point a WebSocket client at Ditto, then send a subscribe message for a channel.
-            </div>
-          ) : (
-            clients.map(client => <ClientRow key={client.id} client={client} />)
-          )}
-        </section>
-
+      <div className="socket-body">
+        {error && <div className="socket-error socket-error-banner">{error}</div>}
+        <div className="socket-grid">
         <section className="socket-modes">
           <div className="panel-label">Channel modes</div>
           {visibleChannels.length === 0 ? (
@@ -425,18 +415,19 @@ export function SocketPanel({
             </div>
           )}
         </section>
-      </div>
+        </div>
 
-      <section className="socket-events">
-        <div className="panel-label">Live socket log</div>
-        {socketEntries.length === 0 ? (
-          <div className="socket-empty compact">Socket events will stream here through the existing SSE log.</div>
-        ) : (
-          <div className="socket-event-list">
-            {socketEntries.map(entry => <SocketEventRow key={entry.id} entry={entry} />)}
-          </div>
-        )}
-      </section>
+        <section className="socket-events">
+          <div className="panel-label">Live socket log</div>
+          {socketEntries.length === 0 ? (
+            <div className="socket-empty compact">Socket events will stream here through the existing SSE log.</div>
+          ) : (
+            <div className="socket-event-list">
+              {socketEntries.map(entry => <SocketEventRow key={entry.id} entry={entry} />)}
+            </div>
+          )}
+        </section>
+      </div>
 
       {schemaModalOpen && (
         <SchemaPacksModal
@@ -542,28 +533,6 @@ function ChannelRateCapInput({
   )
 }
 
-function ClientRow({ client }: { client: SocketClient }) {
-  return (
-    <div className="socket-client-row">
-      <div className="socket-client-main">
-        <span className="client-id">{client.id}</span>
-        {!!client.dropped_to_client && <span className="drop-badge">{client.dropped_to_client} dropped</span>}
-        <span className="client-adapter">{client.adapter}</span>
-      </div>
-      <div className="client-remote" title={client.remote_addr}>{client.remote_addr}</div>
-      <div className="client-subs">
-        {client.subscriptions.length === 0 ? (
-          <span className="sub empty-sub">No subscriptions yet</span>
-        ) : (
-          client.subscriptions.map(channel => (
-            <span key={channel} className="sub" title={channel}>{channel}</span>
-          ))
-        )}
-      </div>
-    </div>
-  )
-}
-
 function BurstBadge({ body }: { body?: string }) {
   let label = 'burst'
   try {
@@ -598,20 +567,87 @@ function SchemaPacksModal({
   showToast: (message: string, kind?: 'warn') => void
 }) {
   const [uploading, setUploading] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
+  const dragCounter = useRef(0)
+
+  async function uploadFiles(files: File[]) {
+    const accepted = files.filter(file => /\.(proto|zip)$/i.test(file.name))
+    const rejected = files.length - accepted.length
+    if (!accepted.length) {
+      if (rejected) {
+        showToast('Only .proto or .zip files are accepted', 'warn')
+      }
+      return
+    }
+    setUploading(true)
+    const ok: string[] = []
+    const fail: { name: string; message: string }[] = []
+    for (const file of accepted) {
+      try {
+        await onUpload(file)
+        ok.push(file.name)
+      } catch (err) {
+        fail.push({ name: file.name, message: (err as Error).message })
+      }
+    }
+    setUploading(false)
+    if (ok.length && !fail.length) {
+      showToast(
+        ok.length === 1
+          ? `Loaded schema pack ${ok[0]}`
+          : `Loaded ${ok.length} schema packs`,
+      )
+    } else if (fail.length && !ok.length) {
+      const extra = fail.length > 1 ? ` (+${fail.length - 1} more)` : ''
+      showToast(`Schema upload failed: ${fail[0].name}: ${fail[0].message}${extra}`, 'warn')
+    } else if (ok.length && fail.length) {
+      showToast(
+        `Loaded ${ok.length}, failed ${fail.length} — ${fail[0].name}: ${fail[0].message}`,
+        'warn',
+      )
+    }
+    if (rejected) {
+      showToast(`${rejected} file${rejected === 1 ? '' : 's'} skipped (not .proto/.zip)`, 'warn')
+    }
+  }
 
   async function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
+    const files = e.target.files ? Array.from(e.target.files) : []
     e.target.value = ''
-    if (!file) return
-    setUploading(true)
-    try {
-      await onUpload(file)
-      showToast(`Loaded schema pack ${file.name}`)
-    } catch (err) {
-      showToast(`Schema upload failed: ${(err as Error).message}`, 'warn')
-    } finally {
-      setUploading(false)
-    }
+    if (!files.length) return
+    await uploadFiles(files)
+  }
+
+  function handleDragEnter(e: DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer?.types?.includes('Files')) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current += 1
+    setDragActive(true)
+  }
+
+  function handleDragOver(e: DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer?.types?.includes('Files')) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  function handleDragLeave(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current = Math.max(0, dragCounter.current - 1)
+    if (dragCounter.current === 0) setDragActive(false)
+  }
+
+  async function handleDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current = 0
+    setDragActive(false)
+    const files = e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : []
+    if (!files.length || uploading || loading) return
+    await uploadFiles(files)
   }
 
   async function handleDelete(pack: SchemaPack) {
@@ -628,7 +664,14 @@ function SchemaPacksModal({
 
   return (
     <div className="modal-scrim" onMouseDown={onClose}>
-      <div className="modal schema-modal" onMouseDown={e => e.stopPropagation()}>
+      <div
+        className={`modal schema-modal${dragActive ? ' is-drag' : ''}`}
+        onMouseDown={e => e.stopPropagation()}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         <div className="modal-head">
           <div>
             <h2>Schema Packs</h2>
@@ -639,11 +682,21 @@ function SchemaPacksModal({
           </button>
         </div>
         <div className="modal-body">
+          <label className={`schema-dropzone${dragActive ? ' is-drag' : ''}`}>
+            <Download />
+            <div className="schema-dropzone-text">
+              <strong>{uploading ? 'Uploading…' : 'Drop .proto or .zip files here'}</strong>
+              <span>or click to choose one or more files</span>
+            </div>
+            <input
+              type="file"
+              accept=".proto,.zip"
+              multiple
+              onChange={handleFileChange}
+              disabled={uploading || loading}
+            />
+          </label>
           <div className="schema-upload-row">
-            <label className="btn primary">
-              <Download /> Upload .proto or .zip
-              <input type="file" accept=".proto,.zip" onChange={handleFileChange} disabled={uploading || loading} />
-            </label>
             <button type="button" className="btn ghost" onClick={onRefresh} disabled={loading}>
               <Refresh /> Refresh
             </button>
