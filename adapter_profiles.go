@@ -1,0 +1,549 @@
+package main
+
+import (
+	"embed"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/fs"
+	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"nhooyr.io/websocket"
+)
+
+//go:embed defaults/adapter_profiles/*.json
+var defaultAdapterProfilesFS embed.FS
+
+const (
+	adapterProfilesDirName          = "adapter_profiles"
+	adapterProfilesSeededFile       = ".seeded"
+	maxAdapterProfileBytes    int64 = 1 << 20
+)
+
+var adapterProfileNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+var builtinAdapterNames = map[string]struct{}{
+	"raw":     {},
+	"appsync": {},
+}
+
+type AdapterProfile struct {
+	ManifestVersion int                    `json:"manifest_version"`
+	Name            string                 `json:"name"`
+	BaseAdapter     string                 `json:"base_adapter"`
+	Subprotocols    []string               `json:"subprotocols,omitempty"`
+	Envelope        AdapterProfileEnvelope `json:"envelope"`
+	TypeAliases     map[string]string      `json:"type_aliases,omitempty"`
+}
+
+type AdapterProfileEnvelope struct {
+	Outer       string `json:"outer"`
+	InnerBinary string `json:"inner_binary"`
+	InnerJSON   string `json:"inner_json"`
+}
+
+type AdapterProfileSummary struct {
+	Name         string            `json:"name"`
+	BaseAdapter  string            `json:"base_adapter"`
+	Subprotocols []string          `json:"subprotocols"`
+	TypeAliases  map[string]string `json:"type_aliases"`
+}
+
+type ProfileAdapter struct {
+	profile AdapterProfile
+	base    ProtocolAdapter
+}
+
+type adapterTemplateValue struct {
+	value string
+	raw   bool
+}
+
+var adapterProfileRegistry = struct {
+	sync.RWMutex
+	profiles map[string]AdapterProfile
+}{profiles: make(map[string]AdapterProfile)}
+
+func ValidateAdapterProfile(profile AdapterProfile) error {
+	if profile.ManifestVersion != 1 {
+		return fmt.Errorf("manifest_version must be 1, got %d", profile.ManifestVersion)
+	}
+	name := normalizeAdapter(profile.Name)
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if name != profile.Name || !adapterProfileNamePattern.MatchString(name) {
+		return fmt.Errorf("name %q must match [a-z0-9-]+", profile.Name)
+	}
+	if _, ok := builtinAdapterNames[name]; ok {
+		return fmt.Errorf("name %q collides with a built-in adapter", name)
+	}
+	base := normalizeAdapter(profile.BaseAdapter)
+	if _, ok := builtinAdapterNames[base]; !ok {
+		return fmt.Errorf("base_adapter must be one of raw, appsync, got %q", profile.BaseAdapter)
+	}
+	if profile.BaseAdapter != base {
+		return fmt.Errorf("base_adapter must be lowercase, got %q", profile.BaseAdapter)
+	}
+	if strings.TrimSpace(profile.Envelope.Outer) == "" {
+		return fmt.Errorf("envelope.outer is required")
+	}
+	if strings.TrimSpace(profile.Envelope.InnerBinary) == "" {
+		return fmt.Errorf("envelope.inner_binary is required")
+	}
+	if strings.TrimSpace(profile.Envelope.InnerJSON) == "" {
+		return fmt.Errorf("envelope.inner_json is required")
+	}
+	return nil
+}
+
+func NewProfileAdapter(profile AdapterProfile) (ProfileAdapter, error) {
+	if err := ValidateAdapterProfile(profile); err != nil {
+		return ProfileAdapter{}, err
+	}
+	base, err := newBuiltinProtocolAdapter(profile.BaseAdapter)
+	if err != nil {
+		return ProfileAdapter{}, err
+	}
+	return ProfileAdapter{
+		profile: cloneAdapterProfile(profile),
+		base:    base,
+	}, nil
+}
+
+func (a ProfileAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
+	return a.base.ParseClientMessage(b)
+}
+
+func (a ProfileAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
+	return a.base.EncodePayload(payload)
+}
+
+func (a ProfileAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
+	return a.base.EncodeServerMessage(msg)
+}
+
+func (a ProfileAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
+	return a.base.Heartbeat()
+}
+
+func (a ProfileAdapter) Subprotocols() []string {
+	return append([]string(nil), a.profile.Subprotocols...)
+}
+
+func (a ProfileAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
+	var innerTemplate string
+	var innerVars map[string]adapterTemplateValue
+	var err error
+	if payload.Kind == websocket.MessageBinary {
+		innerTemplate = a.profile.Envelope.InnerBinary
+		innerVars, err = a.innerBinaryVars(payload, channel)
+	} else {
+		innerTemplate = a.profile.Envelope.InnerJSON
+		innerVars, err = a.innerJSONVars(payload, channel)
+	}
+	if err != nil {
+		return EncodedServerMessage{}, err
+	}
+	inner, err := renderAdapterJSONTemplate(innerTemplate, innerVars)
+	if err != nil {
+		return EncodedServerMessage{}, fmt.Errorf("render inner envelope: %w", err)
+	}
+
+	innerString, err := json.Marshal(string(inner))
+	if err != nil {
+		return EncodedServerMessage{}, err
+	}
+	outerVars := map[string]adapterTemplateValue{
+		"sub_id":       {value: subID},
+		"channel":      {value: channel},
+		"inner_object": {value: string(inner), raw: true},
+		"inner_string": {value: string(innerString), raw: true},
+	}
+	outer, err := renderAdapterJSONTemplate(a.profile.Envelope.Outer, outerVars)
+	if err != nil {
+		return EncodedServerMessage{}, fmt.Errorf("render outer envelope: %w", err)
+	}
+	return EncodedServerMessage{Data: outer, Kind: websocket.MessageText}, nil
+}
+
+func (a ProfileAdapter) innerBinaryVars(payload EncodedPayload, channel string) (map[string]adapterTemplateValue, error) {
+	typeName := strings.TrimSpace(payload.TypeName)
+	alias := typeName
+	if mapped := a.profile.TypeAliases[typeName]; mapped != "" {
+		alias = mapped
+	}
+	return map[string]adapterTemplateValue{
+		"alias":     {value: alias},
+		"type_name": {value: typeName},
+		"channel":   {value: channel},
+		"base64":    {value: base64.StdEncoding.EncodeToString(payload.Data)},
+	}, nil
+}
+
+func (a ProfileAdapter) innerJSONVars(payload EncodedPayload, channel string) (map[string]adapterTemplateValue, error) {
+	typeName := strings.TrimSpace(payload.TypeName)
+	alias := typeName
+	if mapped := a.profile.TypeAliases[typeName]; mapped != "" {
+		alias = mapped
+	}
+	rawJSON, err := payloadJSONValue(payload)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]adapterTemplateValue{
+		"alias":     {value: alias},
+		"type_name": {value: typeName},
+		"channel":   {value: channel},
+		"json":      {value: string(rawJSON), raw: true},
+	}, nil
+}
+
+// payloadJSONValue is used only by the JSON-payload path. Binary callers must
+// use the base64 variable instead; Data is considered here only when it already
+// contains valid JSON bytes from a text payload.
+func payloadJSONValue(payload EncodedPayload) ([]byte, error) {
+	if len(payload.Data) > 0 && json.Valid(payload.Data) {
+		return append([]byte(nil), payload.Data...), nil
+	}
+	if payload.Value != nil {
+		data, err := json.Marshal(payload.Value)
+		if err != nil {
+			return nil, fmt.Errorf("json payload value: %w", err)
+		}
+		return data, nil
+	}
+	return []byte(`null`), nil
+}
+
+func renderAdapterJSONTemplate(tmpl string, vars map[string]adapterTemplateValue) ([]byte, error) {
+	rendered, err := renderAdapterTemplate(tmpl, vars)
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid([]byte(rendered)) {
+		return nil, fmt.Errorf("rendered template is not valid JSON: %s", rendered)
+	}
+	return []byte(rendered), nil
+}
+
+func renderAdapterTemplate(tmpl string, vars map[string]adapterTemplateValue) (string, error) {
+	var out strings.Builder
+	for i := 0; i < len(tmpl); {
+		start := strings.Index(tmpl[i:], "${")
+		if start < 0 {
+			out.WriteString(tmpl[i:])
+			break
+		}
+		start += i
+		out.WriteString(tmpl[i:start])
+		end := strings.IndexByte(tmpl[start+2:], '}')
+		if end < 0 {
+			return "", fmt.Errorf("unclosed variable at byte %d", start)
+		}
+		end += start + 2
+		name := tmpl[start+2 : end]
+		value, ok := vars[name]
+		if !ok {
+			return "", fmt.Errorf("missing variable %q", name)
+		}
+		if value.raw {
+			out.WriteString(value.value)
+		} else {
+			escaped, err := jsonStringContent(value.value)
+			if err != nil {
+				return "", err
+			}
+			out.WriteString(escaped)
+		}
+		i = end + 1
+	}
+	return out.String(), nil
+}
+
+func jsonStringContent(value string) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	if len(data) < 2 {
+		return "", fmt.Errorf("failed to encode JSON string")
+	}
+	return string(data[1 : len(data)-1]), nil
+}
+
+func SeedDefaultAdapterProfiles(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	seeded, err := readSeededAdapterProfiles(dir)
+	if err != nil {
+		return err
+	}
+	if len(seeded) == 0 {
+		hasProfiles, err := hasAdapterProfileFiles(dir)
+		if err != nil {
+			return err
+		}
+		if hasProfiles {
+			if err := markEmbeddedAdapterProfilesSeeded(dir, seeded); err != nil {
+				return err
+			}
+			return writeSeededAdapterProfiles(dir, seeded)
+		}
+	}
+	changed := false
+	if err := fs.WalkDir(defaultAdapterProfilesFS, "defaults/adapter_profiles", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			return nil
+		}
+		if seeded[entry.Name()] {
+			return nil
+		}
+		target := filepath.Join(dir, entry.Name())
+		if _, err := os.Stat(target); err == nil {
+			seeded[entry.Name()] = true
+			changed = true
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		data, err := readEmbeddedAdapterProfile(path)
+		if err != nil {
+			return err
+		}
+		if err := atomicWriteFile(target, data, 0o644); err != nil {
+			return err
+		}
+		seeded[entry.Name()] = true
+		changed = true
+		return nil
+	}); err != nil {
+		return err
+	}
+	if changed {
+		return writeSeededAdapterProfiles(dir, seeded)
+	}
+	return nil
+}
+
+func hasAdapterProfileFiles(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func markEmbeddedAdapterProfilesSeeded(dir string, seeded map[string]bool) error {
+	return fs.WalkDir(defaultAdapterProfilesFS, "defaults/adapter_profiles", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			return nil
+		}
+		seeded[entry.Name()] = true
+		return nil
+	})
+}
+
+func readSeededAdapterProfiles(dir string) (map[string]bool, error) {
+	seeded := map[string]bool{}
+	data, err := os.ReadFile(filepath.Join(dir, adapterProfilesSeededFile))
+	if os.IsNotExist(err) {
+		return seeded, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		name := strings.TrimSpace(line)
+		if name != "" {
+			seeded[name] = true
+		}
+	}
+	return seeded, nil
+}
+
+func writeSeededAdapterProfiles(dir string, seeded map[string]bool) error {
+	names := make([]string, 0, len(seeded))
+	for name := range seeded {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return atomicWriteFile(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
+}
+
+func atomicWriteFile(path string, data []byte, perm fs.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func readEmbeddedAdapterProfile(path string) ([]byte, error) {
+	file, err := defaultAdapterProfilesFS.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readLimitedAdapterProfile(file)
+}
+
+func readLimitedAdapterProfile(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxAdapterProfileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxAdapterProfileBytes {
+		return nil, fmt.Errorf("adapter profile exceeds 1 MB")
+	}
+	return data, nil
+}
+
+func readAdapterProfileFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readLimitedAdapterProfile(file)
+}
+
+func LoadAdapterProfiles(dir string) error {
+	if err := SeedDefaultAdapterProfiles(dir); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	profiles := make(map[string]AdapterProfile)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		profile, err := readAdapterProfile(path)
+		if err != nil {
+			log.Printf("adapter profile %s skipped: %v", entry.Name(), err)
+			continue
+		}
+		if _, exists := profiles[profile.Name]; exists {
+			log.Printf("adapter profile %s skipped: duplicate profile name %q", entry.Name(), profile.Name)
+			continue
+		}
+		profiles[profile.Name] = profile
+	}
+	setAdapterProfiles(profiles)
+	return nil
+}
+
+func readAdapterProfile(path string) (AdapterProfile, error) {
+	data, err := readAdapterProfileFile(path)
+	if err != nil {
+		return AdapterProfile{}, err
+	}
+	var profile AdapterProfile
+	if err := json.Unmarshal(data, &profile); err != nil {
+		return AdapterProfile{}, err
+	}
+	if err := ValidateAdapterProfile(profile); err != nil {
+		return AdapterProfile{}, err
+	}
+	return cloneAdapterProfile(profile), nil
+}
+
+func AdapterProfileSummaries() []AdapterProfileSummary {
+	profiles := snapshotAdapterProfiles()
+	summaries := make([]AdapterProfileSummary, 0, len(profiles))
+	for _, profile := range profiles {
+		typeAliases := cloneStringMap(profile.TypeAliases)
+		if typeAliases == nil {
+			typeAliases = map[string]string{}
+		}
+		subprotocols := append([]string(nil), profile.Subprotocols...)
+		if subprotocols == nil {
+			subprotocols = []string{}
+		}
+		summaries = append(summaries, AdapterProfileSummary{
+			Name:         profile.Name,
+			BaseAdapter:  profile.BaseAdapter,
+			Subprotocols: subprotocols,
+			TypeAliases:  typeAliases,
+		})
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		return summaries[i].Name < summaries[j].Name
+	})
+	return summaries
+}
+
+func setAdapterProfiles(profiles map[string]AdapterProfile) {
+	next := make(map[string]AdapterProfile, len(profiles))
+	for name, profile := range profiles {
+		next[normalizeAdapter(name)] = cloneAdapterProfile(profile)
+	}
+	adapterProfileRegistry.Lock()
+	adapterProfileRegistry.profiles = next
+	adapterProfileRegistry.Unlock()
+}
+
+func snapshotAdapterProfiles() map[string]AdapterProfile {
+	adapterProfileRegistry.RLock()
+	defer adapterProfileRegistry.RUnlock()
+	profiles := make(map[string]AdapterProfile, len(adapterProfileRegistry.profiles))
+	for name, profile := range adapterProfileRegistry.profiles {
+		profiles[name] = cloneAdapterProfile(profile)
+	}
+	return profiles
+}
+
+func adapterProfile(name string) (AdapterProfile, bool) {
+	adapterProfileRegistry.RLock()
+	defer adapterProfileRegistry.RUnlock()
+	profile, ok := adapterProfileRegistry.profiles[normalizeAdapter(name)]
+	return cloneAdapterProfile(profile), ok
+}
+
+func cloneAdapterProfile(profile AdapterProfile) AdapterProfile {
+	profile.Subprotocols = append([]string(nil), profile.Subprotocols...)
+	profile.TypeAliases = cloneStringMap(profile.TypeAliases)
+	return profile
+}

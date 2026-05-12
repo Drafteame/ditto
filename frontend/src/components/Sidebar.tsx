@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react'
-import type { Mock, ServerInfo } from '../types'
+import { useState, useCallback, useMemo } from 'react'
+import type { ChannelMode, Mock, ServerInfo } from '../types'
 import * as api from '../api'
+import { useChannelModeStore } from '../stores/useChannelModeStore'
 import { describeSequence } from '../sequence'
 import { statusClass } from '../status'
-import { ChevronLeft, ChevronRight, Copy, Edit, Sequence, Trash, X } from './icons'
+import { Check, ChevronLeft, ChevronRight, Copy, Edit, Plus, Sequence, Trash, X } from './icons'
 import { useConfirm } from './ConfirmDialog'
 
 interface SidebarProps {
@@ -63,6 +64,7 @@ export function Sidebar({
           onCreateMock={onCreateMock}
           showToast={showToast}
         />
+        <SavedChannelsPanel showToast={showToast} />
       </aside>
     </>
   )
@@ -201,7 +203,11 @@ function TargetPanel({
   showToast: (message: string, kind?: 'warn') => void
 }) {
   const [targetValue, setTargetValue] = useState<string | null>(null)
+  const [liveTargetValue, setLiveTargetValue] = useState<string | null>(null)
+  const liveTarget = useChannelModeStore(state => state.liveTarget)
+  const setLiveTarget = useChannelModeStore(state => state.setLiveTarget)
   const displayTarget = targetValue ?? serverInfo?.target ?? ''
+  const displayLiveTarget = liveTargetValue ?? liveTarget ?? serverInfo?.live_target ?? ''
 
   const handleUpdate = useCallback(async () => {
     const url = displayTarget.trim()
@@ -213,6 +219,21 @@ function TargetPanel({
       showToast(`Failed to set target: ${(err as Error).message}`, 'warn')
     }
   }, [displayTarget, onChanged, showToast])
+
+  const handleLiveUpdate = useCallback(async () => {
+    const url = displayLiveTarget.trim()
+    if (url && !/^wss?:\/\//i.test(url)) {
+      showToast('Live Target must start with ws:// or wss://', 'warn')
+      return
+    }
+    try {
+      await setLiveTarget(url)
+      setLiveTargetValue(null)
+      showToast('Live Target updated')
+    } catch (err) {
+      showToast(`Failed to set Live Target: ${(err as Error).message}`, 'warn')
+    }
+  }, [displayLiveTarget, setLiveTarget, showToast])
 
   return (
     <div className="sb-section">
@@ -227,6 +248,20 @@ function TargetPanel({
           onKeyDown={e => e.key === 'Enter' && handleUpdate()}
         />
         <button type="button" onClick={handleUpdate} className="btn">
+          Set
+        </button>
+      </div>
+      <div className="sb-label mt-3">Live Target (WS upstream)</div>
+      <div className="field">
+        <input
+          type="text"
+          value={displayLiveTarget}
+          onChange={e => setLiveTargetValue(e.target.value)}
+          placeholder="wss://ws.example.com"
+          className="input"
+          onKeyDown={e => e.key === 'Enter' && handleLiveUpdate()}
+        />
+        <button type="button" onClick={handleLiveUpdate} className="btn">
           Set
         </button>
       </div>
@@ -280,6 +315,158 @@ function ConnectPanel({ serverInfo }: { serverInfo: ServerInfo | null }) {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// --- Saved Channels Panel ---
+
+function SavedChannelsPanel({ showToast }: { showToast: (message: string, kind?: 'warn') => void }) {
+  const modes = useChannelModeStore(state => state.modes)
+  const liveTarget = useChannelModeStore(state => state.liveTarget)
+  const addChannel = useChannelModeStore(state => state.addChannel)
+  const deleteChannel = useChannelModeStore(state => state.deleteChannel)
+  const confirm = useConfirm()
+  const [adding, setAdding] = useState(false)
+  const [channel, setChannel] = useState('')
+  const [mode, setMode] = useState<ChannelMode>('mock')
+  const [saving, setSaving] = useState(false)
+
+  const savedChannels = useMemo(
+    () => Object.values(modes).sort((a, b) => a.channel.localeCompare(b.channel)),
+    [modes],
+  )
+
+  const resetForm = useCallback(() => {
+    setChannel('')
+    setMode('mock')
+    setAdding(false)
+  }, [])
+
+  const handleSave = useCallback(async () => {
+    const trimmed = channel.trim()
+    if (!trimmed) {
+      showToast('Channel is required', 'warn')
+      return
+    }
+    if (/[\r\n]/.test(trimmed)) {
+      showToast('Channel cannot contain newlines', 'warn')
+      return
+    }
+    if (modes[trimmed]) {
+      showToast('Channel already saved', 'warn')
+      return
+    }
+    if ((mode === 'live' || mode === 'mixed') && !liveTarget) {
+      showToast('Configure a Live Target before using live or mixed mode', 'warn')
+      return
+    }
+    setSaving(true)
+    try {
+      await addChannel(trimmed, mode)
+      resetForm()
+      showToast('Channel saved')
+    } catch (err) {
+      showToast(`Failed to save channel: ${(err as Error).message}`, 'warn')
+    } finally {
+      setSaving(false)
+    }
+  }, [addChannel, channel, liveTarget, mode, modes, resetForm, showToast])
+
+  const handleDelete = useCallback(
+    async (name: string) => {
+      const ok = await confirm({
+        title: 'Delete saved channel?',
+        message: (
+          <>
+            <code className="font-mono text-fg-0">{name}</code> will be removed from saved channels.
+          </>
+        ),
+        confirmLabel: 'Delete',
+        danger: true,
+      })
+      if (!ok) return
+      try {
+        await deleteChannel(name)
+        showToast('Channel deleted')
+      } catch (err) {
+        showToast(`Failed to delete channel: ${(err as Error).message}`, 'warn')
+      }
+    },
+    [confirm, deleteChannel, showToast],
+  )
+
+  return (
+    <div className="sb-section border-t border-line">
+      <div className="sb-label">
+        <span>
+          Channels <span className="count">{savedChannels.length}</span>
+        </span>
+        <button type="button" className="link" onClick={() => setAdding(true)} title="Add saved channel">
+          <Plus size={12} /> Add
+        </button>
+      </div>
+      {adding && (
+        <div className="space-y-2 mb-3">
+          <input
+            className="input"
+            value={channel}
+            onChange={e => setChannel(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleSave()}
+            placeholder="/events/example"
+            autoFocus
+          />
+          <div className="field">
+            <select
+              className="select"
+              value={mode}
+              title={!liveTarget ? 'Configura un Live Target en Settings' : ''}
+              onChange={e => setMode(e.target.value as ChannelMode)}
+            >
+              <option value="mock">Mock</option>
+              <option value="live" disabled={!liveTarget}>Live</option>
+              <option value="record">Record</option>
+              <option value="mixed" disabled={!liveTarget}>Mixed</option>
+            </select>
+            <button type="button" className="btn icon" onClick={handleSave} disabled={saving} title="Save channel">
+              <Check size={14} />
+            </button>
+            <button type="button" className="btn ghost icon" onClick={resetForm} title="Cancel">
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+      {savedChannels.length === 0 ? (
+        <div className="py-3 text-[11.5px] text-fg-3">
+          No saved channels. Add one to mock a channel without a connected client.
+        </div>
+      ) : (
+        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+          {savedChannels.map(cfg => (
+            <div
+              key={cfg.channel}
+              className="flex items-center gap-2 border border-line bg-bg-0 px-2 py-1.5 rounded-sm"
+            >
+              <span className="min-w-0 flex-1 truncate font-mono text-[11.5px]" title={cfg.channel}>
+                {cfg.channel}
+              </span>
+              <span className="px-1.5 py-0.5 rounded-sm border border-line text-[10px] uppercase text-fg-2">
+                {cfg.mode || 'mock'}
+              </span>
+              <button
+                type="button"
+                className="icon-btn danger"
+                onClick={() => handleDelete(cfg.channel)}
+                title="Delete saved channel"
+                aria-label={`Delete ${cfg.channel}`}
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

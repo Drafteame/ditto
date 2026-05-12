@@ -23,12 +23,13 @@ var webFS embed.FS
 // LogEvent represents a single request passing through Ditto.
 type LogEvent struct {
 	Timestamp      string              `json:"timestamp"`
-	Type           string              `json:"type"` // MOCK, PROXY, MISS
+	Type           string              `json:"type"` // MOCK, PROXY, MISS, SOCKET, MODE, RECORD
 	Method         string              `json:"method"`
 	Path           string              `json:"path"`
 	Status         int                 `json:"status"`
 	DurationMs     int64               `json:"duration_ms"`
 	ResponseBody   string              `json:"response_body,omitempty"`
+	Source         string              `json:"source,omitempty"`
 	RequestHeaders map[string][]string `json:"request_headers,omitempty"`
 	MockIndex      int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
 	SequenceStep   int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
@@ -53,17 +54,25 @@ func (b *EventBus) Subscribe() chan LogEvent {
 	return ch
 }
 
+// Unsubscribe stops broadcasting to ch.
+//
+// The channel is intentionally not closed: Publish snapshots subscribers under
+// the lock and sends without the lock held, so a concurrent close could panic.
+// Owning goroutines should exit on their own signal, usually r.Context().Done().
 func (b *EventBus) Unsubscribe(ch chan LogEvent) {
 	b.mu.Lock()
 	delete(b.clients, ch)
-	close(ch)
 	b.mu.Unlock()
 }
 
 func (b *EventBus) Publish(event LogEvent) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	clients := make([]chan LogEvent, 0, len(b.clients))
 	for ch := range b.clients {
+		clients = append(clients, ch)
+	}
+	b.mu.Unlock()
+	for _, ch := range clients {
 		select {
 		case ch <- event:
 		default: // drop if client is slow
@@ -73,17 +82,18 @@ func (b *EventBus) Publish(event LogEvent) {
 
 // ServerInfo holds metadata shown in the UI footer and connect panel.
 type ServerInfo struct {
-	Port     int      `json:"port"`
-	Target   string   `json:"target"`
-	HTTPS    bool     `json:"https"`
-	MocksDir string   `json:"mocks_dir"`
-	LocalIPs []string `json:"local_ips"`
-	Version  string   `json:"version"`
+	Port       int      `json:"port"`
+	Target     string   `json:"target"`
+	LiveTarget string   `json:"live_target,omitempty"`
+	HTTPS      bool     `json:"https"`
+	MocksDir   string   `json:"mocks_dir"`
+	LocalIPs   []string `json:"local_ips"`
+	Version    string   `json:"version"`
 }
 
 // RegisterUI sets up the dashboard routes on the given mux.
 // If serveUI is true, the embedded static files are served; otherwise only the API is available.
-func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *ProxyManager, info ServerInfo, serveUI bool) {
+func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *ProxyManager, liveTarget func() string, info ServerInfo, serveUI bool) {
 	// Serve embedded static files at /__ditto__/ (only when UI is enabled)
 	if serveUI {
 		webContent, _ := fs.Sub(webFS, "frontend/dist")
@@ -108,10 +118,15 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 		defer bus.Unsubscribe(ch)
 
 		ctx := r.Context()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-heartbeat.C:
+				fmt.Fprintf(w, ": keepalive\n\n")
+				flusher.Flush()
 			case event := <-ch:
 				data, _ := json.Marshal(event)
 				fmt.Fprintf(w, "data: %s\n\n", data)
@@ -133,16 +148,21 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 					}
 				}
 			}
+			currentLiveTarget := info.LiveTarget
+			if liveTarget != nil {
+				currentLiveTarget = liveTarget()
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"mocks": store.All(),
 				"info": ServerInfo{
-					Port:     actualPort,
-					Target:   proxyMgr.Target(),
-					HTTPS:    info.HTTPS,
-					MocksDir: info.MocksDir,
-					LocalIPs: info.LocalIPs,
-					Version:  info.Version,
+					Port:       actualPort,
+					Target:     proxyMgr.Target(),
+					LiveTarget: currentLiveTarget,
+					HTTPS:      info.HTTPS,
+					MocksDir:   info.MocksDir,
+					LocalIPs:   info.LocalIPs,
+					Version:    info.Version,
 				},
 			})
 

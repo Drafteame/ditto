@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -73,25 +74,37 @@ func (pm *ProxyManager) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 
 // ServerConfig holds all the parameters needed to create and run the HTTP server.
 type ServerConfig struct {
-	Port     int
-	Target   string
-	MocksDir string
-	HTTPS    bool
-	CertDir  string
-	ServeUI  bool
-	JSONLogs bool
+	Port        int
+	Target      string
+	LiveTarget  string
+	MocksDir    string
+	Layout      DataLayout
+	HTTPS       bool
+	CertDir     string
+	ServeUI     bool
+	JSONLogs    bool
+	ConfigStore *ConfigStore
 }
 
 // Server holds the running server state.
 type Server struct {
-	Mux      *http.ServeMux
-	Store    *MockStore
-	Bus      *EventBus
-	ProxyMgr *ProxyManager
-	Info     ServerInfo
-	Config   ServerConfig
-	CertPath string
-	KeyPath  string
+	Mux        *http.ServeMux
+	Store      *MockStore
+	Bus        *EventBus
+	ProxyMgr   *ProxyManager
+	SocketHub  *SocketHub
+	Modes      *ChannelModeRegistry
+	Recorder   *Recorder
+	Live       *LiveBridge
+	LiveTarget *LiveTargetManager
+	Schemas    *SchemaRegistry
+	Templates  *EventTemplateRegistry
+	Sequences  *EventSequenceRegistry
+	Player     *SequencePlayer
+	Info       ServerInfo
+	Config     ServerConfig
+	CertPath   string
+	KeyPath    string
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -99,6 +112,28 @@ type Server struct {
 
 // NewServer creates and configures the HTTP server with all routes.
 func NewServer(cfg ServerConfig) (*Server, error) {
+	if cfg.MocksDir == "" {
+		return nil, fmt.Errorf("server config mocks dir is required")
+	}
+	if cfg.Layout.DescriptorsDir == "" {
+		return nil, fmt.Errorf("server config layout with descriptors dir is required")
+	}
+	if cfg.Layout.EventTemplatesDir == "" {
+		return nil, fmt.Errorf("server config layout with event templates dir is required")
+	}
+	if cfg.Layout.SequencesDir == "" {
+		return nil, fmt.Errorf("server config layout with sequences dir is required")
+	}
+	if cfg.Layout.AdapterProfilesDir == "" {
+		return nil, fmt.Errorf("server config layout with adapter profiles dir is required")
+	}
+	if cfg.Layout.RecordingsDir == "" {
+		return nil, fmt.Errorf("server config layout with recordings dir is required")
+	}
+	if cfg.Layout.ChannelModesDir == "" {
+		return nil, fmt.Errorf("server config layout with channel modes dir is required")
+	}
+
 	store := NewMockStore(cfg.MocksDir)
 	if err := store.Load(); err != nil {
 		return nil, fmt.Errorf("failed to load mocks: %w", err)
@@ -106,6 +141,40 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	bus := NewEventBus()
 	proxyMgr := NewProxyManager(cfg.Target)
+	jsonLogs := cfg.JSONLogs
+	modeRegistry, err := NewChannelModeRegistry(cfg.Layout.ChannelModesDir, bus, jsonLogs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load channel mode registry: %w", err)
+	}
+	socketHub := NewSocketHub(bus, jsonLogs, modeRegistry)
+	descriptorsDir := cfg.Layout.DescriptorsDir
+	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load schema registry: %w", err)
+	}
+	socketHub.SetSchemas(schemaRegistry)
+	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load event template registry: %w", err)
+	}
+	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
+	}
+	if err := LoadAdapterProfiles(cfg.Layout.AdapterProfilesDir); err != nil {
+		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
+	}
+	recorder, err := NewRecorder(cfg.Layout.RecordingsDir, schemaRegistry, modeRegistry, bus, jsonLogs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load recorder: %w", err)
+	}
+	modeRegistry.OnChange(recorder.HandleModeChange)
+	socketHub.SetRecorder(recorder)
+	liveTargets := NewLiveTargetManager(cfg.LiveTarget, cfg.ConfigStore)
+	liveBridge := NewLiveBridge(liveTargets, socketHub)
+	socketHub.SetLiveBridge(liveBridge)
+	playerBroadcaster := NewPlayerBroadcaster()
+	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster, nil)
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
@@ -123,21 +192,39 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		ipStrings = append(ipStrings, ip.String())
 	}
 	info := ServerInfo{
-		Port:     cfg.Port,
-		Target:   cfg.Target,
-		HTTPS:    cfg.HTTPS,
-		MocksDir: cfg.MocksDir,
-		LocalIPs: ipStrings,
-		Version:  version,
+		Port:       cfg.Port,
+		Target:     cfg.Target,
+		LiveTarget: cfg.LiveTarget,
+		HTTPS:      cfg.HTTPS,
+		MocksDir:   cfg.MocksDir,
+		LocalIPs:   ipStrings,
+		Version:    version,
 	}
 
-	RegisterUI(mux, store, bus, proxyMgr, info, cfg.ServeUI)
-
-	jsonLogs := cfg.JSONLogs
+	RegisterUI(mux, store, bus, proxyMgr, liveTargets.Target, info, cfg.ServeUI)
+	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
+	RegisterChannelModeRoutes(mux, modeRegistry)
+	RegisterLiveTargetRoutes(mux, liveTargets)
+	RegisterRecordingRoutes(mux, recorder)
+	RegisterSchemaRoutes(mux, schemaRegistry)
+	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub, schemaRegistry)
+	RegisterSequenceRoutes(mux, eventSequences, sequencePlayer, playerBroadcaster)
 
 	// Main proxy/mock handler
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/__ditto__/") {
+			return
+		}
+		if IsWebSocketRequest(r) {
+			if !isAllowedSocketAPIRequest(r) {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
+			if shouldProxyWebSocket(r) && proxyMgr.Target() != "" {
+				proxyMgr.ServeHTTP(w, r)
+				return
+			}
+			socketHub.ServeHTTP(w, r)
 			return
 		}
 
@@ -237,14 +324,23 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	})
 
 	return &Server{
-		Mux:      mux,
-		Store:    store,
-		Bus:      bus,
-		ProxyMgr: proxyMgr,
-		Info:     info,
-		Config:   cfg,
-		CertPath: certPath,
-		KeyPath:  keyPath,
+		Mux:        mux,
+		Store:      store,
+		Bus:        bus,
+		ProxyMgr:   proxyMgr,
+		SocketHub:  socketHub,
+		Modes:      modeRegistry,
+		Recorder:   recorder,
+		Live:       liveBridge,
+		LiveTarget: liveTargets,
+		Schemas:    schemaRegistry,
+		Templates:  eventTemplates,
+		Sequences:  eventSequences,
+		Player:     sequencePlayer,
+		Info:       info,
+		Config:     cfg,
+		CertPath:   certPath,
+		KeyPath:    keyPath,
 	}, nil
 }
 
@@ -296,6 +392,11 @@ func (s *Server) ListenAndServeAsync() error {
 func (s *Server) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.Player != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = s.Player.Shutdown(ctx)
+		cancel()
+	}
 	if s.listener != nil {
 		err := s.listener.Close()
 		s.listener = nil
@@ -397,14 +498,18 @@ func (rc *responseCapture) Write(b []byte) (int, error) {
 
 // logRequest writes a single request log line.
 func logRequest(jsonMode bool, e LogEvent) {
+	logRequestTo(os.Stdout, jsonMode, e)
+}
+
+func logRequestTo(w io.Writer, jsonMode bool, e LogEvent) {
 	if jsonMode {
 		data, err := json.Marshal(e)
 		if err != nil {
 			return
 		}
-		fmt.Fprintln(os.Stdout, string(data))
+		fmt.Fprintln(w, string(data))
 		return
 	}
-	fmt.Fprintf(os.Stdout, "%s %-6s %s %s → %d (%dms)\n",
+	fmt.Fprintf(w, "%s %-6s %s %s → %d (%dms)\n",
 		e.Timestamp, e.Type, e.Method, e.Path, e.Status, e.DurationMs)
 }

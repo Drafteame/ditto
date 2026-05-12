@@ -189,3 +189,49 @@ export const Braces = (p: IconProps) => (
   </Svg>
 )
 
+export const Send = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M22 2L11 13" />
+    <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+  </Svg>
+)
+
+export const Play = (p: IconProps) => (
+  <Svg {...p}>
+    <polygon points="6 3 20 12 6 21 6 3" />
+  </Svg>
+)
+
+export const Pause = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="6" y="4" width="4" height="16" rx="1" />
+    <rect x="14" y="4" width="4" height="16" rx="1" />
+  </Svg>
+)
+
+export const Stop = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="5" y="5" width="14" height="14" rx="2" />
+  </Svg>
+)
+
+export const Grip = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="9" cy="6" r="1" />
+    <circle cx="9" cy="12" r="1" />
+    <circle cx="9" cy="18" r="1" />
+    <circle cx="15" cy="6" r="1" />
+    <circle cx="15" cy="12" r="1" />
+    <circle cx="15" cy="18" r="1" />
+  </Svg>
+)
+
+export const Radio = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="2" />
+    <path d="M16.24 7.76a6 6 0 0 1 0 8.48" />
+    <path d="M7.76 16.24a6 6 0 0 1 0-8.48" />
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+    <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+  </Svg>
+)

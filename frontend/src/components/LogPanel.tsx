@@ -13,9 +13,9 @@ interface LogPanelProps {
   onSaveAsMock: (entry: LogEntry) => void
 }
 
-type FilterType = 'ALL' | 'MOCK' | 'PROXY' | 'MISS'
+type FilterType = 'ALL' | 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET'
 
-const FILTERS: FilterType[] = ['ALL', 'MOCK', 'PROXY', 'MISS']
+const FILTERS: FilterType[] = ['ALL', 'MOCK', 'PROXY', 'MISS', 'SOCKET']
 
 export function LogPanel({
   entries,
@@ -31,7 +31,7 @@ export function LogPanel({
   const containerRef = useRef<HTMLDivElement>(null)
 
   const counts = useMemo(() => {
-    const c = { ALL: entries.length, MOCK: 0, PROXY: 0, MISS: 0 } as Record<FilterType, number>
+    const c = { ALL: entries.length, MOCK: 0, PROXY: 0, MISS: 0, SOCKET: 0 } as Record<FilterType, number>
     entries.forEach(e => {
       c[e.type as FilterType] = (c[e.type as FilterType] || 0) + 1
     })
