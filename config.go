@@ -4,21 +4,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 )
 
 // Config holds persistent user settings.
 type Config struct {
-	Port   int    `json:"port"`
-	Target string `json:"target"`
+	Port       int    `json:"port"`
+	Target     string `json:"target"`
+	LiveTarget string `json:"live_target,omitempty"`
 }
 
 // DefaultConfig returns the default settings.
 func DefaultConfig() Config {
 	return Config{
-		Port:   8888,
-		Target: "",
+		Port:       8888,
+		Target:     "",
+		LiveTarget: "",
 	}
 }
 
@@ -31,14 +32,14 @@ type ConfigStore struct {
 
 // NewConfigStore creates a store that reads/writes to the data directory.
 func NewConfigStore() (*ConfigStore, error) {
-	dataDir, err := DataDir()
+	layout, err := DataDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolving data dir: %w", err)
 	}
 
 	cs := &ConfigStore{
 		config:   DefaultConfig(),
-		filePath: filepath.Join(dataDir, "config.json"),
+		filePath: layout.ConfigPath,
 	}
 
 	// Load existing config if present
@@ -49,6 +50,7 @@ func NewConfigStore() (*ConfigStore, error) {
 				cs.config.Port = saved.Port
 			}
 			cs.config.Target = saved.Target
+			cs.config.LiveTarget = saved.LiveTarget
 		}
 	}
 
@@ -75,6 +77,14 @@ func (cs *ConfigStore) SetTarget(target string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.config.Target = target
+	return cs.save()
+}
+
+// SetLiveTarget updates the WebSocket upstream target and saves.
+func (cs *ConfigStore) SetLiveTarget(target string) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.config.LiveTarget = target
 	return cs.save()
 }
 

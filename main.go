@@ -16,6 +16,7 @@ var version = "dev"
 func main() {
 	port := flag.Int("port", 8888, "Port to listen on")
 	target := flag.String("target", "", "Target backend URL to proxy unmatched requests")
+	liveTarget := flag.String("live-target", "", "WebSocket upstream URL for live channel mode")
 	mocksDir := flag.String("mocks", "", "Directory containing mock JSON files (default: persistent app data)")
 	https := flag.Bool("https", false, "Enable HTTPS using a self-signed certificate")
 	certDir := flag.String("certs", "./certs", "Directory to store the self-signed certificate")
@@ -50,6 +51,10 @@ func main() {
 	savedCfg := cfgStore.Get()
 
 	// Resolve mocks directory: explicit flag > persistent storage
+	layout, err := DataDir()
+	if err != nil {
+		log.Fatalf("Failed to determine data directory: %v", err)
+	}
 	if *mocksDir == "" {
 		defaultDir, err := DefaultMocksDir()
 		if err != nil {
@@ -65,15 +70,21 @@ func main() {
 	if *target == "" && savedCfg.Target != "" {
 		*target = savedCfg.Target
 	}
+	if *liveTarget == "" && savedCfg.LiveTarget != "" {
+		*liveTarget = savedCfg.LiveTarget
+	}
 
 	cfg := ServerConfig{
-		Port:     *port,
-		Target:   *target,
-		MocksDir: *mocksDir,
-		HTTPS:    *https,
-		CertDir:  *certDir,
-		ServeUI:  true,
-		JSONLogs: *logFormat == "json",
+		Port:        *port,
+		Target:      *target,
+		LiveTarget:  *liveTarget,
+		MocksDir:    *mocksDir,
+		Layout:      layout,
+		HTTPS:       *https,
+		CertDir:     *certDir,
+		ServeUI:     true,
+		JSONLogs:    *logFormat == "json",
+		ConfigStore: cfgStore,
 	}
 
 	srv, err := NewServer(cfg)

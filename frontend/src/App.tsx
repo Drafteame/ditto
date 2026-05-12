@@ -1,154 +1,164 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import type { LogEntry, Mock, ServerInfo, UpdateInfo } from './types'
-import { nextCursor } from './sequence'
+import { useCallback, useEffect, useRef, useMemo } from 'react'
+import type { LogEntry } from './types'
+import { useAppShellState } from './hooks/useAppShellState'
 import { useSSE } from './hooks/useSSE'
+import { useSequenceEvents } from './hooks/useSequenceEvents'
 import { useToast } from './hooks/useToast'
+import { useAppShortcuts } from './hooks/useAppShortcuts'
 import * as api from './api'
-import { Header } from './components/Header'
-import { UpdateBanner } from './components/UpdateBanner'
-import { Sidebar, CollapsedSidebarRail } from './components/Sidebar'
-import { LogPanel, LOG_SEARCH_INPUT_ID } from './components/LogPanel'
-import { Drawer } from './components/Drawer'
-import { MockEditorModal, createNewMockState, createEditMockState } from './components/MockEditorModal'
-import type { MockEditorState } from './components/MockEditorModal'
-import { QRModal } from './components/QRModal'
-import { ToastContainer } from './components/ToastContainer'
+import { useEventTemplateStore } from './stores/useEventTemplateStore'
+import { useSequenceStore } from './stores/useSequenceStore'
+import { useSchemaStore } from './stores/useSchemaStore'
+import { useSocketStore } from './stores/useSocketStore'
+import { useChannelModeStore } from './stores/useChannelModeStore'
+import { useRecordingStore } from './stores/useRecordingStore'
+import { createNewMockState, createEditMockState } from './components/MockEditorModal'
+import { AppShell } from './components/AppShell'
+import { RequestsView } from './views/RequestsView'
+import { SocketsView } from './views/SocketsView'
+import { TemplatesView } from './views/TemplatesView'
+import { SequencesView } from './views/SequencesView'
+import { RecordingsView } from './views/RecordingsView'
 
-let nextLogId = 0
+function isInsideWails(): boolean { return new URLSearchParams(window.location.search).get('desktop') === '1' }
+function isMobileDevice(): boolean { return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) }
 
-function isInsideWails(): boolean {
-  return new URLSearchParams(window.location.search).get('desktop') === '1'
-}
-
-function isMobileDevice(): boolean {
-  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-}
+const views = { requests: RequestsView, sockets: SocketsView, templates: TemplatesView, sequences: SequencesView, recordings: RecordingsView }
 
 export default function App() {
-  const [mocks, setMocks] = useState<Mock[]>([])
-  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([])
-  const [connected, setConnected] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [drawerWidth, setDrawerWidth] = useState(480)
-  const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
-  const [modalState, setModalState] = useState<MockEditorState | null>(null)
-  const [qrOpen, setQrOpen] = useState(false)
+  const { mock, log, ui, counts } = useAppShellState()
+  const { mocks, serverInfo, loadMocks, reloadMocks, advanceSequenceCursor } = mock
+  const { logEntries, connected, selectedLogId, setConnected, appendLogEvent, clearLog, selectLog } = log
+  const { sidebarOpen, sidebarCollapsed, activeView, drawerWidth, updateInfo, modalState, qrOpen, setSidebarOpen, toggleSidebarOpen, setSidebarCollapsed, toggleSidebarCollapsed, setDrawerWidth, setUpdateInfo, setModalState, setQrOpen, setActiveView } = ui
+  const { connectedClientCount, channelCount, eventTemplateCount, sequenceCount, recordingCount } = counts
   const { toasts, showToast } = useToast()
 
   const isDesktop = useRef(isInsideWails()).current
   const isMobile = useRef(isMobileDevice()).current
+  const socketRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const modeRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const recordingRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const loadMocks = useCallback(async () => {
-    try {
-      const data = await api.fetchMocks()
-      setMocks(data.mocks)
-      setServerInfo(data.info)
-    } catch (err) {
-      console.error('Failed to load mocks:', err)
+  const refreshData = useCallback(() => {
+    loadMocks()
+    useSocketStore.getState().loadClients()
+    useSocketStore.getState().loadAdapterProfiles()
+    useChannelModeStore.getState().loadModes()
+    useChannelModeStore.getState().loadLiveTarget()
+    useRecordingStore.getState().loadRecordings()
+    useSchemaStore.getState().loadSchemas()
+    useEventTemplateStore.getState().loadTemplates()
+    useSequenceStore.getState().loadSequences()
+  }, [loadMocks])
+
+  const scheduleSocketClientRefresh = useCallback(() => {
+    if (socketRefreshTimer.current) {
+      clearTimeout(socketRefreshTimer.current)
     }
+    socketRefreshTimer.current = setTimeout(() => {
+      useSocketStore.getState().loadClients()
+      socketRefreshTimer.current = null
+    }, 250)
+  }, [])
+
+  const scheduleModeRefresh = useCallback(() => {
+    if (modeRefreshTimer.current) {
+      clearTimeout(modeRefreshTimer.current)
+    }
+    modeRefreshTimer.current = setTimeout(() => {
+      useChannelModeStore.getState().loadModes()
+      modeRefreshTimer.current = null
+    }, 250)
+  }, [])
+
+  const scheduleRecordingRefresh = useCallback(() => {
+    if (recordingRefreshTimer.current) {
+      clearTimeout(recordingRefreshTimer.current)
+    }
+    recordingRefreshTimer.current = setTimeout(() => {
+      useRecordingStore.getState().loadRecordings()
+      recordingRefreshTimer.current = null
+    }, 250)
   }, [])
 
   useSSE(
     useCallback((event) => {
-      const entry: LogEntry = { ...event, id: String(++nextLogId) }
-      setLogEntries(prev => [...prev, entry])
-
-      // Advance the local sequence counter so the sidebar badge stays in sync
-      // with the backend's in-memory cursor without a full refetch per request.
-      if (
-        event.type === 'MOCK' &&
-        event.sequence_step &&
-        event.sequence_len &&
-        typeof event.mock_index === 'number'
-      ) {
-        const idx = event.mock_index
-        const served = event.sequence_step
-        const len = event.sequence_len
-        setMocks(prev => {
-          const target = prev[idx]
-          if (!target?.sequence) return prev
-          const next = nextCursor(served, len, target.sequence.on_end)
-          if (target.sequence.current_step === next) return prev
-          const copy = prev.slice()
-          copy[idx] = {
-            ...target,
-            sequence: { ...target.sequence, current_step: next },
-          }
-          return copy
-        })
+      appendLogEvent(event)
+      advanceSequenceCursor(event)
+      if (event.type === 'SOCKET') {
+        scheduleSocketClientRefresh()
       }
-    }, []),
+      if (event.type === 'MODE') {
+        scheduleModeRefresh()
+      }
+      if (event.type === 'RECORD') {
+        scheduleRecordingRefresh()
+      }
+    }, [advanceSequenceCursor, appendLogEvent, scheduleModeRefresh, scheduleRecordingRefresh, scheduleSocketClientRefresh]),
     useCallback(() => {
       setConnected(true)
-      loadMocks()
-    }, [loadMocks]),
-    useCallback(() => setConnected(false), []),
-    useCallback(() => loadMocks(), [loadMocks]),
+      refreshData()
+    }, [refreshData, setConnected]),
+    useCallback(() => setConnected(false), [setConnected]),
+    refreshData,
+  )
+
+  useSequenceEvents(
+    useCallback((event) => {
+      useSequenceStore.getState().applyPlayerEvent(event)
+    }, []),
+    useCallback(() => {
+      useSequenceStore.getState().loadPlayerStates()
+    }, []),
   )
 
   useEffect(() => {
-    loadMocks()
+    refreshData()
     api.fetchUpdateCheck().then(data => {
       if (data.available) setUpdateInfo(data)
     }).catch(() => {})
-  }, [loadMocks])
+  }, [refreshData, setUpdateInfo])
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setModalState(null)
-        setQrOpen(false)
-        setSelectedLogId(null)
-        return
+    return () => {
+      if (socketRefreshTimer.current) {
+        clearTimeout(socketRefreshTimer.current)
       }
-
-      const mod = e.metaKey || e.ctrlKey
-      if (!mod) return
-
-      const key = e.key.toLowerCase()
-      if (key === 'k') {
-        e.preventDefault()
-        const input = document.getElementById(LOG_SEARCH_INPUT_ID) as HTMLInputElement | null
-        input?.focus()
-        input?.select()
-      } else if (key === '\\') {
-        e.preventDefault()
-        const isDesktopViewport = window.matchMedia('(min-width: 768px)').matches
-        if (isDesktopViewport) {
-          setSidebarCollapsed(c => !c)
-        } else {
-          setSidebarOpen(o => !o)
-        }
-      } else if (key === 'l') {
-        e.preventDefault()
-        setLogEntries([])
-        setSelectedLogId(null)
+      if (modeRefreshTimer.current) {
+        clearTimeout(modeRefreshTimer.current)
+      }
+      if (recordingRefreshTimer.current) {
+        clearTimeout(recordingRefreshTimer.current)
       }
     }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
   }, [])
+
+  useAppShortcuts({
+    onEscape: useCallback(() => {
+      setModalState(null)
+      setQrOpen(false)
+      selectLog(null)
+    }, [selectLog, setModalState, setQrOpen]),
+    onToggleSidebar: toggleSidebarOpen,
+    onToggleSidebarCollapsed: toggleSidebarCollapsed,
+    onClearLog: clearLog,
+  })
 
   const handleReloadMocks = useCallback(async () => {
-    await api.reloadMocks()
-    await loadMocks()
-  }, [loadMocks])
+    await reloadMocks()
+  }, [reloadMocks])
 
   const handleClearLog = useCallback(() => {
-    setLogEntries([])
-    setSelectedLogId(null)
-  }, [])
+    clearLog()
+  }, [clearLog])
 
   const handleSaveAsMock = useCallback((entry: LogEntry) => {
     setModalState(createNewMockState(entry.method, entry.path, entry.status, entry.response_body))
-  }, [])
+  }, [setModalState])
 
   const handleCreateMock = useCallback(() => {
     setModalState(createNewMockState('GET', '', 200))
-  }, [])
+  }, [setModalState])
 
   const handleEditMock = useCallback(async (index: number) => {
     try {
@@ -158,74 +168,60 @@ export default function App() {
     } catch (err) {
       console.error('Failed to load mock for editing:', err)
     }
-  }, [])
+  }, [setModalState])
 
   const selectedEntry = useMemo(
     () => (selectedLogId ? logEntries.find(e => e.id === selectedLogId) ?? null : null),
     [selectedLogId, logEntries],
   )
 
+  const View = views[activeView]
+
   return (
-    <>
-      <Header
-        version={serverInfo?.version || ''}
-        connected={connected}
-        isDesktop={isDesktop}
-        isMobile={isMobile}
-        onReloadMocks={handleReloadMocks}
-        onClearLog={handleClearLog}
-        onShowQR={() => setQrOpen(true)}
-        onToggleSidebar={() => setSidebarOpen(prev => !prev)}
+    <AppShell
+      activeView={activeView}
+      channelCount={channelCount}
+      connected={connected}
+      connectedClientCount={connectedClientCount}
+      drawerWidth={drawerWidth}
+      eventTemplateCount={eventTemplateCount}
+      isDesktop={isDesktop}
+      isMobile={isMobile}
+      modalState={modalState}
+      mocks={mocks}
+      qrOpen={qrOpen}
+      selectedEntry={selectedEntry}
+      sequenceCount={sequenceCount}
+      recordingCount={recordingCount}
+      serverInfo={serverInfo}
+      sidebarCollapsed={sidebarCollapsed}
+      sidebarOpen={sidebarOpen}
+      toasts={toasts}
+      updateInfo={updateInfo}
+      onChangeView={setActiveView}
+      onClearLog={handleClearLog}
+      onCloseDrawer={() => selectLog(null)}
+      onCreateMock={handleCreateMock}
+      onEditMock={handleEditMock}
+      onMocksChanged={loadMocks}
+      onReloadMocks={handleReloadMocks}
+      onResizeDrawer={setDrawerWidth}
+      onSaveAsMock={handleSaveAsMock}
+      onSetModalState={setModalState}
+      onSetQrOpen={setQrOpen}
+      onSetSidebarCollapsed={setSidebarCollapsed}
+      onSetSidebarOpen={setSidebarOpen}
+      onSetUpdateInfo={setUpdateInfo}
+      onToggleSidebar={toggleSidebarOpen}
+      showToast={showToast}
+    >
+      <View
+        serverInfo={serverInfo}
+        selectedLogId={selectedLogId}
+        onSelectLog={selectLog}
+        onSaveAsMock={handleSaveAsMock}
+        showToast={showToast}
       />
-
-      {updateInfo && (
-        <UpdateBanner info={updateInfo} onDismiss={() => setUpdateInfo(null)} />
-      )}
-
-      <main className="flex flex-1 overflow-hidden min-h-0">
-        {sidebarCollapsed && <CollapsedSidebarRail onExpand={() => setSidebarCollapsed(false)} />}
-        <Sidebar
-          open={sidebarOpen}
-          collapsed={sidebarCollapsed}
-          mocks={mocks}
-          serverInfo={serverInfo}
-          onClose={() => setSidebarOpen(false)}
-          onCollapse={() => setSidebarCollapsed(true)}
-          onMocksChanged={loadMocks}
-          onEditMock={handleEditMock}
-          onCreateMock={handleCreateMock}
-          showToast={showToast}
-        />
-        <LogPanel
-          entries={logEntries}
-          serverInfo={serverInfo}
-          selectedId={selectedLogId}
-          onSelect={setSelectedLogId}
-          onSaveAsMock={handleSaveAsMock}
-        />
-        {selectedEntry && (
-          <Drawer
-            entry={selectedEntry}
-            serverInfo={serverInfo}
-            width={drawerWidth}
-            onResize={setDrawerWidth}
-            onClose={() => setSelectedLogId(null)}
-            onSaveAsMock={handleSaveAsMock}
-          />
-        )}
-      </main>
-
-      {modalState && (
-        <MockEditorModal
-          state={modalState}
-          onClose={() => setModalState(null)}
-          onSaved={loadMocks}
-          showToast={showToast}
-        />
-      )}
-      {qrOpen && <QRModal onClose={() => setQrOpen(false)} />}
-
-      <ToastContainer toasts={toasts} />
-    </>
+    </AppShell>
   )
 }

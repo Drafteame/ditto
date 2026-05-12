@@ -1,11 +1,12 @@
 export interface LogEvent {
   timestamp: string
-  type: 'MOCK' | 'PROXY' | 'MISS'
+  type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET' | 'MODE' | 'RECORD'
   method: string
   path: string
   status: number
   duration_ms: number
   response_body?: string
+  source?: string
   request_headers?: Record<string, string[]>
   mock_index?: number
   sequence_step?: number
@@ -14,6 +15,28 @@ export interface LogEvent {
 
 export interface LogEntry extends LogEvent {
   id: string
+}
+
+export interface DispatchLogBody {
+  delivered: number
+  dropped: number
+  errors: number
+  type_name?: string
+  alias?: string
+  payload?: unknown
+  decode_error?: string
+  truncated?: boolean
+}
+
+export function parseDispatchLogBody(raw: string | undefined): DispatchLogBody | null {
+  if (!raw) return null
+  try {
+    const data = JSON.parse(raw) as DispatchLogBody
+    if (typeof data.delivered === 'number') return data
+    return null
+  } catch {
+    return null
+  }
 }
 
 export interface MockMatch {
@@ -53,6 +76,7 @@ export interface Mock {
 export interface ServerInfo {
   port: number
   target: string
+  live_target?: string
   https: boolean
   mocks_dir: string
   local_ips: string[]
@@ -75,4 +99,249 @@ export interface Toast {
   id: string
   message: string
   kind?: 'warn'
+}
+
+export interface SocketClient {
+  id: string
+  adapter: string
+  remote_addr: string
+  connected_at: string
+  subscriptions: string[]
+  dropped_to_client?: number
+}
+
+export interface SocketClientsResponse {
+  clients: SocketClient[]
+}
+
+export interface SocketDispatchRequest {
+  channel: string
+  payload: unknown
+  adapter?: string
+  type_name?: string
+}
+
+export interface AdapterProfileSummary {
+  name: string
+  base_adapter: string
+  subprotocols: string[]
+  type_aliases: Record<string, string>
+}
+
+export type AdapterProfilesResponse = AdapterProfileSummary[]
+
+export interface SocketDispatchResult {
+  delivered: number
+  dropped?: string[]
+  errors?: string[]
+}
+
+export interface EventTemplateVariable {
+  name: string
+  description?: string
+  default?: string
+}
+
+export interface EventTemplate {
+  version: number
+  id: string
+  name: string
+  description?: string
+  channel: string
+  adapter?: string
+  type_name?: string
+  payload: unknown
+  variables?: EventTemplateVariable[]
+  created_at: string
+  updated_at: string
+}
+
+export interface EventTemplatesResponse {
+  templates: EventTemplate[]
+}
+
+export interface EventTemplateDispatchRequest {
+  variables?: Record<string, unknown>
+  channel_override?: string
+  adapter_override?: string
+}
+
+export interface EventTemplateDispatchResult extends SocketDispatchResult {
+  resolved_payload: unknown
+  missing_variables?: string[]
+  invalid_casts?: Array<{ name: string; kind: string; value: string }>
+}
+
+export type SequenceOnEnd = 'loop' | 'stay' | 'reset'
+
+export interface EventSequenceStep {
+  id: string
+  name?: string
+  delay_ms: number
+  template_ref?: string
+  channel?: string
+  adapter?: string
+  type_name?: string
+  payload?: unknown
+  vars_override?: Record<string, unknown>
+}
+
+export interface EventSequence {
+  version: number
+  id: string
+  name: string
+  description?: string
+  steps: EventSequenceStep[]
+  vars?: Record<string, unknown>
+  on_end: SequenceOnEnd
+  created_at: string
+  updated_at: string
+}
+
+export interface EventSequencesResponse {
+  sequences: EventSequence[]
+}
+
+export type PlayerStatus = 'idle' | 'playing' | 'paused' | 'completed' | 'stopped' | 'error'
+
+export interface PlayerState {
+  sequence_id: string
+  status: PlayerStatus
+  current_step: number
+  total_steps: number
+  speed: number
+  started_at?: string
+  updated_at: string
+  last_error?: string
+  last_dispatch_summary?: string
+}
+
+export interface PlayerEvent {
+  type: 'state' | 'step' | 'waiting' | 'error' | 'completed' | 'stopped' | 'looped'
+  state: PlayerState
+  sequence_id: string
+  step_id?: string
+  step_index?: number
+  delay_ms?: number
+  dispatch_summary?: string
+  error?: string
+  at: string
+}
+
+export interface SequencePlayRequest {
+  vars?: Record<string, unknown>
+  start_step?: number
+  speed?: number
+}
+
+export interface SequenceSeekRequest {
+  step: number
+}
+
+export interface SequenceSpeedRequest {
+  speed: number
+}
+
+export interface SequenceStatesResponse {
+  states: PlayerState[]
+}
+
+export interface SchemaField {
+  name: string
+  json_name: string
+  type: string
+  number: number
+  repeated: boolean
+  map: boolean
+  optional: boolean
+  oneof?: string
+  message_type?: string
+  enum_type?: string
+}
+
+export interface SchemaTypeDescriptor {
+  full_name: string
+  name: string
+  package: string
+  file: string
+  pack_id: string
+  fields: SchemaField[]
+  example_json: unknown
+}
+
+export interface SchemaPack {
+  id: string
+  name: string
+  path: string
+  loaded_at: string
+  types: SchemaTypeDescriptor[]
+}
+
+export interface SchemaPacksResponse {
+  packs: SchemaPack[]
+}
+
+export interface SchemaTypesResponse {
+  types: SchemaTypeDescriptor[]
+}
+
+export type ChannelMode = 'mock' | 'live' | 'record' | 'mixed'
+
+export interface ChannelConfig {
+  channel: string
+  mode: ChannelMode
+  recording_id?: string
+  rate_cap_hz?: number
+  updated_at: string
+}
+
+export interface ChannelModesResponse {
+  channels: ChannelConfig[]
+}
+
+export interface RecordingProfileChange {
+  ts_ms: number
+  profile: string
+}
+
+export interface RecordingChannelManifest {
+  channel: string
+  events: number
+  dropped: number
+  queue_dropped?: number
+  rate_cap_hz: number
+  adapter_profile?: string
+  profile_changes?: RecordingProfileChange[]
+}
+
+export interface RecordingManifest {
+  version: number
+  id: string
+  name: string
+  description: string
+  started_at: string
+  stopped_at?: string | null
+  channels: RecordingChannelManifest[]
+  adapter_profile?: string
+  schema_pack_ids: string[]
+  error?: string
+}
+
+export interface RecordedFrame {
+  ts_ms: number
+  direction: 'upstream' | 'local'
+  channel: string
+  frame_kind: 'text' | 'binary'
+  raw_b64: string
+  decoded?: {
+    type_name?: string
+    payload_json?: unknown
+    alias?: string
+  }
+  decode_error?: string
+}
+
+export interface RecordingsResponse {
+  recordings: RecordingManifest[]
+  active_id: string
 }
