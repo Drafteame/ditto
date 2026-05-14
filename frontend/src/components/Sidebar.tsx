@@ -603,6 +603,8 @@ function MockItem({
           seqWorstStatus !== null
             ? mock.sequence?.on_end === 'reset'
               ? `Sequence — highest status across steps and fallback: ${displayStatus}`
+              : mock.sequence?.on_end === 'proxy'
+                ? `Sequence — highest status across mocked steps before proxying: ${displayStatus}`
               : `Sequence — highest status across steps: ${displayStatus}`
             : `Status ${displayStatus}`
         }
@@ -659,10 +661,10 @@ function MockItem({
 
 // For sequence mocks, return the most severe status the backend can actually
 // serve. The static fallback is only included when on_end === 'reset' because
-// that's the only mode where the proxy serves it (between cycles); in 'loop'
-// and 'stay' the cursor never reaches the fallback, so showing its color in
-// the sidebar would flag an error that never happens. Returns null when there
-// are no steps.
+// that's the only mode where the proxy serves it (between cycles); in 'loop',
+// 'stay', and 'proxy' the cursor never serves the fallback body, so showing
+// its color in the sidebar would flag an error that never happens. Returns
+// null when there are no steps.
 function worstSequenceStatus(mock: Mock): number | null {
   const steps = mock.sequence?.steps
   if (!steps || steps.length === 0) return null

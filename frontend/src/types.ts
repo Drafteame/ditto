@@ -56,7 +56,7 @@ export interface SequenceStep {
 
 export interface Sequence {
   steps: SequenceStep[]
-  on_end: 'loop' | 'stay' | 'reset'
+  on_end: 'loop' | 'stay' | 'reset' | 'proxy'
   current_step?: number
 }
 
