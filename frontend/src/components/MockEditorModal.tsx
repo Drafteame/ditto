@@ -615,7 +615,7 @@ export function MockEditorModal({
                 className="input"
                 value={path}
                 onChange={e => setPath(e.target.value)}
-                placeholder="/api/v1/users"
+                placeholder="/tickets-bff/tkt_*"
               />
             </div>
             <div className="fld">
