@@ -28,7 +28,7 @@ export interface MockEditorState {
   matchOpen: boolean
   responseMode: ResponseMode
   sequenceSteps: SequenceStepDraft[]
-  sequenceOnEnd: 'loop' | 'stay' | 'reset'
+  sequenceOnEnd: 'loop' | 'stay' | 'reset' | 'proxy'
   sequenceCurrentStep: number
 }
 
@@ -576,6 +576,10 @@ export function MockEditorModal({
   }, [])
 
   const isEditing = initial.editingIndex !== null
+  const sequenceExhausted =
+    sequenceSteps.length > 0 &&
+    (sequenceOnEnd === 'reset' || sequenceOnEnd === 'proxy') &&
+    sequenceCurrentStep >= sequenceSteps.length
   const nextStepForDisplay =
     sequenceSteps.length > 0
       ? ((sequenceCurrentStep % sequenceSteps.length) + sequenceSteps.length) % sequenceSteps.length
@@ -688,6 +692,13 @@ export function MockEditorModal({
                   >
                     Reset
                   </button>
+                  <button
+                    type="button"
+                    className={sequenceOnEnd === 'proxy' ? 'active' : ''}
+                    onClick={() => setSequenceOnEnd('proxy')}
+                  >
+                    Proxy after end
+                  </button>
                 </div>
                 <div className="flex-1" />
                 {isEditing && (
@@ -700,7 +711,11 @@ export function MockEditorModal({
               {sequenceSteps.length > 0 && (
                 <div className="seq-editor-status">
                   <span>
-                    Next call returns <b>step {nextStepForDisplay + 1}</b> of {sequenceSteps.length}.
+                    {sequenceExhausted
+                      ? sequenceOnEnd === 'proxy'
+                        ? <>Sequence exhausted. Next call goes to the <b>real backend</b>.</>
+                        : <>Sequence exhausted. Next call returns the <b>fallback body</b>.</>
+                      : <>Next call returns <b>step {nextStepForDisplay + 1}</b> of {sequenceSteps.length}.</>}
                   </span>
                 </div>
               )}

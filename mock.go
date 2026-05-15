@@ -67,7 +67,7 @@ type Mock struct {
 // current position, but writeMockFile uses its own struct that excludes it.
 type Sequence struct {
 	Steps       []SequenceStep `json:"steps"`
-	OnEnd       string         `json:"on_end"` // "loop" | "stay" | "reset"
+	OnEnd       string         `json:"on_end"` // "loop" | "stay" | "reset" | "proxy"
 	CurrentStep int            `json:"current_step,omitempty"`
 }
 
@@ -199,6 +199,12 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 		}
 	}
 
+	// On proxy mode, once we've exhausted all steps, stop resolving this mock
+	// so the request can fall through to the real backend target.
+	if seq.OnEnd == "proxy" && cur >= n {
+		return nil
+	}
+
 	// Clamp in case state is out of range (e.g., steps shrank since last call).
 	if cur < 0 || cur >= n {
 		cur = 0
@@ -214,8 +220,9 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 		if next >= n {
 			next = n - 1
 		}
-	case "reset":
-		// Let next reach n; the following call serves the static body and resets.
+	case "reset", "proxy":
+		// Let next reach n; the following call serves the static fallback or
+		// falls through to the real backend, depending on the mode.
 	default: // "loop" and unknown modes
 		if next >= n {
 			next = 0
