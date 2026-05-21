@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -123,6 +124,7 @@ func (s *MockStore) Find(r *http.Request, reqBody []byte) *Mock {
 func (s *MockStore) findBestLocked(r *http.Request, reqBody []byte) int {
 	bestIdx := -1
 	bestScore := -1
+	bestPathScore := -1
 	for i := range s.mocks {
 		m := &s.mocks[i]
 		if !m.Enabled {
@@ -135,9 +137,11 @@ func (s *MockStore) findBestLocked(r *http.Request, reqBody []byte) int {
 			continue
 		}
 		score := m.Match.Specificity()
-		if score > bestScore {
+		pathScore := pathSpecificity(m.Path)
+		if score > bestScore || (score == bestScore && pathScore > bestPathScore) {
 			bestIdx = i
 			bestScore = score
+			bestPathScore = pathScore
 		}
 	}
 	return bestIdx
@@ -520,30 +524,36 @@ func loadMocksFromDir(dir string) ([]Mock, error) {
 	return mocks, nil
 }
 
-// matchPath supports exact matches and simple wildcards.
-// Example: /api/v1/users/* matches /api/v1/users/123
-func matchPath(pattern, path string) bool {
-	if pattern == path {
+// matchPath supports exact matches and segment wildcards.
+// Examples:
+//   - /api/v1/users/* matches /api/v1/users/123
+//   - /tickets-bff/tkt_* matches /tickets-bff/tkt_8WNAsd8wsRnf0xC0m
+func matchPath(pattern, actualPath string) bool {
+	if pattern == actualPath {
 		return true
 	}
 
 	patternParts := strings.Split(pattern, "/")
-	pathParts := strings.Split(path, "/")
+	pathParts := strings.Split(actualPath, "/")
 
 	if len(patternParts) != len(pathParts) {
 		return false
 	}
 
 	for i := range patternParts {
-		if patternParts[i] == "*" {
-			continue
-		}
-		if patternParts[i] != pathParts[i] {
+		ok, err := pathpkg.Match(patternParts[i], pathParts[i])
+		if err != nil || !ok {
 			return false
 		}
 	}
 
 	return true
+}
+
+// pathSpecificity prefers exact paths over wildcard paths when the same
+// request would match multiple mocks with equally specific match conditions.
+func pathSpecificity(pattern string) int {
+	return len(strings.ReplaceAll(pattern, "*", ""))
 }
 
 // matchConditions checks whether the request satisfies the given Match block.
