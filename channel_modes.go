@@ -24,6 +24,11 @@ const (
 	ModeMixed  ChannelMode = "mixed"
 )
 
+// DefaultChannelMode is applied to channels that do not yet have an explicit
+// configuration. Mixed lets the dashboard dispatch locally while still
+// forwarding client frames to the live target when one is configured.
+const DefaultChannelMode = ModeMixed
+
 type ChannelConfig struct {
 	Channel     string      `json:"channel"`
 	Mode        ChannelMode `json:"mode"`
@@ -72,7 +77,7 @@ func (r *ChannelModeRegistry) Get(channel string) ChannelConfig {
 	if ok {
 		return cfg
 	}
-	return ChannelConfig{Channel: channel, Mode: ModeMock}
+	return ChannelConfig{Channel: channel, Mode: DefaultChannelMode}
 }
 
 func (r *ChannelModeRegistry) Set(cfg ChannelConfig) error {
@@ -101,7 +106,7 @@ func (r *ChannelModeRegistry) Set(cfg ChannelConfig) error {
 		}
 	}
 	if cfg.Mode == "" {
-		cfg.Mode = ModeMock
+		cfg.Mode = DefaultChannelMode
 	}
 	r.channels[cfg.Channel] = cfg
 	snapshot := r.snapshotLocked()
@@ -140,7 +145,7 @@ func (r *ChannelModeRegistry) Delete(channel string) error {
 	r.mu.Unlock()
 
 	listenerCfg := previous
-	listenerCfg.Mode = ModeMock
+	listenerCfg.Mode = DefaultChannelMode
 	listenerCfg.UpdatedAt = now
 	eventCfg := listenerCfg
 

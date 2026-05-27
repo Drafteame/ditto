@@ -53,7 +53,7 @@ export const useChannelModeStore = create<ChannelModeStore>((set, get) => ({
       throw err
     }
   },
-  addChannel: async (channel, mode = 'mock', rateCapHz = 0) => {
+  addChannel: async (channel, mode = 'mixed', rateCapHz = 0) => {
     await get().setMode(channel, mode, rateCapHz)
   },
   deleteChannel: async (channel) => {

@@ -145,6 +145,7 @@ type SocketClient struct {
 	closeOnce       sync.Once
 	droppedToClient atomic.Uint64
 	upstreamHeaders http.Header
+	upstreamHost    string
 
 	mu            sync.RWMutex
 	subscriptions map[string]string
@@ -320,7 +321,7 @@ func IsWebSocketRequest(r *http.Request) bool {
 
 // extractUpstreamHeaders clones the inbound client headers, dropping the ones
 // that the WebSocket handshake or HTTP transport must control on the upstream
-// dial. Everything else (Authorization, Cookie, X-* etc.) is forwarded
+// dial. Everything else (Authorization, Cookie, Origin, X-* etc.) is forwarded
 // verbatim so the upstream sees the same request the client would send directly.
 func extractUpstreamHeaders(src http.Header) http.Header {
 	if len(src) == 0 {
@@ -336,7 +337,6 @@ func extractUpstreamHeaders(src http.Header) http.Header {
 		case "Connection",
 			"Upgrade",
 			"Host",
-			"Origin",
 			"Content-Length",
 			"X-Ditto-Ws-Mode":
 			continue
@@ -346,6 +346,48 @@ func extractUpstreamHeaders(src http.Header) http.Header {
 		out[canonical] = copied
 	}
 	return out
+}
+
+// applyForwardingHeaders annotates the headers Ditto sends to the live target
+// with the standard proxy markers so the upstream can see the original client.
+// Existing values are extended (X-Forwarded-For is appended) rather than
+// replaced, matching common reverse-proxy behaviour.
+func applyForwardingHeaders(headers http.Header, clientHost, clientAddr string, tls bool) http.Header {
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	if ip := clientIPFromRemoteAddr(clientAddr); ip != "" {
+		if prev := headers.Get("X-Forwarded-For"); prev != "" {
+			headers.Set("X-Forwarded-For", prev+", "+ip)
+		} else {
+			headers.Set("X-Forwarded-For", ip)
+		}
+		if headers.Get("X-Real-IP") == "" {
+			headers.Set("X-Real-IP", ip)
+		}
+	}
+	if clientHost != "" && headers.Get("X-Forwarded-Host") == "" {
+		headers.Set("X-Forwarded-Host", clientHost)
+	}
+	if headers.Get("X-Forwarded-Proto") == "" {
+		if tls {
+			headers.Set("X-Forwarded-Proto", "wss")
+		} else {
+			headers.Set("X-Forwarded-Proto", "ws")
+		}
+	}
+	return headers
+}
+
+func clientIPFromRemoteAddr(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }
 
 func shouldProxyWebSocket(r *http.Request) bool {
@@ -503,6 +545,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		done:            make(chan struct{}),
 		subscriptions:   make(map[string]string),
 		upstreamHeaders: extractUpstreamHeaders(r.Header),
+		upstreamHost:    r.Host,
 	}
 	h.addClient(client)
 	h.publishSocketEvent("CONNECT", r.URL.RequestURI(), http.StatusSwitchingProtocols, "", 0)

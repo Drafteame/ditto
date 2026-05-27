@@ -163,7 +163,10 @@ func TestLiveBridgeForwardsAuthHeaders(t *testing.T) {
 	if got := headers.Get("X-Custom-Auth"); got != "custom" {
 		t.Fatalf("X-Custom-Auth = %q, want custom", got)
 	}
-	for _, name := range []string{"Origin", "X-Ditto-Ws-Mode", "Sec-Websocket-Key"} {
+	if got := headers.Get("Origin"); got != "http://localhost:8888" {
+		t.Fatalf("Origin = %q, want forwarded verbatim", got)
+	}
+	for _, name := range []string{"X-Ditto-Ws-Mode", "Sec-Websocket-Key"} {
 		if got := headers.Get(name); name == "Sec-Websocket-Key" {
 			if got == "client-owned" {
 				t.Fatalf("%s forwarded client-owned value", name)
@@ -174,6 +177,15 @@ func TestLiveBridgeForwardsAuthHeaders(t *testing.T) {
 	}
 	if got := headers.Get("Sec-Websocket-Trace"); got != "" {
 		t.Fatalf("Sec-Websocket-Trace = %q, want filtered", got)
+	}
+	if got := headers.Get("X-Forwarded-For"); got == "" {
+		t.Fatalf("X-Forwarded-For missing, want the client IP")
+	}
+	if got := headers.Get("X-Forwarded-Proto"); got != "ws" && got != "wss" {
+		t.Fatalf("X-Forwarded-Proto = %q, want ws or wss", got)
+	}
+	if got := headers.Get("X-Forwarded-Host"); got == "" {
+		t.Fatalf("X-Forwarded-Host missing, want the original Host")
 	}
 }
 

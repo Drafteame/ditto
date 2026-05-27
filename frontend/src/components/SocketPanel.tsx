@@ -252,7 +252,7 @@ export function SocketPanel({
           ) : (
             <div className="channel-mode-list">
               {visibleChannels.map(item => {
-                const current = channelModes[item]?.mode ?? 'mock'
+                const current = channelModes[item]?.mode ?? 'mixed'
                 return (
                   <div className="channel-mode-row" key={item}>
                     <span title={item}>{item}</span>

@@ -329,7 +329,7 @@ function SavedChannelsPanel({ showToast }: { showToast: (message: string, kind?:
   const confirm = useConfirm()
   const [adding, setAdding] = useState(false)
   const [channel, setChannel] = useState('')
-  const [mode, setMode] = useState<ChannelMode>('mock')
+  const [mode, setMode] = useState<ChannelMode>('mixed')
   const [saving, setSaving] = useState(false)
 
   const savedChannels = useMemo(
@@ -339,7 +339,7 @@ function SavedChannelsPanel({ showToast }: { showToast: (message: string, kind?:
 
   const resetForm = useCallback(() => {
     setChannel('')
-    setMode('mock')
+    setMode('mixed')
     setAdding(false)
   }, [])
 
@@ -452,7 +452,7 @@ function SavedChannelsPanel({ showToast }: { showToast: (message: string, kind?:
                 {cfg.channel}
               </span>
               <span className="px-1.5 py-0.5 rounded-sm border border-line text-[10px] uppercase text-fg-2">
-                {cfg.mode || 'mock'}
+                {cfg.mode || 'mixed'}
               </span>
               <button
                 type="button"
