@@ -489,6 +489,14 @@ func decodeAppSyncEnvelope(schemas *SchemaRegistry, profile AdapterProfile, data
 	if err := json.Unmarshal(data, &outer); err != nil {
 		return nil, err.Error()
 	}
+	// AppSync emits periodic keep-alives and subscription-lifecycle frames
+	// (ka, connection_ack, subscribe, subscribe_success, complete, error, …)
+	// that carry no decodable payload. Surface them as control frames with the
+	// type as the label instead of reporting a spurious decode error. Only
+	// "data" frames carry a {t, e} payload to decode.
+	if typ, ok := outer["type"].(string); ok && typ != "" && typ != "data" {
+		return &DecodedFrame{Alias: typ}, ""
+	}
 	value := outer["event"]
 	if value == nil {
 		if payload, ok := outer["payload"].(map[string]any); ok {

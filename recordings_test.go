@@ -308,6 +308,27 @@ func TestAppSyncDecoderReportsMissingPayload(t *testing.T) {
 	}
 }
 
+func TestAppSyncDecoderTreatsControlFramesAsBenign(t *testing.T) {
+	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	// AppSync sends keep-alives and subscription-lifecycle frames that carry
+	// no payload; they must not be reported as decode errors.
+	for _, typ := range []string{"ka", "connection_ack", "subscribe", "subscribe_success", "complete"} {
+		decoded, decodeErr := rec.decodeAppSyncProfile(
+			AdapterProfile{BaseAdapter: "appsync"},
+			[]byte(`{"type":"`+typ+`"}`),
+		)
+		if decodeErr != "" {
+			t.Fatalf("type %q: decodeErr = %q, want empty (control frame)", typ, decodeErr)
+		}
+		if decoded == nil || decoded.Alias != typ || decoded.TypeName != "" || decoded.PayloadJSON != nil {
+			t.Fatalf("type %q: decoded = %#v, want control frame labelled by type", typ, decoded)
+		}
+	}
+}
+
 func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
 	bus := NewEventBus()
 	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
