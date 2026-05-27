@@ -188,10 +188,23 @@ func (ch *liveChannel) run() {
 		client := ch.firstClient()
 		var subprotocols []string
 		var headers http.Header
+		var clientHost, clientAddr string
 		if client != nil {
 			subprotocols = client.protocol.Subprotocols()
-			headers = client.upstreamHeaders
+			headers = cloneHeaders(client.upstreamHeaders)
+			clientHost = client.upstreamHost
+			clientAddr = client.remoteAddr
 		}
+		headers = applyForwardingHeaders(headers, clientHost, clientAddr, isSecureTarget(target))
+		ch.bridge.hub.publishSocketEventWithSource(
+			"LIVE_DIAL",
+			ch.channel,
+			0,
+			fmt.Sprintf("target=%s client_host=%q client_addr=%q subprotocols=%v headers=%s",
+				target, clientHost, clientAddr, subprotocols, summarizeHeaders(headers)),
+			0,
+			"live",
+		)
 		conn, _, err := websocket.Dial(ch.ctx, target, &websocket.DialOptions{
 			Subprotocols: subprotocols,
 			HTTPHeader:   headers,
@@ -316,6 +329,65 @@ func nextLiveBackoff(current time.Duration) time.Duration {
 		return 30 * time.Second
 	}
 	return next
+}
+
+// cloneHeaders returns a shallow copy of h. Used before mutating headers that
+// belong to the SocketClient so subsequent dial attempts start from the same
+// baseline rather than accumulating forwarding markers.
+func cloneHeaders(h http.Header) http.Header {
+	if h == nil {
+		return make(http.Header)
+	}
+	out := make(http.Header, len(h))
+	for k, vs := range h {
+		copied := make([]string, len(vs))
+		copy(copied, vs)
+		out[k] = copied
+	}
+	return out
+}
+
+// isSecureTarget reports whether the live target uses a TLS-encrypted scheme
+// (wss/https) so the X-Forwarded-Proto header reflects the upstream transport.
+func isSecureTarget(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	return scheme == "wss" || scheme == "https"
+}
+
+// summarizeHeaders returns a one-line redacted view of the headers Ditto
+// forwards to the upstream live target. Authorization / Cookie / API key
+// values are truncated so logs do not leak credentials but still indicate
+// whether the header was present.
+func summarizeHeaders(h http.Header) string {
+	if len(h) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		vs := h.Values(k)
+		v := ""
+		if len(vs) > 0 {
+			v = vs[0]
+		}
+		kl := strings.ToLower(k)
+		if kl == "authorization" || kl == "cookie" || strings.Contains(kl, "api-key") || strings.Contains(kl, "token") {
+			if len(v) > 12 {
+				v = v[:8] + "…(" + fmt.Sprintf("%d", len(v)) + "b)"
+			} else if v != "" {
+				v = "…(" + fmt.Sprintf("%d", len(v)) + "b)"
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", k, v))
+	}
+	return "{" + strings.Join(parts, " ") + "}"
 }
 
 func RegisterLiveTargetRoutes(mux *http.ServeMux, manager *LiveTargetManager) {

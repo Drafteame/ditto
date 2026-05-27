@@ -18,8 +18,8 @@ func TestChannelModeRegistryGetSetSnapshotAndPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
-	if got := reg.Get("/scores").Mode; got != ModeMock {
-		t.Fatalf("default mode = %s, want mock", got)
+	if got := reg.Get("/scores").Mode; got != DefaultChannelMode {
+		t.Fatalf("default mode = %s, want %s", got, DefaultChannelMode)
 	}
 	if err := reg.Set(ChannelConfig{Channel: "/scores", Mode: ModeMixed, RateCapHz: 25}); err != nil {
 		t.Fatalf("Set() error = %v", err)
