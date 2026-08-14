@@ -105,6 +105,117 @@ func TestAppSyncAdapterEnvelope(t *testing.T) {
 	}
 }
 
+func TestRelayAdapterControlFrames(t *testing.T) {
+	adapter := RelayAdapter{}
+
+	if !adapter.GreetsOnConnect() {
+		t.Fatalf("GreetsOnConnect() = false, want true")
+	}
+	if len(adapter.Subprotocols()) != 0 {
+		t.Fatalf("Subprotocols() = %v, want none", adapter.Subprotocols())
+	}
+
+	msg, err := adapter.ParseClientMessage([]byte(`{"type":"subscribe","id":"/osb/s/l/*","channel":"/osb/s/l/*","authorization":{"Authorization":"Basic token"}}`))
+	if err != nil {
+		t.Fatalf("ParseClientMessage() error = %v", err)
+	}
+	if msg.Type != "subscribe" || msg.Channel != "/osb/s/l/*" || msg.SubscriptionID != "/osb/s/l/*" {
+		t.Fatalf("ParseClientMessage() = %#v, want subscribe /osb/s/l/*", msg)
+	}
+
+	ack, err := adapter.EncodeServerMessage(ServerMsg{Type: "connection_ack"})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage(connection_ack) error = %v", err)
+	}
+	if string(ack.Data) != `{"type":"connection_ack"}` {
+		t.Fatalf("connection_ack = %s", ack.Data)
+	}
+
+	subAck, err := adapter.EncodeServerMessage(ServerMsg{Type: "subscribe_ack", ID: "/scores", Channel: "/scores"})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage(subscribe_ack) error = %v", err)
+	}
+	var subEnv struct {
+		Type    string `json:"type"`
+		Channel string `json:"channel"`
+	}
+	if err := json.Unmarshal(subAck.Data, &subEnv); err != nil {
+		t.Fatalf("subscribe ack is invalid JSON: %v", err)
+	}
+	if subEnv.Type != "subscribe_success" || subEnv.Channel != "/scores" {
+		t.Fatalf("subscribe ack = %s, want subscribe_success with channel", subAck.Data)
+	}
+
+	data, err := adapter.EncodeServerMessage(ServerMsg{Type: "data", Channel: "/scores", Payload: json.RawMessage(`{"score":7}`)})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage(data) error = %v", err)
+	}
+	var dataEnv struct {
+		Type    string         `json:"type"`
+		Channel string         `json:"channel"`
+		Event   map[string]any `json:"event"`
+	}
+	if err := json.Unmarshal(data.Data, &dataEnv); err != nil {
+		t.Fatalf("data frame is invalid JSON: %v", err)
+	}
+	if dataEnv.Type != "data" || dataEnv.Channel != "/scores" || dataEnv.Event["score"].(float64) != 7 {
+		t.Fatalf("data frame = %s", data.Data)
+	}
+}
+
+func TestRelayAdapterAcksConnectionWithoutInit(t *testing.T) {
+	hub := NewSocketHub(NewEventBus(), false, nil)
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/?adapter=relay", nil)
+	if err != nil {
+		t.Fatalf("websocket.Dial() error = %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	_, greeting, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("connection ack read error = %v", err)
+	}
+	if string(greeting) != `{"type":"connection_ack"}` {
+		t.Fatalf("greeting = %s, want connection_ack", greeting)
+	}
+
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"subscribe","id":"/scores","channel":"/scores","authorization":{"Authorization":"Basic token"}}`)); err != nil {
+		t.Fatalf("subscribe write error = %v", err)
+	}
+	_, ack, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("subscribe ack read error = %v", err)
+	}
+	if !strings.Contains(string(ack), `"type":"subscribe_success"`) || !strings.Contains(string(ack), `"channel":"/scores"`) {
+		t.Fatalf("subscribe ack = %s, want subscribe_success with channel", ack)
+	}
+
+	for i := 0; i < 20; i++ {
+		if clients := hub.registry.Clients("/scores"); len(clients) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), ""); result.Delivered != 1 {
+		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
+	}
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("dispatch read error = %v", err)
+	}
+	if !strings.Contains(string(data), `"type":"data"`) || !strings.Contains(string(data), `"channel":"/scores"`) {
+		t.Fatalf("dispatch frame = %s", data)
+	}
+}
+
 func TestAppSyncAdapterErrorPayloadUsesJSONString(t *testing.T) {
 	adapter := AppSyncAdapter{}
 

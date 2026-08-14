@@ -33,6 +33,7 @@ var adapterProfileNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
 var builtinAdapterNames = map[string]struct{}{
 	"raw":     {},
 	"appsync": {},
+	"relay":   {},
 }
 
 type AdapterProfile struct {
@@ -88,7 +89,7 @@ func ValidateAdapterProfile(profile AdapterProfile) error {
 	}
 	base := normalizeAdapter(profile.BaseAdapter)
 	if _, ok := builtinAdapterNames[base]; !ok {
-		return fmt.Errorf("base_adapter must be one of raw, appsync, got %q", profile.BaseAdapter)
+		return fmt.Errorf("base_adapter must be one of raw, appsync, relay, got %q", profile.BaseAdapter)
 	}
 	if profile.BaseAdapter != base {
 		return fmt.Errorf("base_adapter must be lowercase, got %q", profile.BaseAdapter)
@@ -137,6 +138,10 @@ func (a ProfileAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
 
 func (a ProfileAdapter) Subprotocols() []string {
 	return append([]string(nil), a.profile.Subprotocols...)
+}
+
+func (a ProfileAdapter) GreetsOnConnect() bool {
+	return adapterGreetsOnConnect(a.base)
 }
 
 func (a ProfileAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {

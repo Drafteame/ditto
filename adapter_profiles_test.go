@@ -423,6 +423,85 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 	}
 }
 
+func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
+	restore := preserveAdapterProfiles()
+	defer restore()
+
+	dir := t.TempDir()
+	if err := LoadAdapterProfiles(dir); err != nil {
+		t.Fatalf("LoadAdapterProfiles() error = %v", err)
+	}
+	protocol, err := NewProtocolAdapter("relay-draftea")
+	if err != nil {
+		t.Fatalf("NewProtocolAdapter(relay-draftea) error = %v", err)
+	}
+	if !adapterGreetsOnConnect(protocol) {
+		t.Fatalf("relay-draftea does not greet on connect")
+	}
+	if len(protocol.Subprotocols()) != 0 {
+		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
+	}
+
+	hub := NewSocketHub(NewEventBus(), false, nil)
+	client := &SocketClient{
+		id:            "relay-draftea-1",
+		adapter:       "relay-draftea",
+		protocol:      protocol,
+		control:       make(chan EncodedServerMessage, 1),
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{"/osb/sport/league/*": "/osb/sport/league/*"},
+	}
+	hub.addClient(client)
+	hub.registry.Subscribe("/osb/sport/league/*", client.id)
+
+	encodedPayload := EncodedPayload{
+		Data:     []byte{1, 2, 3},
+		Kind:     websocket.MessageBinary,
+		TypeName: "appsync.betinfo.BetEventDto",
+	}
+	result, err := dispatchRendered(hub, &SchemaRegistry{}, RenderedDispatch{
+		Channel:        "/osb/sport/league/*",
+		Adapter:        "relay-draftea",
+		TypeName:       "appsync.betinfo.BetEventDto",
+		Payload:        json.RawMessage(`{"id":"bet-1"}`),
+		EncodedPayload: &encodedPayload,
+	}, nil)
+	if err != nil {
+		t.Fatalf("dispatchRendered() error = %v", err)
+	}
+	if result.Delivered != 1 {
+		t.Fatalf("delivered = %d, want 1; errors=%v", result.Delivered, result.Errors)
+	}
+
+	select {
+	case msg := <-client.send:
+		var env struct {
+			Type    string `json:"type"`
+			Channel string `json:"channel"`
+			Event   string `json:"event"`
+		}
+		if err := json.Unmarshal(msg.Data, &env); err != nil {
+			t.Fatalf("outer JSON error: %v; data=%s", err, msg.Data)
+		}
+		if env.Type != "data" || env.Channel != "/osb/sport/league/*" {
+			t.Fatalf("outer = %#v, want relay data envelope", env)
+		}
+		var inner struct {
+			T string `json:"t"`
+			E string `json:"e"`
+		}
+		if err := json.Unmarshal([]byte(env.Event), &inner); err != nil {
+			t.Fatalf("inner JSON error: %v; event=%s", err, env.Event)
+		}
+		if inner.T != "betInfo" || inner.E != base64.StdEncoding.EncodeToString(encodedPayload.Data) {
+			t.Fatalf("inner = %#v, want betInfo base64 envelope", inner)
+		}
+	default:
+		t.Fatalf("client did not receive dispatch frame")
+	}
+}
+
 func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
 	restore := preserveAdapterProfiles()
 	defer restore()

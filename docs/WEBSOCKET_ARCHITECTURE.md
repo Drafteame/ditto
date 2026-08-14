@@ -139,7 +139,7 @@ Fields:
 
 - `manifest_version` (required, int): starts at `1`.
 - `name` (required): unique adapter name. Becomes the value of `?adapter=<name>` and the `adapter` field in REST/template/sequence requests.
-- `base_adapter` (required): one of the built-in adapters (`raw`, `appsync`). The profile inherits its control plane (`connection_init`, `subscribe`, `pong`, …) and overrides `Subprotocols()` and the data envelope wrapping. `raw` means the profile fully owns the data envelope and there is no built-in AppSync-style subscribe/ack handshake.
+- `base_adapter` (required): one of the built-in adapters (`raw`, `appsync`, `relay`). The profile inherits its control plane (`connection_init`, `subscribe`, `pong`, …) and overrides `Subprotocols()` and the data envelope wrapping. `raw` means the profile fully owns the data envelope and there is no built-in AppSync-style subscribe/ack handshake. `relay` targets backends that acknowledge the connection as soon as the socket opens — it pushes `{"type":"connection_ack"}` without waiting for a `connection_init`, and its subscribe acknowledgement is `{"type":"subscribe_success","id":…,"channel":…}`, keyed by channel instead of by subscription id.
 - `subprotocols` (optional): WebSocket subprotocols negotiated during handshake.
 - `envelope` (required): templates rendered at dispatch time.
   - `outer`: top-level WS frame. Variables: `${sub_id}`, `${channel}`, `${inner_object}`, `${inner_string}`. `${inner_object}` inserts the rendered inner envelope as a raw JSON object/array/value, e.g. `"event":${inner_object}`. `${inner_string}` is a raw JSON string literal containing the rendered inner envelope, so `"event":${inner_string}` yields a string field like `"event":"{\"t\":\"recovery\",\"e\":\"...\"}"`.
