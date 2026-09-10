@@ -62,6 +62,7 @@ type EventTemplateRegistry struct {
 	mu        sync.RWMutex
 	dir       string
 	templates map[string]EventTemplate
+	schemas   *SchemaRegistry
 }
 
 type eventTemplatesResponse struct {
@@ -81,7 +82,7 @@ type eventTemplateDispatchResponse struct {
 	InvalidCasts     []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
 }
 
-func NewEventTemplateRegistry(dir string) (*EventTemplateRegistry, error) {
+func NewEventTemplateRegistry(dir string, schemas *SchemaRegistry) (*EventTemplateRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -92,6 +93,7 @@ func NewEventTemplateRegistry(dir string) (*EventTemplateRegistry, error) {
 	reg := &EventTemplateRegistry{
 		dir:       absDir,
 		templates: make(map[string]EventTemplate),
+		schemas:   schemas,
 	}
 	if err := reg.Load(); err != nil {
 		return nil, err
@@ -137,7 +139,7 @@ func (r *EventTemplateRegistry) Load() error {
 			log.Printf("event template %s skipped: id mismatch", entry.Name())
 			continue
 		}
-		if err := validateEventTemplate(tmpl, nil); err != nil {
+		if err := validateEventTemplate(tmpl, r.schemas); err != nil {
 			log.Printf("event template %s skipped: %v", entry.Name(), err)
 			continue
 		}

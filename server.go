@@ -153,16 +153,16 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)
 	}
 	socketHub.SetSchemas(schemaRegistry)
-	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir)
+	if err := LoadAdapterProfiles(cfg.Layout.AdapterProfilesDir); err != nil {
+		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
+	}
+	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir, schemaRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event template registry: %w", err)
 	}
 	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
-	}
-	if err := LoadAdapterProfiles(cfg.Layout.AdapterProfilesDir); err != nil {
-		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
 	}
 	recorder, err := NewRecorder(cfg.Layout.RecordingsDir, schemaRegistry, modeRegistry, bus, jsonLogs)
 	if err != nil {
