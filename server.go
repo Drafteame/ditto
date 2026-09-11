@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // ProxyManager allows changing the target URL at runtime.
@@ -45,6 +48,10 @@ func (pm *ProxyManager) SetTarget(target string) error {
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
 		req.Host = targetURL.Host
+		// Ask upstream for plain bytes. ReverseProxy streams the response
+		// through untouched, so a compressed body would reach the log and
+		// "Save as mock" as binary garbage.
+		req.Header.Set("Accept-Encoding", "identity")
 	}
 
 	pm.mu.Lock()
@@ -296,7 +303,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				Path:           r.URL.RequestURI(),
 				Status:         capture.statusCode,
 				DurationMs:     duration,
-				ResponseBody:   capture.body.String(),
+				ResponseBody:   capture.decodedBody(),
 				RequestHeaders: reqHeaders,
 			}
 			logRequest(jsonLogs, event)
@@ -494,6 +501,44 @@ func (rc *responseCapture) WriteHeader(code int) {
 func (rc *responseCapture) Write(b []byte) (int, error) {
 	rc.body.Write(b)
 	return rc.ResponseWriter.Write(b)
+}
+
+// decodedBody returns the captured body as text suitable for the log stream
+// and for "Save as mock". Upstreams are asked for identity encoding, but some
+// compress anyway, so gzip/deflate are decoded here as a fallback. Anything
+// that still isn't valid UTF-8 is binary and is summarised rather than dumped
+// as replacement characters.
+func (rc *responseCapture) decodedBody() string {
+	raw := rc.body.Bytes()
+	if len(raw) == 0 {
+		return ""
+	}
+
+	switch strings.ToLower(strings.TrimSpace(rc.Header().Get("Content-Encoding"))) {
+	case "gzip", "x-gzip":
+		if zr, err := gzip.NewReader(bytes.NewReader(raw)); err == nil {
+			if out, err := io.ReadAll(zr); err == nil {
+				raw = out
+			}
+			zr.Close()
+		}
+	case "deflate":
+		fr := flate.NewReader(bytes.NewReader(raw))
+		if out, err := io.ReadAll(fr); err == nil {
+			raw = out
+		}
+		fr.Close()
+	}
+
+	if !utf8.Valid(raw) {
+		enc := rc.Header().Get("Content-Encoding")
+		if enc == "" {
+			enc = "identity"
+		}
+		return fmt.Sprintf("<binary response: %d bytes, content-type=%q, content-encoding=%q>",
+			len(raw), rc.Header().Get("Content-Type"), enc)
+	}
+	return string(raw)
 }
 
 // logRequest writes a single request log line.
