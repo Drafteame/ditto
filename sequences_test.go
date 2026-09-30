@@ -12,7 +12,7 @@ import (
 
 func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 
 func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestSequenceIDsRejectDotsAndSlashesInPath(t *testing.T) {
 
 func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 
 func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
 func newTestSequenceRegistry(t *testing.T) *EventSequenceRegistry {
 	t.Helper()
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"))
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

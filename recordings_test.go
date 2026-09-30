@@ -13,6 +13,25 @@ import (
 	"nhooyr.io/websocket"
 )
 
+func TestDecodeWireFrameReadsRelayEnvelope(t *testing.T) {
+	restore := preserveAdapterProfiles()
+	defer restore()
+
+	dir := t.TempDir()
+	if err := LoadAdapterProfiles(dir); err != nil {
+		t.Fatalf("LoadAdapterProfiles() error = %v", err)
+	}
+
+	frame := []byte(`{"type":"data","channel":"/osb/s/l/*","event":"{\"t\":\"betInfo\",\"e\":\"AQID\"}"}`)
+	decoded, decodeErr := DecodeWireFrame(nil, "text", frame, "relay-draftea")
+	if decodeErr != "" {
+		t.Fatalf("DecodeWireFrame() error = %s", decodeErr)
+	}
+	if decoded == nil || decoded.Alias != "betInfo" {
+		t.Fatalf("decoded = %#v, want alias betInfo", decoded)
+	}
+}
+
 func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(dir, nil, nil, NewEventBus(), false)

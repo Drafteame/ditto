@@ -16,7 +16,7 @@ import (
 
 func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewEventTemplateRegistry(dir)
+	reg, err := NewEventTemplateRegistry(dir, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -33,7 +33,7 @@ func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reloaded, err := NewEventTemplateRegistry(dir)
+	reloaded, err := NewEventTemplateRegistry(dir, nil)
 	if err != nil {
 		t.Fatalf("reload error = %v", err)
 	}
@@ -44,7 +44,7 @@ func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 }
 
 func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -83,7 +83,7 @@ func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
 
 func TestEventTemplateRegistryCreateAvoidsOrphanedFileCollision(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewEventTemplateRegistry(dir)
+	reg, err := NewEventTemplateRegistry(dir, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -110,7 +110,7 @@ func TestEventTemplateRegistryCreateAvoidsOrphanedFileCollision(t *testing.T) {
 
 func TestEventTemplateRegistryGetReturnsSnapshot(t *testing.T) {
 	defaultValue := "fallback"
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -282,7 +282,7 @@ func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -313,7 +313,7 @@ func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T)
 }
 
 func TestEventTemplateRoutesRejectInvalidPayloadAndPathTraversal(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -370,7 +370,7 @@ func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -403,7 +403,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -439,7 +439,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 }
 
 func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -484,7 +484,7 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 }
 
 func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -534,7 +534,7 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 }
 
 func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir())
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}

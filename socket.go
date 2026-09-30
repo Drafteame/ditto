@@ -46,6 +46,10 @@ type EncodedPayload struct {
 	TypeName    string
 }
 
+type GreetingAdapter interface {
+	GreetsOnConnect() bool
+}
+
 type ProtocolAdapter interface {
 	ParseClientMessage(b []byte) (ClientMsg, error)
 	EncodePayload(payload json.RawMessage) (EncodedPayload, error)
@@ -556,6 +560,10 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeLoop(ctx, client)
 		close(done)
 	}()
+
+	if adapterGreetsOnConnect(adapter) {
+		h.enqueueControl(client, ServerMsg{Type: "connection_ack"})
+	}
 
 	h.readLoop(ctx, client)
 	client.close()
@@ -1139,6 +1147,8 @@ func newBuiltinProtocolAdapter(name string) (ProtocolAdapter, error) {
 		return RawAdapter{}, nil
 	case "appsync":
 		return AppSyncAdapter{}, nil
+	case "relay":
+		return RelayAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported socket adapter %q", name)
 	}
@@ -1312,6 +1322,70 @@ func (AppSyncAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
 
 func (AppSyncAdapter) Subprotocols() []string {
 	return []string{"aws-appsync-event-ws"}
+}
+
+type RelayAdapter struct{}
+
+func (RelayAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
+	return RawAdapter{}.ParseClientMessage(b)
+}
+
+func (RelayAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
+	switch msg.Type {
+	case "connection_ack":
+		return marshalTextMessage(map[string]any{"type": "connection_ack"})
+	case "subscribe_ack":
+		return marshalTextMessage(map[string]any{"type": "subscribe_success", "id": msg.ID, "channel": msg.Channel})
+	case "pong":
+		return marshalTextMessage(map[string]any{"type": "pong"})
+	case "error":
+		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "channel": msg.Channel, "payload": rawPayload(msg.Payload)})
+	case "data", "":
+		payload, err := RelayAdapter{}.EncodePayload(msg.Payload)
+		if err != nil {
+			return EncodedServerMessage{}, err
+		}
+		return RelayAdapter{}.WrapData(payload, msg.ID, msg.Channel)
+	default:
+		return marshalTextMessage(map[string]any{"type": msg.Type, "channel": msg.Channel})
+	}
+}
+
+func (RelayAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
+	return AppSyncAdapter{}.EncodePayload(payload)
+}
+
+func (RelayAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
+	value := payload.Value
+	if payload.Kind == websocket.MessageBinary {
+		value = map[string]any{
+			"base64":       base64.StdEncoding.EncodeToString(payload.Data),
+			"content_type": payload.ContentType,
+			"type_name":    payload.TypeName,
+		}
+	}
+	return marshalTextMessage(map[string]any{
+		"type":    "data",
+		"channel": channel,
+		"event":   value,
+	})
+}
+
+func (RelayAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
+	return textMessage([]byte(`{"type":"ka"}`)), 5 * time.Second
+}
+
+func (RelayAdapter) Subprotocols() []string {
+	return nil
+}
+
+func (RelayAdapter) GreetsOnConnect() bool {
+	return true
+}
+
+func adapterGreetsOnConnect(adapter ProtocolAdapter) bool {
+	greeter, ok := adapter.(GreetingAdapter)
+	return ok && greeter.GreetsOnConnect()
 }
 
 func normalizeClientMessageType(t string) string {

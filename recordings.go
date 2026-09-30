@@ -471,17 +471,26 @@ func DecodeWireFrame(schemas *SchemaRegistry, kind string, data []byte, adapter 
 	if profileName == "" {
 		profileName = "raw"
 	}
-	if profile, ok := adapterProfile(profileName); ok && profile.BaseAdapter == "appsync" {
+	if profile, ok := adapterProfile(profileName); ok && hasEnvelopeDecoder(profile.BaseAdapter) {
 		return decodeAppSyncEnvelope(schemas, profile, data)
 	}
-	if profileName == "appsync" {
-		return decodeAppSyncEnvelope(schemas, AdapterProfile{BaseAdapter: "appsync"}, data)
+	if hasEnvelopeDecoder(profileName) {
+		return decodeAppSyncEnvelope(schemas, AdapterProfile{BaseAdapter: profileName}, data)
 	}
 	var payload json.RawMessage
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil, err.Error()
 	}
 	return &DecodedFrame{PayloadJSON: payload}, ""
+}
+
+func hasEnvelopeDecoder(baseAdapter string) bool {
+	switch normalizeAdapter(baseAdapter) {
+	case "appsync", "relay":
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeAppSyncEnvelope(schemas *SchemaRegistry, profile AdapterProfile, data []byte) (*DecodedFrame, string) {

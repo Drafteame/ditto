@@ -11,6 +11,7 @@ export interface AdapterOption {
 const BUILTIN_ADAPTERS: AdapterOption[] = [
   { value: 'raw', label: 'Raw', builtin: true },
   { value: 'appsync', label: 'AppSync', builtin: true },
+  { value: 'relay', label: 'Relay', builtin: true },
 ]
 
 export function buildAdapterOptions(profiles: AdapterProfileSummary[]): AdapterOption[] {

@@ -1,12 +1,9 @@
 {
   "manifest_version": 1,
-  "name": "appsync-draftea",
-  "base_adapter": "appsync",
-  "subprotocols": [
-    "aws-appsync-event-ws"
-  ],
+  "name": "relay-draftea",
+  "base_adapter": "relay",
   "envelope": {
-    "outer": "{\"id\":\"${sub_id}\",\"type\":\"data\",\"event\":${inner_string}}",
+    "outer": "{\"type\":\"data\",\"channel\":\"${channel}\",\"event\":${inner_string}}",
     "inner_binary": "{\"t\":\"${alias}\",\"e\":\"${base64}\"}",
     "inner_json": "{\"t\":\"${alias}\",\"e\":${json}}"
   },
