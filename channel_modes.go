@@ -234,15 +234,13 @@ func (r *ChannelModeRegistry) publishModeEvent(method string, cfg ChannelConfig)
 	}
 	body, _ := json.Marshal(cfg)
 	event := LogEvent{
-		Timestamp:    time.Now().Format("15:04:05"),
 		Type:         "MODE",
 		Method:       method,
 		Path:         cfg.Channel,
 		Status:       http.StatusOK,
 		ResponseBody: string(body),
 	}
-	logRequest(r.jsonLogs, event)
-	r.bus.Publish(event)
+	publishLogEvent(r.jsonLogs, r.bus, event)
 }
 
 func isChannelMode(mode ChannelMode) bool {

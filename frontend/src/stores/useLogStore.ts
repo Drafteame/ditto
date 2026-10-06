@@ -1,8 +1,6 @@
 import { create } from 'zustand'
 import type { LogEntry, LogEvent } from '../types'
 
-let nextLogId = 0
-
 interface LogStore {
   connected: boolean
   logEntries: LogEntry[]
@@ -21,7 +19,7 @@ export const useLogStore = create<LogStore>((set) => ({
   setConnected: (connected) => set({ connected }),
 
   appendLogEvent: (event) => {
-    const entry: LogEntry = { ...event, id: String(++nextLogId) }
+    const entry: LogEntry = event
     set((state) => ({ logEntries: [...state.logEntries, entry] }))
   },
 

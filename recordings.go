@@ -887,15 +887,13 @@ func (r *Recorder) publish(method, path string, status int, body string) {
 		return
 	}
 	event := LogEvent{
-		Timestamp:    time.Now().Format("15:04:05"),
 		Type:         "RECORD",
 		Method:       method,
 		Path:         path,
 		Status:       status,
 		ResponseBody: body,
 	}
-	logRequest(r.jsonLogs, event)
-	r.bus.Publish(event)
+	publishLogEvent(r.jsonLogs, r.bus, event)
 }
 
 func recordingID(name string, at time.Time) string {

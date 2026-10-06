@@ -1,4 +1,5 @@
 export interface LogEvent {
+  id: string
   timestamp: string
   type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET' | 'MODE' | 'RECORD'
   method: string
@@ -6,15 +7,44 @@ export interface LogEvent {
   status: number
   duration_ms: number
   response_body?: string
+  request_body?: string
+  request_payload?: LogPayloadMetadata
+  response_payload?: LogPayloadMetadata
   source?: string
   request_headers?: Record<string, string[]>
+  response_headers?: Record<string, string[]>
+  url?: string
+  host?: string
+  remote_addr?: string
+  protocol?: string
+  direction?: string
+  connection_id?: string
+  client_id?: string
+  subscription_id?: string
+  adapter?: string
+  subprotocol?: string
+  mode?: string
+  target?: string
   mock_index?: number
   sequence_step?: number
   sequence_len?: number
 }
 
-export interface LogEntry extends LogEvent {
-  id: string
+export type LogEntry = LogEvent
+
+export interface LogPayloadMetadata {
+  size_bytes: number
+  captured_bytes: number
+  content_type?: string
+  encoding?: string
+  capture_status: 'empty' | 'not_captured' | 'captured' | 'binary' | 'truncated' | 'error' | 'unavailable' | 'omitted'
+  raw_base64?: string
+  error?: string
+}
+
+export type LogSummary = Omit<LogEvent, 'request_body' | 'response_body' | 'request_headers' | 'response_headers'> & {
+  request_payload?: Omit<LogPayloadMetadata, 'raw_base64'>
+  response_payload?: Omit<LogPayloadMetadata, 'raw_base64'>
 }
 
 export interface DispatchLogBody {

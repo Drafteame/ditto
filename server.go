@@ -271,7 +271,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			w.Write(resolved.Body)
 
 			event := LogEvent{
-				Timestamp:      time.Now().Format("15:04:05"),
 				Type:           "MOCK",
 				Method:         r.Method,
 				Path:           r.URL.RequestURI(),
@@ -285,8 +284,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				event.SequenceStep = resolved.SequenceStep
 				event.SequenceLen = resolved.SequenceLen
 			}
-			logRequest(jsonLogs, event)
-			bus.Publish(event)
+			publishLogEvent(jsonLogs, bus, event)
 			return
 		}
 
@@ -297,7 +295,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			duration := time.Since(proxyStart).Milliseconds()
 
 			event := LogEvent{
-				Timestamp:      time.Now().Format("15:04:05"),
 				Type:           "PROXY",
 				Method:         r.Method,
 				Path:           r.URL.RequestURI(),
@@ -306,8 +303,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				ResponseBody:   capture.decodedBody(),
 				RequestHeaders: reqHeaders,
 			}
-			logRequest(jsonLogs, event)
-			bus.Publish(event)
+			publishLogEvent(jsonLogs, bus, event)
 			return
 		}
 
@@ -317,7 +313,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		w.Write([]byte(`{"error": "no mock found and no target configured"}`))
 
 		event := LogEvent{
-			Timestamp:      time.Now().Format("15:04:05"),
 			Type:           "MISS",
 			Method:         r.Method,
 			Path:           r.URL.RequestURI(),
@@ -326,8 +321,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			ResponseBody:   `{"error": "no mock found and no target configured"}`,
 			RequestHeaders: reqHeaders,
 		}
-		logRequest(jsonLogs, event)
-		bus.Publish(event)
+		publishLogEvent(jsonLogs, bus, event)
 	})
 
 	return &Server{
@@ -555,6 +549,6 @@ func logRequestTo(w io.Writer, jsonMode bool, e LogEvent) {
 		fmt.Fprintln(w, string(data))
 		return
 	}
-	fmt.Fprintf(w, "%s %-6s %s %s → %d (%dms)\n",
-		e.Timestamp, e.Type, e.Method, e.Path, e.Status, e.DurationMs)
+	fmt.Fprintf(w, "%s %s %-6s %s %s → %d (%dms)\n",
+		e.Timestamp, e.ID, e.Type, e.Method, e.Path, e.Status, e.DurationMs)
 }

@@ -24,9 +24,23 @@ import type {
   SocketDispatchRequest,
   SocketDispatchResult,
   UpdateInfo,
+  LogEvent,
+  LogSummary,
 } from './types'
 
 const API_BASE = '/__ditto__/api'
+
+export async function fetchLogSummaries(): Promise<LogSummary[]> {
+  const res = await fetch(`${API_BASE}/logs`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchLogDetail(id: string): Promise<LogEvent> {
+  const res = await fetch(`${API_BASE}/logs/${encodeURIComponent(id)}`)
+  if (!res.ok) throw new Error(res.status === 404 ? 'Log event expired or not found' : `HTTP ${res.status}`)
+  return res.json()
+}
 
 export async function fetchMocks(): Promise<MocksResponse> {
   const res = await fetch(`${API_BASE}/mocks`)

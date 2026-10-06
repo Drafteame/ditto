@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -22,24 +23,118 @@ var webFS embed.FS
 
 // LogEvent represents a single request passing through Ditto.
 type LogEvent struct {
-	Timestamp      string              `json:"timestamp"`
-	Type           string              `json:"type"` // MOCK, PROXY, MISS, SOCKET, MODE, RECORD
-	Method         string              `json:"method"`
-	Path           string              `json:"path"`
-	Status         int                 `json:"status"`
-	DurationMs     int64               `json:"duration_ms"`
-	ResponseBody   string              `json:"response_body,omitempty"`
-	Source         string              `json:"source,omitempty"`
-	RequestHeaders map[string][]string `json:"request_headers,omitempty"`
-	MockIndex      int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
-	SequenceStep   int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
-	SequenceLen    int                 `json:"sequence_len,omitempty"`
+	ID              string              `json:"id"`
+	Timestamp       string              `json:"timestamp"`
+	Type            string              `json:"type"` // MOCK, PROXY, MISS, SOCKET, MODE, RECORD
+	Method          string              `json:"method"`
+	Path            string              `json:"path"`
+	Status          int                 `json:"status"`
+	DurationMs      int64               `json:"duration_ms"`
+	ResponseBody    string              `json:"response_body,omitempty"`
+	RequestBody     string              `json:"request_body,omitempty"`
+	RequestPayload  *LogPayloadMetadata `json:"request_payload,omitempty"`
+	ResponsePayload *LogPayloadMetadata `json:"response_payload,omitempty"`
+	Source          string              `json:"source,omitempty"`
+	RequestHeaders  map[string][]string `json:"request_headers,omitempty"`
+	ResponseHeaders map[string][]string `json:"response_headers,omitempty"`
+	URL             string              `json:"url,omitempty"`
+	Host            string              `json:"host,omitempty"`
+	RemoteAddr      string              `json:"remote_addr,omitempty"`
+	Protocol        string              `json:"protocol,omitempty"`
+	Direction       string              `json:"direction,omitempty"`
+	ConnectionID    string              `json:"connection_id,omitempty"`
+	ClientID        string              `json:"client_id,omitempty"`
+	SubscriptionID  string              `json:"subscription_id,omitempty"`
+	Adapter         string              `json:"adapter,omitempty"`
+	Subprotocol     string              `json:"subprotocol,omitempty"`
+	Mode            string              `json:"mode,omitempty"`
+	Target          string              `json:"target,omitempty"`
+	MockIndex       int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
+	SequenceStep    int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
+	SequenceLen     int                 `json:"sequence_len,omitempty"`
+}
+
+// LogPayloadMetadata describes a captured payload without requiring consumers
+// to inspect or decode its legacy string field.
+type LogPayloadMetadata struct {
+	SizeBytes     int64  `json:"size_bytes"`
+	CapturedBytes int64  `json:"captured_bytes"`
+	ContentType   string `json:"content_type,omitempty"`
+	Encoding      string `json:"encoding,omitempty"`
+	CaptureStatus string `json:"capture_status"` // empty, not_captured, captured, binary, truncated, error, unavailable, or omitted
+	RawBase64     string `json:"raw_base64,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
+const (
+	MaxRetainedLogEvents = 5000
+	MaxRetainedLogBytes  = 32 << 20
+)
+
+var nextLogEventID atomic.Uint64
+
+// prepareLogEvent gives stdout and SSE the same stable identity and timestamp.
+func prepareLogEvent(event LogEvent) LogEvent {
+	if event.ID == "" {
+		event.ID = fmt.Sprintf("log-%d", nextLogEventID.Add(1))
+	}
+	if _, err := time.Parse(time.RFC3339Nano, event.Timestamp); err != nil {
+		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	return event
+}
+
+func cloneLogEvent(event LogEvent) LogEvent {
+	cloneHeaders := func(src map[string][]string) map[string][]string {
+		if src == nil {
+			return nil
+		}
+		dst := make(map[string][]string, len(src))
+		for key, values := range src {
+			dst[key] = append([]string(nil), values...)
+		}
+		return dst
+	}
+	event.RequestHeaders = cloneHeaders(event.RequestHeaders)
+	event.ResponseHeaders = cloneHeaders(event.ResponseHeaders)
+	if event.RequestPayload != nil {
+		value := *event.RequestPayload
+		event.RequestPayload = &value
+	}
+	if event.ResponsePayload != nil {
+		value := *event.ResponsePayload
+		event.ResponsePayload = &value
+	}
+	return event
+}
+
+func summaryLogEvent(event LogEvent) LogEvent {
+	event.RequestBody, event.ResponseBody = "", ""
+	event.RequestHeaders, event.ResponseHeaders = nil, nil
+	if event.RequestPayload != nil {
+		meta := *event.RequestPayload
+		meta.RawBase64 = ""
+		event.RequestPayload = &meta
+	}
+	if event.ResponsePayload != nil {
+		meta := *event.ResponsePayload
+		meta.RawBase64 = ""
+		event.ResponsePayload = &meta
+	}
+	return event
+}
+
+type retainedLogEvent struct {
+	event LogEvent
+	size  int
 }
 
 // EventBus broadcasts log events to connected SSE clients.
 type EventBus struct {
-	mu      sync.Mutex
-	clients map[chan LogEvent]struct{}
+	mu            sync.Mutex
+	clients       map[chan LogEvent]struct{}
+	retained      []retainedLogEvent
+	retainedBytes int
 }
 
 func NewEventBus() *EventBus {
@@ -66,7 +161,19 @@ func (b *EventBus) Unsubscribe(ch chan LogEvent) {
 }
 
 func (b *EventBus) Publish(event LogEvent) {
+	event = prepareLogEvent(event)
+	stored := cloneLogEvent(event)
+	encoded, _ := json.Marshal(stored)
 	b.mu.Lock()
+	if len(encoded) <= MaxRetainedLogBytes {
+		for len(b.retained) > 0 && (len(b.retained) >= MaxRetainedLogEvents || b.retainedBytes+len(encoded) > MaxRetainedLogBytes) {
+			b.retainedBytes -= b.retained[0].size
+			b.retained[0] = retainedLogEvent{}
+			b.retained = b.retained[1:]
+		}
+		b.retained = append(b.retained, retainedLogEvent{event: stored, size: len(encoded)})
+		b.retainedBytes += len(encoded)
+	}
 	clients := make([]chan LogEvent, 0, len(b.clients))
 	for ch := range b.clients {
 		clients = append(clients, ch)
@@ -74,9 +181,40 @@ func (b *EventBus) Publish(event LogEvent) {
 	b.mu.Unlock()
 	for _, ch := range clients {
 		select {
-		case ch <- event:
+		case ch <- cloneLogEvent(event):
 		default: // drop if client is slow
 		}
+	}
+}
+
+func (b *EventBus) LogSummaries() []LogEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	items := make([]LogEvent, len(b.retained))
+	for i, entry := range b.retained {
+		items[i] = summaryLogEvent(entry.event)
+	}
+	return items
+}
+
+func (b *EventBus) LogDetail(id string) (LogEvent, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := len(b.retained) - 1; i >= 0; i-- {
+		if b.retained[i].event.ID == id {
+			return cloneLogEvent(b.retained[i].event), true
+		}
+	}
+	return LogEvent{}, false
+}
+
+// publishLogEvent assigns identity once, then shares that event with stdout and
+// the retained/SSE bus. The event bus preserves IDs already assigned here.
+func publishLogEvent(jsonMode bool, bus *EventBus, event LogEvent) {
+	event = prepareLogEvent(event)
+	logRequest(jsonMode, event)
+	if bus != nil {
+		bus.Publish(event)
 	}
 }
 
@@ -133,6 +271,35 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *EventBus, proxyMgr *P
 				flusher.Flush()
 			}
 		}
+	})
+
+	// GET log summaries and an individual retained event. Summary rows omit
+	// body strings; details remain available while the bounded event is retained.
+	mux.HandleFunc("/__ditto__/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(bus.LogSummaries())
+	})
+	mux.HandleFunc("/__ditto__/api/logs/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/__ditto__/api/logs/")
+		if id == "" || strings.Contains(id, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		event, ok := bus.LogDetail(id)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(event)
 	})
 
 	// GET mocks list

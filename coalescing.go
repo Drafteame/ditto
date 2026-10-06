@@ -77,7 +77,6 @@ func (p *CoalescingPublisher) flush(key, path string) {
 	}
 	body, _ := json.Marshal(map[string]any{"total_frames": frames, "window_ms": 1000})
 	p.publish(LogEvent{
-		Timestamp:    time.Now().Format("15:04:05"),
 		Type:         "SOCKET",
 		Method:       "DISPATCH_BURST",
 		Path:         path,
@@ -87,8 +86,5 @@ func (p *CoalescingPublisher) flush(key, path string) {
 }
 
 func (p *CoalescingPublisher) publish(event LogEvent) {
-	logRequest(p.jsonLogs, event)
-	if p.bus != nil {
-		p.bus.Publish(event)
-	}
+	publishLogEvent(p.jsonLogs, p.bus, event)
 }

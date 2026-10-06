@@ -942,7 +942,6 @@ func (h *SocketHub) publishSocketEvent(method, path string, status int, body str
 
 func (h *SocketHub) publishSocketEventWithSource(method, path string, status int, body string, duration int64, source string) {
 	event := LogEvent{
-		Timestamp:    time.Now().Format("15:04:05"),
 		Type:         "SOCKET",
 		Method:       method,
 		Path:         path,
