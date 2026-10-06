@@ -422,10 +422,7 @@ func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
 
 	hub.Dispatch("/log", json.RawMessage(`{"score":7}`), "")
 
-	event := waitForSocketEvent(t, events, time.Second)
-	if event.Method != "DISPATCH" {
-		t.Fatalf("event method = %s, want DISPATCH", event.Method)
-	}
+	event := waitForSocketMethod(t, events, "DISPATCH", "/log", time.Second)
 	var body DispatchLogBody
 	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
 		t.Fatalf("response body invalid JSON: %v", err)
@@ -452,7 +449,7 @@ func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
 	large := json.RawMessage(`{"data":"` + strings.Repeat("x", dispatchPayloadMaxBytes+128) + `"}`)
 	hub.Dispatch("/large", large, "")
 
-	event := waitForSocketEvent(t, events, time.Second)
+	event := waitForSocketMethod(t, events, "DISPATCH", "/large", time.Second)
 	var body DispatchLogBody
 	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
 		t.Fatalf("response body invalid JSON: %v", err)
@@ -503,7 +500,7 @@ func TestDispatchLogIncludesDecodedPayloadWithoutSSESubscribers(t *testing.T) {
 			continue
 		}
 		var candidate LogEvent
-		if err := json.Unmarshal([]byte(line), &candidate); err == nil && candidate.Path == "/decoded" {
+		if err := json.Unmarshal([]byte(line), &candidate); err == nil && candidate.Type == "SOCKET" && candidate.Method == "DISPATCH" && candidate.Path == "/decoded" {
 			event = candidate
 		}
 	}
@@ -812,7 +809,8 @@ func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
 	defer bus.Unsubscribe(events)
 	pub := NewCoalescingPublisher(bus, false)
 	for i := 0; i < SocketLogCoalesceThresholdPerSecond+5; i++ {
-		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK})
+		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK,
+			Direction: "ditto_to_client", Source: "test", RequestBody: fmt.Sprintf(`{"index":%d}`, i)})
 	}
 	deadline := time.After(1500 * time.Millisecond)
 	summaries := 0
@@ -825,6 +823,22 @@ func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
 		case <-deadline:
 			if summaries != 1 {
 				t.Fatalf("burst summaries = %d, want 1", summaries)
+			}
+			var burst LogEvent
+			for _, event := range bus.LogSummaries() {
+				if event.Method == "DISPATCH_BURST" {
+					burst = event
+				}
+			}
+			if burst.BurstCount != SocketLogCoalesceThresholdPerSecond+5 || burst.BurstStartCursor == "" || burst.BurstEndCursor == "" {
+				t.Fatalf("burst summary = %#v", burst)
+			}
+			members := bus.History("", burst.BurstStartCursor, burst.BurstEndCursor, "/burst", "DISPATCH", "ditto_to_client", "test", "", 0, 100, burst.BurstCount)
+			if !members.Complete || len(members.Events) != burst.BurstCount {
+				t.Fatalf("burst members = %d complete=%t gap=%#v", len(members.Events), members.Complete, members.Gap)
+			}
+			if detail, ok := bus.LogDetail(members.Events[0].ID); !ok || detail.RequestBody == "" {
+				t.Fatalf("suppressed dispatch detail not retained: %#v found=%t", detail, ok)
 			}
 			return
 		}

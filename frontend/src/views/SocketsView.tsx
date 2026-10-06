@@ -17,6 +17,8 @@ interface SocketsViewProps {
 
 export const SocketsView = memo(function SocketsView({
   serverInfo,
+  selectedLogId,
+  onSelectLog,
   showToast,
 }: SocketsViewProps) {
   const logEntries = useLogStore(state => state.logEntries)
@@ -67,6 +69,8 @@ export const SocketsView = memo(function SocketsView({
       clients={connectedClients}
       entries={logEntries}
       serverInfo={serverInfo}
+      selectedLogId={selectedLogId}
+      onSelectLog={onSelectLog}
       schemaPacks={schemaPacks}
       schemaTypes={schemaTypes}
       schemasLoading={schemasLoading}

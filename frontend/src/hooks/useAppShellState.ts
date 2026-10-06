@@ -20,8 +20,12 @@ export function useAppShellState() {
     logEntries: state.logEntries,
     connected: state.connected,
     selectedLogId: state.selectedLogId,
+    selectedEntry: state.selectedEntry,
+    gapNotice: state.gapNotice,
     setConnected: state.setConnected,
-    appendLogEvent: state.appendLogEvent,
+    appendLogEvents: state.appendLogEvents,
+    setGapNotice: state.setGapNotice,
+    setSelectedEntry: state.setSelectedEntry,
     clearLog: state.clearLog,
     selectLog: state.selectLog,
   })))

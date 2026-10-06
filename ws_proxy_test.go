@@ -267,10 +267,7 @@ func TestForwardFromUpstreamLogsDecodedAppSyncFrame(t *testing.T) {
 
 	hub.forwardFromUpstream("/live", websocket.MessageText, frame)
 
-	event := waitForSocketEvent(t, events, time.Second)
-	if event.Method != "DISPATCH" {
-		t.Fatalf("event method = %s, want DISPATCH", event.Method)
-	}
+	event := waitForSocketMethod(t, events, "DISPATCH", "/live", time.Second)
 	var body DispatchLogBody
 	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
 		t.Fatalf("response body invalid JSON: %v", err)
@@ -310,6 +307,22 @@ func waitForSocketEvent(t *testing.T, events <-chan LogEvent, timeout time.Durat
 			}
 		case <-timer.C:
 			t.Fatalf("timed out waiting for socket event")
+		}
+	}
+}
+
+func waitForSocketMethod(t *testing.T, events <-chan LogEvent, method, path string, timeout time.Duration) LogEvent {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case event := <-events:
+			if event.Type == "SOCKET" && event.Method == method && event.Path == path {
+				return event
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for socket %s event on %s", method, path)
 		}
 	}
 }

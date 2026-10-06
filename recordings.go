@@ -528,6 +528,27 @@ func decodeAppSyncEnvelope(schemas *SchemaRegistry, profile AdapterProfile, data
 		return nil, "appsync envelope not found"
 	}
 	alias, _ := inner["t"].(string)
+	if encoded, ok := inner["base64"].(string); ok {
+		raw, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return nil, err.Error()
+		}
+		typeName, _ := inner["type_name"].(string)
+		if typeName == "" {
+			typeName = reverseAlias(profile.TypeAliases, alias)
+		}
+		if typeName == "" {
+			typeName = alias
+		}
+		if typeName == "" || schemas == nil || schemas.Descriptor(typeName) == nil {
+			return &DecodedFrame{TypeName: typeName, Alias: alias}, ""
+		}
+		payload, err := schemas.Decode(typeName, raw)
+		if err != nil {
+			return nil, err.Error()
+		}
+		return &DecodedFrame{TypeName: typeName, PayloadJSON: payload, Alias: alias}, ""
+	}
 	if alias == "" {
 		return nil, "appsync alias missing"
 	}
@@ -887,15 +908,13 @@ func (r *Recorder) publish(method, path string, status int, body string) {
 		return
 	}
 	event := LogEvent{
-		Timestamp:    time.Now().Format("15:04:05"),
 		Type:         "RECORD",
 		Method:       method,
 		Path:         path,
 		Status:       status,
 		ResponseBody: body,
 	}
-	logRequest(r.jsonLogs, event)
-	r.bus.Publish(event)
+	publishLogEvent(r.jsonLogs, r.bus, event)
 }
 
 func recordingID(name string, at time.Time) string {

@@ -1,24 +1,116 @@
 export interface LogEvent {
+  id: string
   timestamp: string
-  type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET' | 'MODE' | 'RECORD'
+  type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET' | 'MODE' | 'RECORD' | 'GAP'
   method: string
   path: string
   status: number
   duration_ms: number
+  cursor?: string
+  not_retained?: boolean
+  stream_gap?: boolean
+  gap_reason?: string
+  gap_from_cursor?: string
+  gap_to_cursor?: string
   response_body?: string
+  request_body?: string
+  request_payload?: LogPayloadMetadata
+  response_payload?: LogPayloadMetadata
   source?: string
+  error?: string
   request_headers?: Record<string, string[]>
+  response_headers?: Record<string, string[]>
+  request_form_fields?: Record<string, string[]>
+  request_files?: LogFileMetadata[]
+  request_forms_truncated?: boolean
+  url?: string
+  host?: string
+  remote_addr?: string
+  protocol?: string
+  direction?: string
+  connection_id?: string
+  client_id?: string
+  subscription_id?: string
+  channel?: string
+  dispatch_id?: string
+  delivery_state?: 'queued' | 'written' | 'dropped' | 'write_error' | 'suppressed' | string
+  frame_kind?: 'text' | 'binary' | 'control' | string
+  control_type?: string
+  type_name?: string
+  alias?: string
+  decode_error?: string
+  decoded_payload?: string
+  decoded_truncated?: boolean
+  close_code?: number
+  close_reason?: string
+  queued?: number
+  dropped?: number
+  errors?: number
+  written?: number
+  burst_id?: string
+  burst_method?: string
+  burst_count?: number
+  burst_direction?: string
+  burst_source?: string
+  burst_start_cursor?: string
+  burst_end_cursor?: string
+  burst_window_ms?: number
+  adapter?: string
+  subprotocol?: string
+  mode?: string
+  target?: string
   mock_index?: number
   sequence_step?: number
   sequence_len?: number
 }
 
-export interface LogEntry extends LogEvent {
-  id: string
+export type LogEntry = LogEvent
+
+export interface LogPayloadMetadata {
+  size_bytes: number
+  captured_bytes: number
+  content_type?: string
+  encoding?: string
+  capture_status: 'empty' | 'not_captured' | 'captured' | 'binary' | 'truncated' | 'error' | 'unavailable' | 'metadata_only' | 'omitted'
+  raw_base64?: string
+  error?: string
+}
+
+export interface LogFileMetadata {
+  name: string
+  content_type?: string
+  size_bytes: number
+  captured_bytes: number
+  capture_status: string
+}
+
+export type LogSummary = Omit<LogEvent, 'request_body' | 'response_body' | 'decoded_payload' | 'request_headers' | 'response_headers'> & {
+  request_payload?: Omit<LogPayloadMetadata, 'raw_base64'>
+  response_payload?: Omit<LogPayloadMetadata, 'raw_base64'>
+}
+
+export interface LogHistoryGap {
+  reason: string
+  from_cursor?: string
+  to_cursor?: string
+}
+
+export interface LogHistory {
+  events: LogSummary[]
+  oldest_cursor?: string
+  latest_cursor?: string
+  next_cursor?: string
+  has_more: boolean
+  total: number
+  expected?: number
+  complete: boolean
+  gap?: LogHistoryGap
 }
 
 export interface DispatchLogBody {
   delivered: number
+  queued?: number
+  dispatch_id?: string
   dropped: number
   errors: number
   type_name?: string

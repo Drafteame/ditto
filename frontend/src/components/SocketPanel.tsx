@@ -16,11 +16,15 @@ import { detectTemplateVariablesInValue, isBuiltinVariable } from './EventTempla
 import { useSocketStore, buildAdapterOptions } from '../stores/useSocketStore'
 import { useChannelModeStore } from '../stores/useChannelModeStore'
 import type { ChannelMode } from '../types'
+import { formatLocalTimestamp } from '../time'
+import { virtualRange } from '../virtual'
 
 interface SocketPanelProps {
   clients: SocketClient[]
   entries: LogEntry[]
   serverInfo: ServerInfo | null
+  selectedLogId: string | null
+  onSelectLog: (id: string | null) => void
   schemaPacks: SchemaPack[]
   schemaTypes: SchemaTypeDescriptor[]
   schemasLoading: boolean
@@ -48,6 +52,8 @@ export function SocketPanel({
   clients,
   entries,
   serverInfo,
+  selectedLogId,
+  onSelectLog,
   schemaPacks,
   schemaTypes,
   schemasLoading,
@@ -88,16 +94,49 @@ export function SocketPanel({
   const [templateVars, setTemplateVars] = useState<Record<string, string>>({})
   const [templateDispatching, setTemplateDispatching] = useState(false)
   const [lastResolvedTemplatePayload, setLastResolvedTemplatePayload] = useState('')
+  const [filters, setFilters] = useState({ channel: '', client: '', direction: '', source: '', type: '', errors: false })
+  const [eventScroll, setEventScroll] = useState({ top: 0, height: 300 })
+  const socketListRef = useRef<HTMLDivElement>(null)
 
   const selectedType = useMemo(
     () => schemaTypes.find(type => type.full_name === typeName) ?? null,
     [schemaTypes, typeName],
   )
 
-  const socketEntries = useMemo(
-    () => entries.filter(entry => entry.type === 'SOCKET').slice(-200).reverse(),
-    [entries],
-  )
+  const socketEntries = useMemo(() => {
+    const filtered = entries.filter(entry => entry.type === 'SOCKET').filter(entry =>
+      (!filters.channel || entry.channel === filters.channel || entry.path === filters.channel) &&
+      (!filters.client || entry.client_id === filters.client) &&
+      (!filters.direction || entry.direction === filters.direction || entry.burst_direction === filters.direction) &&
+      (!filters.source || entry.source === filters.source || entry.burst_source === filters.source) &&
+      (!filters.type || entry.type_name === filters.type) &&
+      (!filters.errors || !!entry.error || !!entry.decode_error || !!entry.errors || !!entry.dropped || entry.delivery_state === 'write_error' || entry.delivery_state === 'dropped'),
+    )
+    return filtered.reverse()
+  }, [entries, filters])
+  const eventRange = virtualRange(eventScroll.top, eventScroll.height, 36, socketEntries.length)
+
+  useEffect(() => {
+    const el = socketListRef.current
+    if (!el) return
+    const measure = () => setEventScroll({ top: el.scrollTop, height: el.clientHeight })
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (socketListRef.current) socketListRef.current.scrollTop = 0
+    setEventScroll(current => ({ ...current, top: 0 }))
+  }, [filters])
+  const socketFilterOptions = useMemo(() => ({
+    channel: [...new Set(entries.filter(entry => entry.type === 'SOCKET').map(entry => entry.channel || entry.path).filter(Boolean))].sort(),
+    client: [...new Set(entries.filter(entry => entry.type === 'SOCKET').map(entry => entry.client_id).filter((value): value is string => !!value))].sort(),
+    direction: [...new Set(entries.filter(entry => entry.type === 'SOCKET').map(entry => entry.direction || entry.burst_direction).filter((value): value is string => !!value))].sort(),
+    source: [...new Set(entries.filter(entry => entry.type === 'SOCKET').map(entry => entry.source || entry.burst_source).filter((value): value is string => !!value))].sort(),
+    type: [...new Set(entries.filter(entry => entry.type === 'SOCKET').map(entry => entry.type_name).filter((value): value is string => !!value))].sort(),
+  }), [entries])
   const selectedTemplate = useMemo(
     () => templates.find(template => template.id === selectedTemplateId) ?? null,
     [templates, selectedTemplateId],
@@ -149,7 +188,7 @@ export function SocketPanel({
       const errors = result.errors?.length ?? 0
       const suffix = dropped || errors ? `, ${dropped} dropped, ${errors} errors` : ''
       const detail = result.errors?.[0] ? `: ${result.errors[0]}` : result.dropped?.[0] ? `: dropped ${result.dropped[0]}` : ''
-      showToast(`Dispatched to ${result.delivered} client${result.delivered === 1 ? '' : 's'}${suffix}${detail}`)
+      showToast(`Queued for ${result.delivered} client${result.delivered === 1 ? '' : 's'}${suffix}${detail}`)
     } catch (err) {
       showToast(`Dispatch failed: ${(err as Error).message}`, 'warn')
     } finally {
@@ -199,7 +238,7 @@ export function SocketPanel({
       const dropped = result.dropped?.length ?? 0
       const errors = result.errors?.length ?? 0
       const suffix = dropped || errors ? `, ${dropped} dropped, ${errors} errors` : ''
-      showToast(`Template dispatched to ${result.delivered} client${result.delivered === 1 ? '' : 's'}${suffix}`)
+      showToast(`Template queued for ${result.delivered} client${result.delivered === 1 ? '' : 's'}${suffix}`)
     } catch (err) {
       showToast(`Template dispatch failed: ${(err as Error).message}`, 'warn')
     } finally {
@@ -419,11 +458,22 @@ export function SocketPanel({
 
         <section className="socket-events">
           <div className="panel-label">Live socket log</div>
+          <div className="socket-log-filters">
+            {(['channel', 'client', 'direction', 'source', 'type'] as const).map(key => <label key={key}>
+              <span>{key === 'type' ? 'type name' : key}</span>
+              <select className="select" value={filters[key]} onChange={event => setFilters(current => ({ ...current, [key]: event.target.value }))}>
+                <option value="">All</option>{socketFilterOptions[key].map(value => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>)}
+            <label className="socket-error-filter"><input type="checkbox" checked={filters.errors} onChange={event => setFilters(current => ({ ...current, errors: event.target.checked }))} /> Errors only</label>
+          </div>
           {socketEntries.length === 0 ? (
             <div className="socket-empty compact">Socket events will stream here through the existing SSE log.</div>
           ) : (
-            <div className="socket-event-list">
-              {socketEntries.map(entry => <SocketEventRow key={entry.id} entry={entry} />)}
+            <div ref={socketListRef} className="socket-event-list" onScroll={event => setEventScroll({ top: event.currentTarget.scrollTop, height: event.currentTarget.clientHeight })}>
+              <div aria-hidden="true" style={{ height: eventRange.top }} />
+              {socketEntries.slice(eventRange.start, eventRange.end).map(entry => <SocketEventRow key={entry.id} entry={entry} selected={selectedLogId === entry.id} onSelect={() => onSelectLog(entry.id)} />)}
+              <div aria-hidden="true" style={{ height: eventRange.bottom }} />
             </div>
           )}
         </section>
@@ -446,46 +496,45 @@ export function SocketPanel({
   )
 }
 
-function SocketEventRow({ entry }: { entry: LogEntry }) {
+function SocketEventRow({ entry, selected, onSelect }: { entry: LogEntry; selected: boolean; onSelect: () => void }) {
   const parsed = entry.method === 'DISPATCH' ? parseDispatchLogBody(entry.response_body) : null
-  const hasPayload = parsed && parsed.payload !== undefined
-  const label = parsed?.alias || parsed?.type_name || (hasPayload ? 'JSON' : '')
+  const hasPayload = parsed?.payload !== undefined
+  const label = parsed?.alias || parsed?.type_name || entry.alias || entry.type_name || (hasPayload ? 'JSON' : '')
+  const queued = parsed?.queued ?? entry.queued ?? (entry.method.startsWith('DISPATCH') ? 0 : undefined)
+  const hasDispatchSummary = entry.method.startsWith('DISPATCH')
+  const dropped = entry.dropped ?? parsed?.dropped ?? 0
+  const errors = entry.errors ?? parsed?.errors ?? 0
   return (
-    <div className={entry.method === 'DISPATCH_BURST' ? 'socket-event-row burst' : 'socket-event-row'}>
-      <span className="time">{entry.timestamp}</span>
+    <div role="button" tabIndex={0} aria-pressed={selected} onClick={onSelect} onKeyDown={event => {
+      if (event.target !== event.currentTarget) return
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect() }
+    }} className={`${entry.method === 'DISPATCH_BURST' ? 'socket-event-row burst' : 'socket-event-row'}${selected ? ' selected' : ''}`}>
+      <span className="time" title={entry.timestamp}>{formatLocalTimestamp(entry.timestamp)}</span>
       <span className="method">{entry.method}</span>
       <span className="path" title={entry.path}>{entry.path}</span>
       <span className="status">{entry.status || '-'}</span>
-      {entry.method === 'DISPATCH_BURST' && <BurstBadge body={entry.response_body} />}
-      {parsed ? (
+      {entry.method.endsWith('_BURST') ? <BurstBadge count={entry.burst_count} windowMs={entry.burst_window_ms} /> : parsed || hasDispatchSummary ? (
         <div className="payload dispatch-payload">
           <span className="dispatch-counts" title={entry.response_body}>
-            {parsed.delivered} delivered | {parsed.dropped} dropped | {parsed.errors} errors
+            {`${queued ?? 0} queued${dropped || errors ? ` | ${dropped} dropped | ${errors} errors` : ''}`}
           </span>
           {label && <span className="payload-chip">{label}</span>}
-          {parsed.truncated && <span className="truncate-badge">truncated 4KB</span>}
-          {parsed.decode_error && (
-            <span className="decode-badge" title={parsed.decode_error}>decode</span>
+          {parsed?.truncated && <span className="truncate-badge">truncated</span>}
+          {(parsed?.decode_error || entry.decode_error) && (
+            <span className="decode-badge" title={parsed?.decode_error || entry.decode_error}>decode</span>
           )}
-          {hasPayload && (
-            <details className="payload-details">
-              <summary>payload</summary>
-              <pre>{formatPayload(parsed.payload)}</pre>
-            </details>
-          )}
+          {hasPayload && <span className="payload-chip">payload available in inspector</span>}
         </div>
       ) : entry.response_body ? (
         <span className="payload" title={entry.response_body}>
           <Braces size={13} /> {entry.response_body}
         </span>
       ) : null}
+      <span className="socket-event-context" title={[entry.direction || entry.burst_direction, entry.source || entry.burst_source, entry.adapter, entry.delivery_state].filter(Boolean).join(' · ')}>
+        {[entry.direction || entry.burst_direction, entry.source || entry.burst_source, entry.adapter, entry.delivery_state].filter(Boolean).join(' · ')}
+      </span>
     </div>
   )
-}
-
-function formatPayload(payload: unknown) {
-  if (typeof payload === 'string') return payload
-  return JSON.stringify(payload, null, 2)
 }
 
 function ChannelRateCapInput({
@@ -533,16 +582,8 @@ function ChannelRateCapInput({
   )
 }
 
-function BurstBadge({ body }: { body?: string }) {
-  let label = 'burst'
-  try {
-    const parsed = JSON.parse(body || '{}') as { total_frames?: number; frames?: number; window_ms?: number }
-    const frames = parsed.total_frames ?? parsed.frames
-    if (frames) label = `${frames} total frames in ${Math.round((parsed.window_ms || 1000) / 1000)}s`
-  } catch {
-    label = 'burst'
-  }
-  return <span className="burst-badge">{label}</span>
+function BurstBadge({ count, windowMs }: { count?: number; windowMs?: number }) {
+  return <span className="burst-badge">{count ?? 0} retained log events / {windowMs ?? 0}ms</span>
 }
 
 function SchemaPacksModal({

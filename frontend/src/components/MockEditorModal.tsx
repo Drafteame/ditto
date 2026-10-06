@@ -22,6 +22,7 @@ export interface MockEditorState {
   status: number
   delay: number
   body: string
+  responseHeaders: string
   matchQuery: string
   matchHeaders: string
   matchBody: string
@@ -72,6 +73,7 @@ export function createNewMockState(
   path: string,
   status: number,
   responseBody?: string,
+  headers?: Record<string, string>,
 ): MockEditorState {
   let cleanPath = path || ''
   let queryString = ''
@@ -99,6 +101,7 @@ export function createNewMockState(
     status: status || 200,
     delay: 0,
     body: prettyBody,
+    responseHeaders: mapToLines(headers, ': '),
     matchQuery,
     matchHeaders: '',
     matchBody: '',
@@ -128,6 +131,7 @@ export function createEditMockState(index: number, mock: Mock): MockEditorState 
     status: mock.status,
     delay: mock.delay_ms || 0,
     body: prettyBody,
+    responseHeaders: mapToLines(mock.headers, ': '),
     matchQuery: mapToLines(match.query, '='),
     matchHeaders: mapToLines(match.headers, ': '),
     matchBody: match.body ? JSON.stringify(match.body, null, 2) : '',
@@ -375,6 +379,7 @@ export function MockEditorModal({
   const [status, setStatus] = useState(initial.status)
   const [delay, setDelay] = useState(initial.delay)
   const [body, setBody] = useState(initial.body)
+  const [responseHeaders, setResponseHeaders] = useState(initial.responseHeaders)
   const [matchQuery, setMatchQuery] = useState(initial.matchQuery)
   const [matchHeaders, setMatchHeaders] = useState(initial.matchHeaders)
   const [matchBody, setMatchBody] = useState(initial.matchBody)
@@ -399,6 +404,7 @@ export function MockEditorModal({
     setStatus(initial.status)
     setDelay(initial.delay)
     setBody(initial.body)
+    setResponseHeaders(initial.responseHeaders)
     setMatchQuery(initial.matchQuery)
     setMatchHeaders(initial.matchHeaders)
     setMatchBody(initial.matchBody)
@@ -432,6 +438,7 @@ export function MockEditorModal({
     const match: Record<string, unknown> = {}
     const queryMap = linesToMap(matchQuery, '=')
     const headersMap = linesToMap(matchHeaders, ':')
+    const responseHeadersMap = linesToMap(responseHeaders, ':')
 
     if (queryMap) match.query = queryMap
     if (headersMap) match.headers = headersMap
@@ -451,6 +458,7 @@ export function MockEditorModal({
       body: parsedBody,
       delay_ms: delay,
     }
+    if (responseHeadersMap) mock.headers = responseHeadersMap
     if (Object.keys(match).length > 0) mock.match = match
 
     // Always persist both static body AND sequence steps when the user has
@@ -503,6 +511,7 @@ export function MockEditorModal({
     body,
     matchQuery,
     matchHeaders,
+    responseHeaders,
     matchBody,
     responseMode,
     sequenceSteps,
@@ -663,10 +672,16 @@ export function MockEditorModal({
           </div>
 
           {responseMode === 'static' ? (
-            <div className="fld">
-              <label>Response body (JSON)</label>
-              <JsonEditor value={body} onChange={setBody} />
-            </div>
+            <>
+              <div className="fld">
+                <label>Response body (JSON)</label>
+                <JsonEditor value={body} onChange={setBody} />
+              </div>
+              <div className="fld">
+                <label>Response headers <span className="text-fg-3">(one per line, key: value)</span></label>
+                <textarea className="input" rows={3} value={responseHeaders} onChange={e => setResponseHeaders(e.target.value)} spellCheck={false} />
+              </div>
+            </>
           ) : (
             <div className="seq-editor">
               <div className="seq-editor-head">
