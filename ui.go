@@ -49,6 +49,20 @@ type LogEvent struct {
 	ConnectionID          string              `json:"connection_id,omitempty"`
 	ClientID              string              `json:"client_id,omitempty"`
 	SubscriptionID        string              `json:"subscription_id,omitempty"`
+	Channel               string              `json:"channel,omitempty"`
+	DispatchID            string              `json:"dispatch_id,omitempty"`
+	DeliveryState         string              `json:"delivery_state,omitempty"`
+	FrameKind             string              `json:"frame_kind,omitempty"`
+	ControlType           string              `json:"control_type,omitempty"`
+	TypeName              string              `json:"type_name,omitempty"`
+	Alias                 string              `json:"alias,omitempty"`
+	DecodeError           string              `json:"decode_error,omitempty"`
+	DecodedPayload        string              `json:"decoded_payload,omitempty"`
+	DecodedTruncated      bool                `json:"decoded_truncated,omitempty"`
+	CloseCode             int                 `json:"close_code,omitempty"`
+	CloseReason           string              `json:"close_reason,omitempty"`
+	Queued                int                 `json:"queued,omitempty"`
+	Written               int                 `json:"written,omitempty"`
 	Adapter               string              `json:"adapter,omitempty"`
 	Subprotocol           string              `json:"subprotocol,omitempty"`
 	Mode                  string              `json:"mode,omitempty"`
@@ -123,7 +137,7 @@ func cloneLogEvent(event LogEvent) LogEvent {
 }
 
 func summaryLogEvent(event LogEvent) LogEvent {
-	event.RequestBody, event.ResponseBody = "", ""
+	event.RequestBody, event.ResponseBody, event.DecodedPayload = "", "", ""
 	event.RequestHeaders, event.ResponseHeaders = nil, nil
 	event.RequestFormFields, event.RequestFiles, event.RequestFormsTruncated = nil, nil, false
 	if event.RequestPayload != nil {

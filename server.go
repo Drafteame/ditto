@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
@@ -246,7 +247,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				return
 			}
 			if shouldProxyWebSocket(r) && proxyMgr.Target() != "" {
-				proxyMgr.ServeHTTP(w, r)
+				proxyMgr.ProxyWebSocket(w, r, socketHub)
 				return
 			}
 			socketHub.ServeHTTP(w, r)
@@ -586,6 +587,10 @@ func newResponseCapture(w http.ResponseWriter) *responseCapture {
 
 // Unwrap lets http.ResponseController reach optional transport capabilities.
 func (rc *responseCapture) Unwrap() http.ResponseWriter { return rc.ResponseWriter }
+
+func (rc *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(rc.ResponseWriter).Hijack()
+}
 
 func (rc *responseCapture) Flush() {
 	_ = rc.FlushError()

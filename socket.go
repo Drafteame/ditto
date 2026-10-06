@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"nhooyr.io/websocket"
 )
@@ -34,8 +35,19 @@ type ServerMsg struct {
 }
 
 type EncodedServerMessage struct {
-	Data []byte
-	Kind websocket.MessageType
+	Data           []byte
+	Kind           websocket.MessageType
+	DispatchID     string
+	Channel        string
+	SubscriptionID string
+	Source         string
+	ControlType    string
+	TypeName       string
+	Target         string
+	ClientID       string
+	Adapter        string
+	Subprotocol    string
+	Direction      string
 }
 
 type EncodedPayload struct {
@@ -150,6 +162,11 @@ type SocketClient struct {
 	droppedToClient atomic.Uint64
 	upstreamHeaders http.Header
 	upstreamHost    string
+	url             string
+	host            string
+	protocolName    string
+	subprotocol     string
+	requestHeaders  http.Header
 
 	mu            sync.RWMutex
 	subscriptions map[string]string
@@ -173,6 +190,7 @@ type socketDispatchRequest struct {
 
 type SocketDispatchResult struct {
 	Delivered int      `json:"delivered"`
+	Queued    int      `json:"queued"`
 	Dropped   []string `json:"dropped,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
 }
@@ -183,6 +201,8 @@ const dispatchPayloadMaxBytes = 4096
 // a JSON string containing the first dispatchPayloadMaxBytes bytes.
 type DispatchLogBody struct {
 	Delivered   int             `json:"delivered"`
+	Queued      int             `json:"queued"`
+	DispatchID  string          `json:"dispatch_id,omitempty"`
 	Dropped     int             `json:"dropped"`
 	Errors      int             `json:"errors"`
 	TypeName    string          `json:"type_name,omitempty"`
@@ -193,8 +213,84 @@ type DispatchLogBody struct {
 }
 
 type dispatchDecodeHint struct {
-	TypeName string
-	Payload  json.RawMessage
+	TypeName       string
+	Payload        json.RawMessage
+	RawData        []byte
+	RawKind        websocket.MessageType
+	RawContentType string
+}
+
+var nextSocketDispatchID atomic.Uint64
+
+func newSocketDispatchID() string { return fmt.Sprintf("dispatch-%d", nextSocketDispatchID.Add(1)) }
+
+func (h *SocketHub) currentSocketMode(channel string) string {
+	if h == nil || h.modes == nil || channel == "" {
+		return ""
+	}
+	return string(h.modes.Get(channel).Mode)
+}
+
+func socketFramePreview(raw []byte, kind websocket.MessageType) (string, *LogPayloadMetadata) {
+	contentType := "application/octet-stream"
+	if kind == websocket.MessageText {
+		contentType = "text/plain; charset=utf-8"
+	}
+	preview, metadata := captureLogPayload(raw, int64(len(raw)), contentType, "", nil)
+	return truncateSocketPreview(preview), metadata
+}
+
+func truncateSocketPreview(preview string) string {
+	if len(preview) > dispatchPayloadMaxBytes {
+		preview = preview[:dispatchPayloadMaxBytes]
+		for !utf8.ValidString(preview) {
+			preview = preview[:len(preview)-1]
+		}
+	}
+	return preview
+}
+
+func (h *SocketHub) logSocketFrame(event LogEvent, data []byte, kind websocket.MessageType, typeName string) {
+	event.Type = "SOCKET"
+	event.FrameKind = frameKind(kind)
+	event.TypeName = typeName
+	preview, metadata := socketFramePreview(data, kind)
+	if event.Direction == "client_to_ditto" || event.Direction == "client_to_upstream" || event.Direction == "ditto_to_upstream" {
+		event.RequestBody, event.RequestPayload = preview, metadata
+	} else {
+		event.ResponseBody, event.ResponsePayload = preview, metadata
+	}
+	decoded, decodeErr := h.decodeSocketFrame(kind, data, event.Adapter, typeName)
+	if decoded != nil {
+		event.TypeName = decoded.TypeName
+		event.Alias = decoded.Alias
+		if len(decoded.PayloadJSON) > 0 {
+			event.DecodedPayload, event.DecodedTruncated = boundedSocketJSON(decoded.PayloadJSON)
+		}
+	}
+	if decodeErr != "" {
+		event.DecodeError = decodeErr
+	}
+	if decodeErr != "" && event.Error == "" {
+		event.Error = decodeErr
+	}
+	h.events.Publish(event)
+}
+
+func (h *SocketHub) decodeSocketFrame(kind websocket.MessageType, data []byte, adapter, typeName string) (*DecodedFrame, string) {
+	if typeName != "" {
+		decoded := &DecodedFrame{TypeName: typeName}
+		if h.schemas == nil {
+			return decoded, "schema not loaded"
+		}
+		payload, err := h.schemas.Decode(typeName, data)
+		if err != nil {
+			return decoded, err.Error()
+		}
+		decoded.PayloadJSON = payload
+		return decoded, ""
+	}
+	return DecodeWireFrame(h.schemas, frameKind(kind), data, adapter)
 }
 
 type adapterPayload struct {
@@ -415,6 +511,9 @@ func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered Rendered
 		return SocketDispatchResult{}, fmt.Errorf("socket hub is not available")
 	}
 	channel := strings.TrimSpace(rendered.Channel)
+	fail := func(reason string, suppressed bool) {
+		hub.logDispatchFailure(channel, rendered.Source, rendered.TypeName, rendered.Payload, reason, suppressed)
+	}
 	adapter := rendered.Adapter
 	if overrides != nil {
 		if strings.TrimSpace(overrides.Channel) != "" {
@@ -425,40 +524,74 @@ func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered Rendered
 		}
 	}
 	if channel == "" {
-		return SocketDispatchResult{}, fmt.Errorf("channel is required")
+		err := fmt.Errorf("channel is required")
+		fail(err.Error(), false)
+		return SocketDispatchResult{}, err
 	}
 	if strings.ContainsAny(channel, "\r\n") {
-		return SocketDispatchResult{}, fmt.Errorf("channel cannot contain newlines")
+		err := fmt.Errorf("channel cannot contain newlines")
+		fail(err.Error(), false)
+		return SocketDispatchResult{}, err
 	}
 	if hub.modes != nil && !hub.modes.AllowsLocalDispatch(channel) {
 		mode := hub.modes.Get(channel).Mode
 		msg := fmt.Sprintf("channel mode %s suppressed local dispatch", mode)
+		fail(msg, true)
 		return SocketDispatchResult{Errors: []string{msg}}, nil
 	}
 	adapter = normalizeAdapter(adapter)
 	if _, err := NewProtocolAdapter(adapter); err != nil {
+		fail(err.Error(), false)
 		return SocketDispatchResult{}, err
 	}
 	typeName := strings.TrimSpace(rendered.TypeName)
 	if typeName != "" {
 		if schemas == nil {
-			return SocketDispatchResult{}, fmt.Errorf("schema registry is not available")
+			err := fmt.Errorf("schema registry is not available")
+			fail(err.Error(), false)
+			return SocketDispatchResult{}, err
 		}
 		encoded := rendered.EncodedPayload
 		if encoded == nil {
 			next, err := schemas.Encode(typeName, rendered.Payload)
 			if err != nil {
-				return SocketDispatchResult{}, fmt.Errorf("protobuf encode failed: %w", err)
+				wrapped := fmt.Errorf("protobuf encode failed: %w", err)
+				fail(wrapped.Error(), false)
+				return SocketDispatchResult{}, wrapped
 			}
 			encoded = &next
 		}
-		return hub.DispatchEncodedWithSource(channel, *encoded, adapter, rendered.Source), nil
+		return hub.DispatchEncodedWithSourcePayload(channel, *encoded, adapter, rendered.Source, rendered.Payload), nil
 	}
 	payload := rendered.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
 	return hub.DispatchWithSource(channel, payload, adapter, rendered.Source), nil
+}
+
+func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload json.RawMessage, reason string, suppressed bool) {
+	method, state := "DISPATCH_FAILED", "error"
+	if suppressed {
+		method, state = "DISPATCH_SUPPRESSED", "suppressed"
+	}
+	id := newSocketDispatchID()
+	event := LogEvent{Type: "SOCKET", Method: method, Path: channel, Channel: channel, Status: http.StatusServiceUnavailable,
+		Source: source, DispatchID: id, DeliveryState: state, TypeName: typeName, Error: reason, DecodeError: reason,
+		Mode: h.currentSocketMode(channel)}
+	if len(payload) > 0 {
+		preview, metadata := captureLogPayload(payload, int64(len(payload)), "application/json", "", nil)
+		event.RequestBody, event.RequestPayload = preview, metadata
+		decoded, decodeErr := DecodeWireFrame(h.schemas, "text", payload, "raw")
+		if decoded != nil {
+			event.TypeName, event.Alias = decoded.TypeName, decoded.Alias
+			event.DecodedPayload, event.DecodedTruncated = boundedSocketJSON(decoded.PayloadJSON)
+		}
+		if decodeErr != "" && event.DecodeError == "" {
+			event.DecodeError = decodeErr
+		}
+	}
+	h.events.Publish(event)
 }
 
 func isAllowedSocketAPIRequest(r *http.Request) bool {
@@ -513,32 +646,57 @@ func isLoopbackRemote(remoteAddr string) bool {
 }
 
 func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	connectionID := fmt.Sprintf("ws-%d", h.nextID.Add(1))
+	requestURI := r.RequestURI
+	if requestURI == "" {
+		requestURI = r.URL.RequestURI()
+	}
+	requestURL := socketRequestURL(r, requestURI)
+	requestHeaders := r.Header.Clone()
+	capture := newResponseCapture(w)
+	logHandshakeFailure := func(err error) {
+		body, metadata := capture.responsePayload()
+		event := LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: requestURI, URL: requestURL,
+			Host: r.Host, RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: capture.statusCode,
+			DurationMs: time.Since(start).Milliseconds(), Source: "socket-hub", ConnectionID: connectionID,
+			ClientID: connectionID, RequestHeaders: requestHeaders, ResponseHeaders: capture.responseHeaders(),
+			ResponseBody: body, ResponsePayload: metadata}
+		if err != nil {
+			event.Error = err.Error()
+		}
+		h.events.Publish(event)
+	}
+
 	adapterName := normalizeAdapter(r.URL.Query().Get("adapter"))
 	if adapterName == "" {
 		adapterName = "raw"
 	}
 	adapter, err := NewProtocolAdapter(adapterName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(capture, err.Error(), http.StatusBadRequest)
+		logHandshakeFailure(err)
 		return
 	}
 	if !isAllowedSocketAPIRequest(r) {
-		http.Error(w, "origin not allowed", http.StatusForbidden)
+		err := errors.New("origin not allowed")
+		http.Error(capture, err.Error(), http.StatusForbidden)
+		logHandshakeFailure(err)
 		return
 	}
 
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+	conn, err := websocket.Accept(capture, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 		CompressionMode:    websocket.CompressionDisabled,
 		Subprotocols:       adapter.Subprotocols(),
 	})
 	if err != nil {
+		logHandshakeFailure(err)
 		return
 	}
 
-	id := fmt.Sprintf("ws-%d", h.nextID.Add(1))
 	client := &SocketClient{
-		id:              id,
+		id:              connectionID,
 		adapter:         adapterName,
 		protocol:        adapter,
 		remoteAddr:      r.RemoteAddr,
@@ -550,27 +708,81 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		subscriptions:   make(map[string]string),
 		upstreamHeaders: extractUpstreamHeaders(r.Header),
 		upstreamHost:    r.Host,
+		url:             requestURL,
+		host:            r.Host,
+		protocolName:    r.Proto,
+		subprotocol:     conn.Subprotocol(),
+		requestHeaders:  requestHeaders,
 	}
 	h.addClient(client)
-	h.publishSocketEvent("CONNECT", r.URL.RequestURI(), http.StatusSwitchingProtocols, "", 0)
+	h.events.Publish(LogEvent{Type: "SOCKET", Method: "CONNECT", Path: requestURI, URL: requestURL, Host: r.Host,
+		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: capture.statusCode, DurationMs: time.Since(start).Milliseconds(),
+		Source: "socket-hub", ConnectionID: connectionID, ClientID: connectionID, Adapter: adapterName,
+		Subprotocol: conn.Subprotocol(), RequestHeaders: requestHeaders, ResponseHeaders: capture.responseHeaders()})
 
-	ctx := r.Context()
-	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(r.Context())
+	writeDone := make(chan error, 1)
 	go func() {
-		h.writeLoop(ctx, client)
-		close(done)
+		err := h.writeLoop(ctx, client)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			cancel()
+			_ = conn.Close(websocket.StatusGoingAway, "writer stopped")
+		}
+		writeDone <- err
 	}()
 
 	if adapterGreetsOnConnect(adapter) {
 		h.enqueueControl(client, ServerMsg{Type: "connection_ack"})
 	}
 
-	h.readLoop(ctx, client)
+	readErr := h.readLoop(ctx, client)
+	cancel()
 	client.close()
 	h.removeClient(client)
-	<-done
-	_ = conn.Close(websocket.StatusNormalClosure, "")
-	h.publishSocketEvent("DISCONNECT", id, 0, "", 0)
+	writeErr := <-writeDone
+	closeCode, closeReason := socketCloseDetails(readErr)
+	if closeCode < 0 && writeErr != nil {
+		closeCode, closeReason = int(websocket.StatusInternalError), writeErr.Error()
+	}
+	if closeCode < 0 {
+		closeCode = int(websocket.StatusAbnormalClosure)
+	}
+	if closeCode != int(websocket.StatusAbnormalClosure) {
+		_ = conn.Close(websocket.StatusCode(closeCode), closeReason)
+	}
+	closeEvent := LogEvent{Type: "SOCKET", Method: "CLOSE", Path: requestURI, URL: requestURL, Host: r.Host,
+		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: closeCode, DurationMs: time.Since(client.connected).Milliseconds(),
+		Source: "socket-hub", ConnectionID: connectionID, ClientID: connectionID, Adapter: adapterName,
+		Subprotocol: client.subprotocol, CloseCode: closeCode, CloseReason: closeReason}
+	if readErr != nil && websocket.CloseStatus(readErr) == -1 && !errors.Is(readErr, context.Canceled) {
+		closeEvent.Error = readErr.Error()
+	}
+	if writeErr != nil && !errors.Is(writeErr, context.Canceled) {
+		closeEvent.Error = writeErr.Error()
+	}
+	h.events.Publish(closeEvent)
+}
+
+func socketRequestURL(r *http.Request, requestURI string) string {
+	if parsed, err := url.ParseRequestURI(requestURI); err == nil && parsed.IsAbs() {
+		return parsed.String()
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + requestURI
+}
+
+func socketCloseDetails(err error) (int, string) {
+	var closeErr websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return int(closeErr.Code), closeErr.Reason
+	}
+	if err == nil || errors.Is(err, context.Canceled) {
+		return int(websocket.StatusNormalClosure), ""
+	}
+	return -1, err.Error()
 }
 
 func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFilter string) SocketDispatchResult {
@@ -588,7 +800,12 @@ func (h *SocketHub) DispatchEncoded(channel string, payload EncodedPayload, adap
 }
 
 func (h *SocketHub) DispatchEncodedWithSource(channel string, payload EncodedPayload, adapterFilter, source string) SocketDispatchResult {
-	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{TypeName: payload.TypeName}, func(client *SocketClient) (EncodedPayload, error) {
+	return h.DispatchEncodedWithSourcePayload(channel, payload, adapterFilter, source, nil)
+}
+
+func (h *SocketHub) DispatchEncodedWithSourcePayload(channel string, payload EncodedPayload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
+	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{TypeName: payload.TypeName, Payload: logicalPayload,
+		RawData: payload.Data, RawKind: payload.Kind, RawContentType: payload.ContentType}, func(client *SocketClient) (EncodedPayload, error) {
 		return payload, nil
 	})
 }
@@ -596,8 +813,9 @@ func (h *SocketHub) DispatchEncodedWithSource(channel string, payload EncodedPay
 func (h *SocketHub) dispatch(channel string, adapterFilter string, source string, hint dispatchDecodeHint, encode func(client *SocketClient) (EncodedPayload, error)) SocketDispatchResult {
 	channel = strings.TrimSpace(channel)
 	adapterFilter = normalizeAdapter(adapterFilter)
+	dispatchID := newSocketDispatchID()
 	ids := h.registry.Clients(channel)
-	result := SocketDispatchResult{}
+	result := SocketDispatchResult{Queued: 0}
 	payloadCache := make(map[string]adapterPayload)
 	recordedAdapters := make(map[string]struct{})
 	for _, id := range ids {
@@ -639,16 +857,76 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 				recordedAdapters[client.adapter] = struct{}{}
 			}
 		}
+		data.DispatchID, data.Channel, data.SubscriptionID = dispatchID, channel, subID
+		data.Source, data.TypeName = source, cached.payload.TypeName
 		if client.enqueue(data, 0) {
 			result.Delivered++
+			result.Queued++
+			h.logClientDelivery(client, data, "queued", nil)
 		} else {
 			result.Dropped = append(result.Dropped, client.id)
+			h.logClientDelivery(client, data, "dropped", errors.New("client send queue full or connection closed"))
 		}
 	}
 	decoded, decodeErr := h.decodeDispatchLogPayload(hint, payloadCache)
-	body := buildDispatchLogBody(result, decoded, decodeErr)
-	h.publishSocketEventWithSource("DISPATCH", channel, http.StatusOK, body, 0, source)
+	body := buildDispatchLogBodyWithID(result, decoded, decodeErr, dispatchID)
+	event := LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
+		Source: source, DispatchID: dispatchID, Queued: result.Queued, ResponseBody: body,
+		TypeName: hint.TypeName, DecodeError: decodeErr, Mode: h.currentSocketMode(channel)}
+	if decoded != nil {
+		event.TypeName, event.Alias = decoded.TypeName, decoded.Alias
+		if len(decoded.PayloadJSON) > 0 {
+			event.DecodedPayload, event.DecodedTruncated = boundedSocketJSON(decoded.PayloadJSON)
+		}
+	}
+	if len(result.Errors) > 0 {
+		event.Error = strings.Join(result.Errors, "; ")
+	}
+	if len(hint.RawData) > 0 {
+		contentType := hint.RawContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+			if hint.RawKind == websocket.MessageText {
+				contentType = "text/plain; charset=utf-8"
+			}
+		}
+		event.RequestBody, event.RequestPayload = captureLogPayload(hint.RawData, int64(len(hint.RawData)), contentType, "", nil)
+	} else if len(hint.Payload) > 0 {
+		event.RequestBody, event.RequestPayload = captureLogPayload(hint.Payload, int64(len(hint.Payload)), "application/json", "", nil)
+	}
+	h.events.Publish(event)
 	return result
+}
+
+func (h *SocketHub) logClientDelivery(client *SocketClient, msg EncodedServerMessage, state string, err error) {
+	event := h.clientSocketEvent(client, "FRAME", msg.Channel)
+	event.Status, event.SubscriptionID, event.Source, event.Target = http.StatusOK, msg.SubscriptionID, msg.Source, msg.Target
+	event.DeliveryState, event.ControlType, event.DispatchID = state, msg.ControlType, msg.DispatchID
+	event.Direction = "ditto_to_client"
+	if msg.Direction != "" {
+		event.Direction = msg.Direction
+	}
+	if msg.TypeName != "" {
+		event.TypeName = msg.TypeName
+	}
+	if state == "dropped" || state == "write_error" {
+		event.Status = http.StatusServiceUnavailable
+	}
+	if err != nil {
+		event.Error = err.Error()
+	}
+	h.logSocketFrame(event, msg.Data, msg.Kind, msg.TypeName)
+}
+
+func boundedSocketJSON(raw []byte) (string, bool) {
+	if len(raw) > MaxLogPayloadCaptureBytes {
+		raw = raw[:MaxLogPayloadCaptureBytes]
+		for !utf8.Valid(raw) {
+			raw = raw[:len(raw)-1]
+		}
+		return string(raw), true
+	}
+	return string(raw), false
 }
 
 func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCache map[string]adapterPayload) (*DecodedFrame, string) {
@@ -672,6 +950,10 @@ func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCac
 				decoded.PayloadJSON = payload
 				return decoded, ""
 			}
+		}
+		if len(hint.Payload) > 0 {
+			decoded.PayloadJSON = append(json.RawMessage(nil), hint.Payload...)
+			return decoded, ""
 		}
 		return decoded, "schema payload not available"
 	}
@@ -731,31 +1013,55 @@ func (h *SocketHub) client(id string) *SocketClient {
 	return h.clients[id]
 }
 
-func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
+func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) error {
 	for {
 		typ, data, err := client.conn.Read(ctx)
 		if err != nil {
-			return
+			return err
 		}
 		if typ != websocket.MessageText && typ != websocket.MessageBinary {
 			continue
 		}
 
 		msg, err := client.protocol.ParseClientMessage(data)
+		dispatchID := newSocketDispatchID()
+		channel := strings.TrimSpace(msg.Channel)
+		if channel == "" {
+			channel = strings.TrimSpace(msg.SubscriptionID)
+		}
+		if channel == "" && msg.Type == "unsubscribe" {
+			channel = client.channelForSubscription(msg.ID)
+		}
+		subscriptionID := msg.SubscriptionID
+		if subscriptionID == "" {
+			subscriptionID = msg.ID
+		}
+		frameEvent := h.clientSocketEvent(client, "FRAME", channel)
+		frameEvent.Direction, frameEvent.DispatchID = "client_to_ditto", dispatchID
+		frameEvent.SubscriptionID, frameEvent.ControlType = subscriptionID, msg.Type
+		frameEvent.Source = "client"
 		if err != nil {
-			if h.forwardToLiveSubscriptions(ctx, client, typ, data) {
+			frameEvent.DecodeError, frameEvent.Error = err.Error(), err.Error()
+		}
+		h.logSocketFrame(frameEvent, data, typ, "")
+		if err != nil {
+			if h.forwardToLiveSubscriptions(ctx, client, typ, data, dispatchID) {
 				continue
 			}
-			h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, err.Error(), 0)
+			errorEvent := h.clientSocketEvent(client, "ERROR", channel)
+			errorEvent.Status, errorEvent.Error, errorEvent.Source = http.StatusBadRequest, err.Error(), "socket-hub"
+			h.events.Publish(errorEvent)
 			continue
 		}
 		switch msg.Type {
 		case "connection_init":
 			h.enqueueControl(client, ServerMsg{Type: "connection_ack"})
 		case "subscribe":
-			channel := strings.TrimSpace(msg.Channel)
+			channel = strings.TrimSpace(msg.Channel)
 			if channel == "" {
-				h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, "subscribe message missing channel", 0)
+				errorEvent := h.clientSocketEvent(client, "ERROR", "")
+				errorEvent.Status, errorEvent.Error, errorEvent.Source = http.StatusBadRequest, "subscribe message missing channel", "socket-hub"
+				h.events.Publish(errorEvent)
 				h.enqueueControl(client, ServerMsg{Type: "error", ID: msg.ID, Payload: json.RawMessage(`{"error":"subscribe message missing channel"}`)})
 				continue
 			}
@@ -769,13 +1075,15 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 			client.addSubscription(channel, subID)
 			h.registry.Subscribe(channel, client.id)
 			h.enqueueControl(client, ServerMsg{Type: "subscribe_ack", ID: subID, Channel: channel})
-			h.publishSocketEvent("SUBSCRIBE", channel, http.StatusOK, client.id, 0)
+			event := h.clientSocketEvent(client, "SUBSCRIBE", channel)
+			event.Status, event.SubscriptionID, event.Source = http.StatusOK, subID, "socket-hub"
+			h.events.Publish(event)
 			if h.isLiveMode(channel) && h.live != nil {
 				h.live.Attach(channel, client)
 			}
-			h.forwardLiveFromClient(ctx, client, channel, typ, data)
+			h.forwardLiveFromClient(ctx, client, channel, typ, data, dispatchID)
 		case "unsubscribe":
-			channel := strings.TrimSpace(msg.Channel)
+			channel = strings.TrimSpace(msg.Channel)
 			if channel == "" {
 				channel = client.channelForSubscription(msg.ID)
 			}
@@ -787,25 +1095,30 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) {
 			if h.live != nil {
 				h.live.Detach(channel, client.id)
 			}
-			h.publishSocketEvent("UNSUBSCRIBE", channel, http.StatusOK, client.id, 0)
+			event := h.clientSocketEvent(client, "UNSUBSCRIBE", channel)
+			event.Status, event.SubscriptionID, event.Source = http.StatusOK, subscriptionID, "socket-hub"
+			h.events.Publish(event)
 		case "ping":
 			h.enqueueControl(client, ServerMsg{Type: "pong"})
 		default:
-			channel := strings.TrimSpace(msg.Channel)
-			if channel == "" {
-				channel = strings.TrimSpace(msg.SubscriptionID)
-			}
 			if channel != "" {
-				h.forwardLiveFromClient(ctx, client, channel, typ, data)
+				h.forwardLiveFromClient(ctx, client, channel, typ, data, dispatchID)
 			}
 		}
 	}
 }
 
-func (h *SocketHub) forwardToLiveSubscriptions(ctx context.Context, client *SocketClient, typ websocket.MessageType, data []byte) bool {
+func (h *SocketHub) clientSocketEvent(client *SocketClient, method, channel string) LogEvent {
+	return LogEvent{Type: "SOCKET", Method: method, Path: channel, Channel: channel, Status: http.StatusOK,
+		URL: client.url, Host: client.host, RemoteAddr: client.remoteAddr, Protocol: client.protocolName,
+		ConnectionID: client.id, ClientID: client.id, Adapter: client.adapter, Subprotocol: client.subprotocol,
+		Mode: h.currentSocketMode(channel)}
+}
+
+func (h *SocketHub) forwardToLiveSubscriptions(ctx context.Context, client *SocketClient, typ websocket.MessageType, data []byte, dispatchID string) bool {
 	for _, channel := range client.subscriptionList() {
 		if h.isLiveMode(channel) {
-			h.forwardLiveFromClient(ctx, client, channel, typ, data)
+			h.forwardLiveFromClient(ctx, client, channel, typ, data, dispatchID)
 			return true
 		}
 	}
@@ -828,7 +1141,7 @@ func (h *SocketHub) isRecordingMode(channel string) bool {
 	return mode == ModeRecord || mode == ModeMixed
 }
 
-func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketClient, channel string, typ websocket.MessageType, data []byte) {
+func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketClient, channel string, typ websocket.MessageType, data []byte, dispatchID string) {
 	if !h.isLiveMode(channel) {
 		return
 	}
@@ -842,7 +1155,7 @@ func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketCli
 		h.publishSocketEventWithSource("ERROR", channel, http.StatusServiceUnavailable, "live target is not configured", 0, "live-disconnected")
 		return
 	}
-	h.live.ForwardFromClient(ctx, channel, typ, data)
+	h.live.ForwardFromClientWithID(ctx, channel, typ, data, client, dispatchID)
 }
 
 func (h *SocketHub) attachLiveSubscribers(channel string) {
@@ -857,7 +1170,7 @@ func (h *SocketHub) attachLiveSubscribers(channel string) {
 	}
 }
 
-func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
+func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) error {
 	heartbeat, heartbeatEvery := client.protocol.Heartbeat()
 	var heartbeatC <-chan time.Time
 	var heartbeatTicker *time.Ticker
@@ -873,21 +1186,29 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
 	pingTicker := time.NewTicker(75 * time.Second)
 	defer pingTicker.Stop()
 
-	writeMsg := func(msg EncodedServerMessage) bool {
+	if len(heartbeat.Data) > 0 {
+		heartbeat.DispatchID, heartbeat.Source, heartbeat.ControlType = newSocketDispatchID(), "socket-hub", "heartbeat"
+	}
+	writeMsg := func(msg EncodedServerMessage) error {
 		if msg.Kind == 0 {
-			return false
+			return errors.New("empty websocket message type")
 		}
 		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err := client.conn.Write(writeCtx, msg.Kind, msg.Data)
 		cancel()
-		return err == nil
+		state := "written"
+		if err != nil {
+			state = "write_error"
+		}
+		h.logClientDelivery(client, msg, state, err)
+		return err
 	}
 
 	for {
 		select {
 		case msg := <-client.control:
-			if !writeMsg(msg) {
-				return
+			if err := writeMsg(msg); err != nil {
+				return err
 			}
 			continue
 		default:
@@ -895,27 +1216,35 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
 
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-client.done:
-			return
+			return nil
 		case msg := <-client.control:
-			if !writeMsg(msg) {
-				return
+			if err := writeMsg(msg); err != nil {
+				return err
 			}
 		case msg := <-client.send:
-			if !writeMsg(msg) {
-				return
+			if err := writeMsg(msg); err != nil {
+				return err
 			}
 		case <-heartbeatC:
-			if !writeMsg(heartbeat) {
-				return
+			heartbeat.DispatchID = newSocketDispatchID()
+			if err := writeMsg(heartbeat); err != nil {
+				return err
 			}
 		case <-pingTicker.C:
 			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			err := client.conn.Ping(pingCtx)
 			cancel()
+			event := h.clientSocketEvent(client, "PING", "")
+			event.Direction, event.Source, event.FrameKind = "ditto_to_client", "socket-hub", "control"
+			event.ControlType, event.DispatchID, event.DeliveryState = "websocket_ping", newSocketDispatchID(), "written"
 			if err != nil {
-				return
+				event.Error, event.DeliveryState = err.Error(), "write_error"
+			}
+			h.events.Publish(event)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -924,15 +1253,27 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) {
 func (h *SocketHub) enqueueControl(client *SocketClient, msg ServerMsg) {
 	data, err := client.protocol.EncodeServerMessage(msg)
 	if err != nil {
-		h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, err.Error(), 0)
+		event := h.clientSocketEvent(client, "ERROR", msg.Channel)
+		event.Status, event.Error, event.Source = http.StatusBadRequest, err.Error(), "socket-hub"
+		h.events.Publish(event)
 		return
 	}
 	if data.Kind == 0 {
-		h.publishSocketEvent("ERROR", client.id, http.StatusBadRequest, "adapter returned empty websocket message type", 0)
+		event := h.clientSocketEvent(client, "ERROR", msg.Channel)
+		event.Status, event.Error, event.Source = http.StatusBadRequest, "adapter returned empty websocket message type", "socket-hub"
+		h.events.Publish(event)
 		return
 	}
-	if !client.enqueueOn(client.control, data, 500*time.Millisecond) {
-		h.publishSocketEvent("ERROR", client.id, http.StatusServiceUnavailable, "control message dropped", 0)
+	data.DispatchID, data.Channel, data.SubscriptionID = newSocketDispatchID(), msg.Channel, msg.ID
+	data.Source, data.ControlType = "socket-hub", msg.Type
+	if client.enqueueOn(client.control, data, 500*time.Millisecond) {
+		h.logClientDelivery(client, data, "queued", nil)
+	} else {
+		err := errors.New("control message dropped")
+		event := h.clientSocketEvent(client, "ERROR", msg.Channel)
+		event.Status, event.Error, event.Source = http.StatusServiceUnavailable, err.Error(), "socket-hub"
+		h.events.Publish(event)
+		h.logClientDelivery(client, data, "dropped", err)
 	}
 }
 
@@ -966,10 +1307,16 @@ func dispatchSummary(result SocketDispatchResult) string {
 }
 
 func buildDispatchLogBody(result SocketDispatchResult, decoded *DecodedFrame, decodeErr string) string {
+	return buildDispatchLogBodyWithID(result, decoded, decodeErr, "")
+}
+
+func buildDispatchLogBodyWithID(result SocketDispatchResult, decoded *DecodedFrame, decodeErr, dispatchID string) string {
 	body := DispatchLogBody{
-		Delivered: result.Delivered,
-		Dropped:   len(result.Dropped),
-		Errors:    len(result.Errors),
+		Delivered:  result.Delivered,
+		Queued:     result.Queued,
+		DispatchID: dispatchID,
+		Dropped:    len(result.Dropped),
+		Errors:     len(result.Errors),
 	}
 	if decoded != nil {
 		body.TypeName = decoded.TypeName

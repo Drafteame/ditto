@@ -25,6 +25,20 @@ export interface LogEvent {
   connection_id?: string
   client_id?: string
   subscription_id?: string
+  channel?: string
+  dispatch_id?: string
+  delivery_state?: 'queued' | 'written' | 'dropped' | 'write_error' | 'suppressed' | string
+  frame_kind?: 'text' | 'binary' | 'control' | string
+  control_type?: string
+  type_name?: string
+  alias?: string
+  decode_error?: string
+  decoded_payload?: string
+  decoded_truncated?: boolean
+  close_code?: number
+  close_reason?: string
+  queued?: number
+  written?: number
   adapter?: string
   subprotocol?: string
   mode?: string
@@ -54,13 +68,15 @@ export interface LogFileMetadata {
   capture_status: string
 }
 
-export type LogSummary = Omit<LogEvent, 'request_body' | 'response_body' | 'request_headers' | 'response_headers'> & {
+export type LogSummary = Omit<LogEvent, 'request_body' | 'response_body' | 'decoded_payload' | 'request_headers' | 'response_headers'> & {
   request_payload?: Omit<LogPayloadMetadata, 'raw_base64'>
   response_payload?: Omit<LogPayloadMetadata, 'raw_base64'>
 }
 
 export interface DispatchLogBody {
   delivered: number
+  queued?: number
+  dispatch_id?: string
   dropped: number
   errors: number
   type_name?: string

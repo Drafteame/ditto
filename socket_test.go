@@ -422,10 +422,7 @@ func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
 
 	hub.Dispatch("/log", json.RawMessage(`{"score":7}`), "")
 
-	event := waitForSocketEvent(t, events, time.Second)
-	if event.Method != "DISPATCH" {
-		t.Fatalf("event method = %s, want DISPATCH", event.Method)
-	}
+	event := waitForSocketMethod(t, events, "DISPATCH", "/log", time.Second)
 	var body DispatchLogBody
 	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
 		t.Fatalf("response body invalid JSON: %v", err)
@@ -452,7 +449,7 @@ func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
 	large := json.RawMessage(`{"data":"` + strings.Repeat("x", dispatchPayloadMaxBytes+128) + `"}`)
 	hub.Dispatch("/large", large, "")
 
-	event := waitForSocketEvent(t, events, time.Second)
+	event := waitForSocketMethod(t, events, "DISPATCH", "/large", time.Second)
 	var body DispatchLogBody
 	if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
 		t.Fatalf("response body invalid JSON: %v", err)
@@ -503,7 +500,7 @@ func TestDispatchLogIncludesDecodedPayloadWithoutSSESubscribers(t *testing.T) {
 			continue
 		}
 		var candidate LogEvent
-		if err := json.Unmarshal([]byte(line), &candidate); err == nil && candidate.Path == "/decoded" {
+		if err := json.Unmarshal([]byte(line), &candidate); err == nil && candidate.Type == "SOCKET" && candidate.Method == "DISPATCH" && candidate.Path == "/decoded" {
 			event = candidate
 		}
 	}
