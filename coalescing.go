@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,71 +18,86 @@ type CoalescingPublisher struct {
 }
 
 type coalesceWindow struct {
-	start      time.Time
-	frames     int
-	suppressed bool
-	timer      *time.Timer
+	start       time.Time
+	count       int
+	suppressed  bool
+	timer       *time.Timer
+	method      string
+	path        string
+	channel     string
+	direction   string
+	source      string
+	firstCursor string
+	lastCursor  string
 }
 
 func NewCoalescingPublisher(bus *EventBus, jsonLogs bool) *CoalescingPublisher {
-	return &CoalescingPublisher{
-		bus:      bus,
-		jsonLogs: jsonLogs,
-		windows:  make(map[string]*coalesceWindow),
-	}
+	return &CoalescingPublisher{bus: bus, jsonLogs: jsonLogs, windows: make(map[string]*coalesceWindow)}
 }
 
 func (p *CoalescingPublisher) Publish(event LogEvent) {
-	if event.Type != "SOCKET" || event.Method != "DISPATCH" {
+	if event.Type != "SOCKET" || (event.Method != "DISPATCH" && event.Method != "FRAME") {
 		p.publish(event)
 		return
 	}
-	key := event.Type + "\x00" + event.Path
+	key := strings.Join([]string{event.Method, event.Path, event.Channel, event.Direction, event.Source}, "\x00")
 	now := time.Now()
 	p.mu.Lock()
 	window := p.windows[key]
-	if window == nil || now.Sub(window.start) >= time.Second {
-		window = &coalesceWindow{start: now}
-		p.windows[key] = window
+	if window != nil && now.Sub(window.start) >= time.Second {
+		p.flushLocked(window)
+		delete(p.windows, key)
+		window = nil
 	}
-	window.frames++
-	frames := window.frames
-	if frames == SocketLogCoalesceThresholdPerSecond+1 && window.timer == nil {
-		delay := time.Until(window.start.Add(time.Second))
-		if delay < 0 {
-			delay = 0
-		}
+	if window == nil {
+		window = &coalesceWindow{start: now, method: event.Method, path: event.Path, channel: event.Channel, direction: event.Direction, source: event.Source}
+		p.windows[key] = window
+		// Every window expires, including rates below the summary threshold.
+		// Compare the pointer when firing so an old timer cannot delete its replacement.
+		window.timer = time.AfterFunc(time.Second, func() { p.flush(key, window) })
+	}
+	window.count++
+	immediate := window.count <= SocketLogCoalesceThresholdPerSecond
+	event = p.bus.publishWithSummary(event, immediate)
+	logRequest(p.jsonLogs, event)
+	if window.firstCursor == "" {
+		window.firstCursor = event.Cursor
+	}
+	window.lastCursor = event.Cursor
+	if window.count == SocketLogCoalesceThresholdPerSecond+1 {
 		window.suppressed = true
-		window.timer = time.AfterFunc(delay, func() { p.flush(key, event.Path) })
 	}
 	p.mu.Unlock()
-
-	if frames <= SocketLogCoalesceThresholdPerSecond {
-		p.publish(event)
-	}
 }
 
-func (p *CoalescingPublisher) flush(key, path string) {
+func (p *CoalescingPublisher) flush(key string, expected *coalesceWindow) {
 	p.mu.Lock()
-	window := p.windows[key]
-	if window == nil {
-		p.mu.Unlock()
+	defer p.mu.Unlock()
+	if p.windows[key] != expected {
 		return
 	}
 	delete(p.windows, key)
-	frames := window.frames
-	suppressed := window.suppressed
-	p.mu.Unlock()
-	if !suppressed {
+	p.flushLocked(expected)
+}
+
+func (p *CoalescingPublisher) flushLocked(window *coalesceWindow) {
+	if !window.suppressed {
 		return
 	}
-	body, _ := json.Marshal(map[string]any{"total_frames": frames, "window_ms": 1000})
+	if window.timer != nil {
+		window.timer.Stop()
+	}
+	burstID := "burst-" + strings.ReplaceAll(window.firstCursor, ":", "-")
+	body, _ := json.Marshal(map[string]any{
+		"burst_id": burstID, "method": window.method, "total_frames": window.count,
+		"window_ms": time.Since(window.start).Milliseconds(), "start_cursor": window.firstCursor,
+		"end_cursor": window.lastCursor,
+	})
 	p.publish(LogEvent{
-		Type:         "SOCKET",
-		Method:       "DISPATCH_BURST",
-		Path:         path,
-		Status:       http.StatusOK,
-		ResponseBody: string(body),
+		Type: "SOCKET", Method: window.method + "_BURST", Path: window.path, Channel: window.channel,
+		Status: http.StatusOK, ResponseBody: string(body), BurstID: burstID, BurstMethod: window.method,
+		BurstCount: window.count, BurstDirection: window.direction, BurstSource: window.source,
+		BurstStartCursor: window.firstCursor, BurstEndCursor: window.lastCursor, BurstWindowMs: time.Since(window.start).Milliseconds(),
 	})
 }
 

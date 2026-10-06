@@ -271,14 +271,11 @@ func (h *SocketHub) logSocketFrame(event LogEvent, data []byte, kind websocket.M
 	if decodeErr != "" {
 		event.DecodeError = decodeErr
 	}
-	if decodeErr != "" && event.Error == "" {
-		event.Error = decodeErr
-	}
 	h.events.Publish(event)
 }
 
 func (h *SocketHub) decodeSocketFrame(kind websocket.MessageType, data []byte, adapter, typeName string) (*DecodedFrame, string) {
-	if typeName != "" {
+	if kind == websocket.MessageBinary && typeName != "" {
 		decoded := &DecodedFrame{TypeName: typeName}
 		if h.schemas == nil {
 			return decoded, "schema not loaded"
@@ -577,8 +574,11 @@ func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload
 	}
 	id := newSocketDispatchID()
 	event := LogEvent{Type: "SOCKET", Method: method, Path: channel, Channel: channel, Status: http.StatusServiceUnavailable,
-		Source: source, DispatchID: id, DeliveryState: state, TypeName: typeName, Error: reason, DecodeError: reason,
+		Source: source, DispatchID: id, DeliveryState: state, TypeName: typeName, Error: reason,
 		Mode: h.currentSocketMode(channel)}
+	if !suppressed {
+		event.Errors = 1
+	}
 	if len(payload) > 0 {
 		preview, metadata := captureLogPayload(payload, int64(len(payload)), "application/json", "", nil)
 		event.RequestBody, event.RequestPayload = preview, metadata
@@ -871,7 +871,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 	decoded, decodeErr := h.decodeDispatchLogPayload(hint, payloadCache)
 	body := buildDispatchLogBodyWithID(result, decoded, decodeErr, dispatchID)
 	event := LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
-		Source: source, DispatchID: dispatchID, Queued: result.Queued, ResponseBody: body,
+		Source: source, DispatchID: dispatchID, Queued: result.Queued, Dropped: len(result.Dropped), Errors: len(result.Errors), ResponseBody: body,
 		TypeName: hint.TypeName, DecodeError: decodeErr, Mode: h.currentSocketMode(channel)}
 	if decoded != nil {
 		event.TypeName, event.Alias = decoded.TypeName, decoded.Alias

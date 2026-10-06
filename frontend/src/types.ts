@@ -1,11 +1,17 @@
 export interface LogEvent {
   id: string
   timestamp: string
-  type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET' | 'MODE' | 'RECORD'
+  type: 'MOCK' | 'PROXY' | 'MISS' | 'SOCKET' | 'MODE' | 'RECORD' | 'GAP'
   method: string
   path: string
   status: number
   duration_ms: number
+  cursor?: string
+  not_retained?: boolean
+  stream_gap?: boolean
+  gap_reason?: string
+  gap_from_cursor?: string
+  gap_to_cursor?: string
   response_body?: string
   request_body?: string
   request_payload?: LogPayloadMetadata
@@ -38,7 +44,17 @@ export interface LogEvent {
   close_code?: number
   close_reason?: string
   queued?: number
+  dropped?: number
+  errors?: number
   written?: number
+  burst_id?: string
+  burst_method?: string
+  burst_count?: number
+  burst_direction?: string
+  burst_source?: string
+  burst_start_cursor?: string
+  burst_end_cursor?: string
+  burst_window_ms?: number
   adapter?: string
   subprotocol?: string
   mode?: string
@@ -71,6 +87,24 @@ export interface LogFileMetadata {
 export type LogSummary = Omit<LogEvent, 'request_body' | 'response_body' | 'decoded_payload' | 'request_headers' | 'response_headers'> & {
   request_payload?: Omit<LogPayloadMetadata, 'raw_base64'>
   response_payload?: Omit<LogPayloadMetadata, 'raw_base64'>
+}
+
+export interface LogHistoryGap {
+  reason: string
+  from_cursor?: string
+  to_cursor?: string
+}
+
+export interface LogHistory {
+  events: LogSummary[]
+  oldest_cursor?: string
+  latest_cursor?: string
+  next_cursor?: string
+  has_more: boolean
+  total: number
+  expected?: number
+  complete: boolean
+  gap?: LogHistoryGap
 }
 
 export interface DispatchLogBody {

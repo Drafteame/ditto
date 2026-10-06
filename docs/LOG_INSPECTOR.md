@@ -1,6 +1,6 @@
 # Log event API
 
-Ditto assigns each log event a process-local ID and RFC3339Nano timestamp before writing it to stdout or publishing it to SSE. Both outputs use the same event values.
+Ditto assigns every log event a process-session ID, monotonic cursor, and RFC3339Nano timestamp before writing it to stdout or publishing it to SSE. Stdout and SSE use the same event ID and timestamp. A new random session component makes cursors from a previous server run detectable.
 
 `GET /__ditto__/api/logs` returns the retained summary list. Summaries keep identity, timing, request/socket context, sequence information, and payload metadata, but omit request/response bodies, headers, and base64 payload bytes.
 
@@ -8,7 +8,13 @@ Ditto assigns each log event a process-local ID and RFC3339Nano timestamp before
 
 Retention is limited to 5,000 events and 32 MiB of serialized event JSON. New events evict the oldest retained events to fit. An event larger than the byte limit is still written to stdout and sent to current SSE subscribers, but is not retained for later lookup.
 
-The current summary endpoint returns the full retained summary list. Paging, replay, and gap reporting are planned for phase 5.
+`GET /__ditto__/api/logs/history` pages retained summaries with `offset` and `limit` (maximum 5,000). `since=<cursor>` returns later events; `from=<cursor>&to=<cursor>` selects an inclusive cursor range. Optional `channel`, `method`, `direction`, `source`, and `dispatch_id` filters narrow that set. `expected=<count>` lets burst inspection report whether all expected members are still retained. The response includes `oldest_cursor`, `latest_cursor`, `next_cursor`, `has_more`, and `complete`; `gap` identifies reset, eviction, missing retained events, or expired burst members. A summary is not proof that the full detail remains available: use its ID with the detail endpoint, which can return 404 after eviction or for oversized events.
+
+The SSE endpoint accepts a cursor through `Last-Event-ID` or `?since=<cursor>`. Subscription and snapshot happen atomically, so events published during replay enter the live queue. SSE messages have `id:` lines containing the same cursor. If a slow subscriber's 64-message queue fills, Ditto sends a `GAP` marker and the latest event; the marker deliberately has no SSE ID, so clients recover from their last applied cursor through the history endpoint. On reconnect, a cursor from another process session reports `server_reset` and returns the current retained window.
+
+The frontend batches incoming summaries, deduplicates by backend ID, and keeps up to 5,000 rows. Both log lists render a virtual window. The selected summary stays open in the inspector when its row leaves the bounded list; detail is still fetched on demand and may have expired.
+
+Socket `DISPATCH` and `FRAME` bursts are retained member by member before live coalescing. Above 20 events per second for the same method, path, direction, and source, the live stream sends the first 20 and a `*_BURST` summary after the one-second window. Burst summaries include member count and first/last cursor. Inspector history requests use that exact range and the same group filters, page in batches of 100, and report incomplete membership if retention evicted members. Reconnecting or loading history can show all retained individual events that were suppressed from the original live stream, along with the burst summary. Queue counts and writes shown in the inspector are local observations, not remote application acknowledgements.
 
 ## HTTP request and response captures
 

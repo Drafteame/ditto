@@ -3,6 +3,7 @@ import type { LogEntry, ServerInfo } from '../types'
 import { statusClass } from '../status'
 import { Bookmark, Clock } from './icons'
 import { formatLocalTimestamp } from '../time'
+import { virtualRange } from '../virtual'
 
 export const LOG_SEARCH_INPUT_ID = 'log-search-input'
 
@@ -30,6 +31,7 @@ export function LogPanel({
   const [autoScroll, setAutoScroll] = useState(true)
   const [showJump, setShowJump] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const [scroll, setScroll] = useState({ top: 0, height: 600 })
 
   const counts = useMemo(() => {
     const c = { ALL: entries.length, MOCK: 0, PROXY: 0, MISS: 0, SOCKET: 0 } as Record<FilterType, number>
@@ -47,6 +49,7 @@ export function LogPanel({
       .toLowerCase()
       .includes(searchLower)
   })
+  const latestEntry = entries[entries.length - 1]
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
@@ -54,7 +57,7 @@ export function LogPanel({
     } else if (!autoScroll && entries.length > 0) {
       setShowJump(true)
     }
-  }, [entries.length, autoScroll])
+  }, [latestEntry?.cursor, latestEntry?.id, autoScroll])
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current
@@ -80,6 +83,22 @@ export function LogPanel({
   )
 
   const isEmpty = entries.length === 0
+  const range = virtualRange(Math.max(0, scroll.top - 36), Math.max(36, scroll.height - 36), 36, filteredEntries.length)
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const measure = () => setScroll({ top: el.scrollTop, height: el.clientHeight })
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [isEmpty])
+
+  useEffect(() => {
+    if (containerRef.current) containerRef.current.scrollTop = 0
+    setScroll(current => ({ ...current, top: 0 }))
+  }, [search, activeFilter])
 
   return (
     <section className="flex-1 flex flex-col min-w-0 bg-bg-0 relative overflow-hidden">
@@ -145,7 +164,7 @@ export function LogPanel({
           )}
         </div>
       ) : (
-        <div ref={containerRef} onScroll={handleScroll} className="log-table">
+        <div ref={containerRef} onScroll={event => { handleScroll(); setScroll({ top: event.currentTarget.scrollTop, height: event.currentTarget.clientHeight }) }} className="log-table">
           <div className="log-row-head">
             <span>Time</span>
             <span>Type</span>
@@ -155,7 +174,8 @@ export function LogPanel({
             <span className="text-right">Duration</span>
             <span />
           </div>
-          {filteredEntries.map(entry => (
+          <div aria-hidden="true" style={{ height: range.top }} />
+          {filteredEntries.slice(range.start, range.end).map(entry => (
             <LogRow
               key={entry.id}
               entry={entry}
@@ -164,6 +184,7 @@ export function LogPanel({
               onSave={() => onSaveAsMock(entry)}
             />
           ))}
+          <div aria-hidden="true" style={{ height: range.bottom }} />
           {filteredEntries.length === 0 && (
             <div className="px-4 py-6 text-center text-[12px] text-fg-3 font-sans">
               No requests match the current filters.

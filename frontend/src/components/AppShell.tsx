@@ -26,6 +26,7 @@ interface AppShellProps {
   mocks: Mock[]
   qrOpen: boolean
   selectedEntry: LogEntry | null
+  gapNotice: string | null
   sequenceCount: number
   recordingCount: number
   serverInfo: ServerInfo | null
@@ -36,6 +37,7 @@ interface AppShellProps {
   onChangeView: (view: MainView) => void
   onClearLog: () => void
   onCloseDrawer: () => void
+  onDismissGap: () => void
   onCreateMock: () => void
   onEditMock: (index: number) => void
   onMocksChanged: () => void
@@ -65,6 +67,7 @@ export function AppShell({
   mocks,
   qrOpen,
   selectedEntry,
+  gapNotice,
   sequenceCount,
   recordingCount,
   serverInfo,
@@ -75,6 +78,7 @@ export function AppShell({
   onChangeView,
   onClearLog,
   onCloseDrawer,
+  onDismissGap,
   onCreateMock,
   onEditMock,
   onMocksChanged,
@@ -103,6 +107,10 @@ export function AppShell({
       />
 
       {updateInfo && <UpdateBanner info={updateInfo} onDismiss={() => onSetUpdateInfo(null)} />}
+      {gapNotice && <div className="log-gap-banner" role="status">
+        <span>{gapNotice}</span>
+        <button type="button" onClick={onDismissGap} aria-label="Dismiss event history notice">Dismiss</button>
+      </div>}
 
       <main className="flex flex-1 overflow-hidden min-h-0">
         {sidebarCollapsed && <CollapsedSidebarRail onExpand={() => onSetSidebarCollapsed(false)} />}

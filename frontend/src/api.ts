@@ -25,20 +25,36 @@ import type {
   SocketDispatchResult,
   UpdateInfo,
   LogEvent,
-  LogSummary,
+  LogHistory,
 } from './types'
 
 const API_BASE = '/__ditto__/api'
 
-export async function fetchLogSummaries(): Promise<LogSummary[]> {
-  const res = await fetch(`${API_BASE}/logs`)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
-}
-
 export async function fetchLogDetail(id: string, signal?: AbortSignal): Promise<LogEvent> {
   const res = await fetch(`${API_BASE}/logs/${encodeURIComponent(id)}`, { signal })
   if (!res.ok) throw new Error(res.status === 404 ? 'Log event expired or not found' : `HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function fetchLogHistory(params: {
+  since?: string
+  from?: string
+  to?: string
+  channel?: string
+  method?: string
+  direction?: string
+  source?: string
+  dispatch_id?: string
+  expected?: number
+  offset?: number
+  limit?: number
+}, signal?: AbortSignal): Promise<LogHistory> {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') query.set(key, String(value))
+  })
+  const res = await fetch(`${API_BASE}/logs/history?${query}`, { signal })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
 

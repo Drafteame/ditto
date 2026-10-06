@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -345,6 +346,48 @@ func TestAppSyncDecoderTreatsControlFramesAsBenign(t *testing.T) {
 		if decoded == nil || decoded.Alias != typ || decoded.TypeName != "" || decoded.PayloadJSON != nil {
 			t.Fatalf("type %q: decoded = %#v, want control frame labelled by type", typ, decoded)
 		}
+	}
+}
+
+func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.T) {
+	root := t.TempDir()
+	writeProto(t, filepath.Join(root, "events"), "event.proto", `syntax = "proto3"; package ditto.frame; message Event { string message = 1; }`)
+	schemas, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := schemas.Encode("ditto.frame.Event", json.RawMessage(`{"message":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := json.Marshal(map[string]any{"type": "data", "payload": map[string]any{"data": map[string]any{
+		"base64": base64.StdEncoding.EncodeToString(encoded.Data), "content_type": encoded.ContentType, "type_name": encoded.TypeName,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bus := NewEventBus()
+	hub := NewSocketHub(bus, false, nil)
+	hub.schemas = schemas
+	hub.logSocketFrame(LogEvent{Status: 200, Adapter: "appsync"}, envelope, websocket.MessageText, encoded.TypeName)
+	detail, ok := bus.LogDetail(bus.LogSummaries()[0].ID)
+	if !ok {
+		t.Fatal("text frame was not retained")
+	}
+	if detail.Error != "" || detail.DecodeError != "" || !strings.Contains(detail.DecodedPayload, `"message":"hello"`) {
+		t.Fatalf("text envelope log = %#v, want decoded JSON without errors", detail)
+	}
+
+	bus = NewEventBus()
+	hub = NewSocketHub(bus, false, nil)
+	hub.logSocketFrame(LogEvent{Status: 200, DeliveryState: "written"}, []byte{0xff, 0x01}, websocket.MessageBinary, "")
+	detail, ok = bus.LogDetail(bus.LogSummaries()[0].ID)
+	if !ok {
+		t.Fatal("binary frame was not retained")
+	}
+	if detail.Status != 200 || detail.DeliveryState != "written" || detail.Error != "" || detail.DecodeError == "" {
+		t.Fatalf("binary frame log = %#v, want successful transport plus decode limitation", detail)
 	}
 }
 

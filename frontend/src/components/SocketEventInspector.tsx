@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { LogEntry } from '../types'
 import { useLogStore } from '../stores/useLogStore'
+import * as api from '../api'
 import { CodeBlock } from './CodeBlock'
 import { DownloadCapture, decodePayloadText, formatBytes } from './PayloadTools'
 
@@ -15,13 +16,64 @@ function HeaderBlock({ title, headers }: { title: string; headers?: Record<strin
 export function SocketEventInspector({ entry }: { entry: SocketEvent }) {
   const [tab, setTab] = useState<InspectorTab>('overview')
   const allEntries = useLogStore(state => state.logEntries)
-  const selectLog = useLogStore(state => state.selectLog)
+  const selectSummary = useLogStore(state => state.selectSummary)
+  const [related, setRelated] = useState<LogEntry[]>([])
+  const [relatedOffset, setRelatedOffset] = useState(0)
+  const [relatedTotal, setRelatedTotal] = useState(0)
+  const [relatedComplete, setRelatedComplete] = useState(true)
+  const [relatedLoading, setRelatedLoading] = useState(false)
+  const [relatedError, setRelatedError] = useState('')
+  const hasRelatedQuery = !!entry.dispatch_id || !!(entry.burst_start_cursor && entry.burst_end_cursor)
+
+  useEffect(() => {
+    setRelatedOffset(0)
+    setRelated([],)
+  }, [entry.id])
+
+  useEffect(() => {
+    if (!hasRelatedQuery) { setRelated([]); return }
+    const controller = new AbortController()
+    setRelatedLoading(true)
+    setRelatedError('')
+    const params = entry.burst_start_cursor && entry.burst_end_cursor ? {
+      from: entry.burst_start_cursor,
+      to: entry.burst_end_cursor,
+      channel: entry.channel || entry.path,
+      method: entry.burst_method,
+      direction: entry.burst_direction,
+      source: entry.burst_source,
+      expected: entry.burst_count,
+      offset: relatedOffset,
+      limit: 100,
+    } : {
+      dispatch_id: entry.dispatch_id,
+      offset: relatedOffset,
+      limit: 100,
+    }
+    api.fetchLogHistory(params, controller.signal).then(history => {
+      if (controller.signal.aborted) return
+      setRelated(history.events)
+      setRelatedTotal(history.total)
+      setRelatedComplete(history.complete)
+    }).catch(error => {
+      if (!controller.signal.aborted) setRelatedError((error as Error).message)
+    }).finally(() => {
+      if (!controller.signal.aborted) setRelatedLoading(false)
+    })
+    return () => controller.abort()
+  }, [hasRelatedQuery, entry.id, entry.dispatch_id, entry.cursor, entry.burst_start_cursor, entry.burst_end_cursor, entry.burst_method, entry.burst_direction, entry.burst_source, entry.burst_count, entry.channel, entry.path, relatedOffset])
+
   const linked = useMemo(() => entry.dispatch_id
-    ? allEntries.filter(item => item.type === 'SOCKET' && item.dispatch_id === entry.dispatch_id && item.id !== entry.id)
-    : [], [allEntries, entry.dispatch_id, entry.id])
+    ? [...new Map([...allEntries.filter(item => item.type === 'SOCKET' && item.dispatch_id === entry.dispatch_id), ...related].map(item => [item.id, item])).values()].filter(item => item.id !== entry.id)
+    : related, [allEntries, related, entry.dispatch_id, entry.id])
+  const relatedPage = related.filter(item => item.id !== entry.id)
+  const observedWriteKey = (item: SocketEvent) => {
+    const clientDirection = `${item.client_id || item.connection_id || item.id}:${item.direction || item.burst_direction || ''}`
+    return entry.method.endsWith('_BURST') ? `${clientDirection}:${item.dispatch_id || item.id}` : clientDirection
+  }
   const observedWrites = new Set([
-    ...(entry.delivery_state === 'written' ? [`${entry.client_id || entry.connection_id || entry.id}:${entry.direction || ''}`] : []),
-    ...linked.filter(item => item.delivery_state === 'written').map(item => `${item.client_id || item.connection_id || item.id}:${item.direction || ''}`),
+    ...(entry.delivery_state === 'written' ? [observedWriteKey(entry)] : []),
+    ...linked.filter(item => item.delivery_state === 'written').map(observedWriteKey),
   ]).size
   const observedFailures = linked.filter(item => item.delivery_state === 'dropped' || item.delivery_state === 'write_error').length
     + (entry.delivery_state === 'dropped' || entry.delivery_state === 'write_error' ? 1 : 0)
@@ -37,9 +89,10 @@ export function SocketEventInspector({ entry }: { entry: SocketEvent }) {
         {[
           ['Time', entry.timestamp], ['URL', entry.url], ['Host', entry.host], ['Remote address', entry.remote_addr],
           ['Protocol', entry.protocol], ['Status', entry.status], ['Duration', entry.duration_ms == null ? undefined : `${entry.duration_ms}ms`],
-          ['Direction', entry.direction], ['Connection', entry.connection_id],
+          ['Direction', entry.direction || entry.burst_direction], ['Connection', entry.connection_id],
           ['Client', entry.client_id], ['Channel', entry.channel || entry.path], ['Subscription', entry.subscription_id],
-          ['Adapter', entry.adapter], ['Subprotocol', entry.subprotocol], ['Mode', entry.mode], ['Source', entry.source],
+          ['Adapter', entry.adapter], ['Subprotocol', entry.subprotocol], ['Mode', entry.mode], ['Source', entry.source || entry.burst_source],
+          ['Burst', entry.burst_count == null ? undefined : `${entry.burst_count} retained log events${entry.burst_window_ms ? ` in ${entry.burst_window_ms}ms` : ''}`],
           ['Target', entry.target], ['Frame', entry.frame_kind], ['Control', entry.control_type],
           ['Type / alias', [entry.type_name, entry.alias].filter(Boolean).join(' / ')],
           ['Capture', payloadMeta?.capture_status], ['Payload size', payloadMeta ? `${formatBytes(payloadMeta.captured_bytes)} of ${formatBytes(payloadMeta.size_bytes)}` : undefined],
@@ -76,14 +129,23 @@ export function SocketEventInspector({ entry }: { entry: SocketEvent }) {
         <div className="log-overview">
           <div><span>State</span><code>{entry.delivery_state || (entry.method === 'DISPATCH' ? 'dispatch summary' : '—')}</code></div>
           <div><span>Queued</span><code>{entry.queued ?? (entry.method === 'DISPATCH' ? 0 : entry.delivery_state === 'queued' ? 1 : '—')}</code></div>
-          <div><span>Observed writes</span><code>{observedWrites}</code></div>
+          <div><span>Observed writes (loaded records)</span><code>{observedWrites}</code></div>
           <div><span>Dispatch ID</span><code>{entry.dispatch_id || '—'}</code></div>
           <div><span>Observed drops / write errors</span><code>{observedFailures || entry.error || '0'}</code></div>
         </div>
         <div className="socket-delivery-note">Queued means accepted by Ditto’s local send queue; written means the local socket write completed. Neither confirms that a remote application processed the frame.</div>
-        {entry.dispatch_id && <section className="log-inspector-section"><b>Related client frames</b>
-          {linked.length ? <div className="socket-linked-deliveries">{linked.map(item => <button type="button" key={item.id} onClick={() => selectLog(item.id)}><code>{item.client_id || 'client'} · {item.delivery_state || item.method}</code><span>{item.error || item.timestamp}</span></button>)}</div>
-            : <span className="text-fg-3">No related frame records are loaded in this log window.</span>}
+        {hasRelatedQuery && <section className="log-inspector-section"><b>{entry.burst_start_cursor ? 'Retained burst members' : 'Related client frames'}</b>
+          {!entry.burst_start_cursor && <span className="text-fg-3">Related rows come from bounded backend retention; older queue or write records may have expired.</span>}
+          {relatedError && <div className="capture-notice error">Could not load related records: {relatedError}</div>}
+          {!relatedComplete && <div className="capture-notice truncated">Some related records expired from backend retention.</div>}
+          {relatedLoading && <span className="text-fg-3">Loading related records…</span>}
+          {relatedPage.length ? <div className="socket-linked-deliveries">{relatedPage.map(item => <button type="button" key={item.id} onClick={() => selectSummary(item)}><code>{item.client_id || 'client'} · {item.delivery_state || item.method}</code><span>{item.error || item.timestamp}</span></button>)}</div>
+            : !relatedLoading && <span className="text-fg-3">No related frame records loaded for this dispatch.</span>}
+          {relatedTotal > 100 && <div className="socket-history-pager">
+            <button type="button" className="btn ghost" disabled={relatedLoading || relatedOffset === 0} onClick={() => setRelatedOffset(Math.max(0, relatedOffset - 100))}>Previous</button>
+            <span>{relatedOffset + 1}–{Math.min(relatedOffset + related.length, relatedTotal)} of {relatedTotal}</span>
+            <button type="button" className="btn ghost" disabled={relatedLoading || relatedOffset + related.length >= relatedTotal} onClick={() => setRelatedOffset(relatedOffset + 100)}>Next</button>
+          </div>}
         </section>}
       </div>}
     </div>

@@ -701,7 +701,8 @@ svg {
   gap: 12px;
   padding: 7px 16px;
   align-items: center;
-  min-height: 36px;
+  height: 36px;
+  box-sizing: border-box;
   border-bottom: 1px solid color-mix(in oklch, var(--line) 60%, transparent);
 }
 .log-row-head {
@@ -1152,6 +1153,7 @@ svg {
   cursor: pointer;
 }
 .socket-linked-deliveries > button:hover { border-color: var(--accent); }
+.socket-history-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; color: var(--fg-3); font-size: 11px; }
 .drawer-backdrop { display: none; }
 
 @media (max-width: 900px) {
@@ -1360,9 +1362,12 @@ svg {
 .socket-event-list {
   border-top: 1px solid color-mix(in oklch, var(--line) 65%, transparent);
   font-family: var(--font-mono);
+  max-height: 320px;
+  overflow: auto;
 }
 .socket-event-row {
-  min-height: 30px;
+  height: 36px;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: 76px 96px minmax(120px, 1fr) 52px minmax(130px, 1fr) minmax(150px, 1fr);
   gap: 10px;
@@ -1404,9 +1409,8 @@ svg {
   color: var(--fg-2);
 }
 .socket-event-row .dispatch-payload {
-  flex-wrap: wrap;
   gap: 6px;
-  white-space: normal;
+  white-space: nowrap;
 }
 .dispatch-counts {
   color: var(--fg-3);
@@ -2036,6 +2040,18 @@ svg {
 .log-detail-state.warn {
   color: var(--warn, #c58b28);
 }
+.log-gap-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 14px;
+  border-bottom: 1px solid color-mix(in oklch, var(--warn, #c58b28) 35%, var(--line));
+  background: color-mix(in oklch, var(--warn, #c58b28) 8%, var(--bg-1));
+  color: var(--fg-1);
+  font: 12px var(--font-sans);
+}
+.log-gap-banner button { border: 0; background: transparent; color: var(--fg-2); cursor: pointer; }
 .log-inspector-content,
 .log-overview {
   flex: 1;

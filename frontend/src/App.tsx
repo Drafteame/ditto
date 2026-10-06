@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useMemo } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { LogEntry } from './types'
 import { useAppShellState } from './hooks/useAppShellState'
 import { useSSE } from './hooks/useSSE'
@@ -8,6 +8,7 @@ import { useAppShortcuts } from './hooks/useAppShortcuts'
 import * as api from './api'
 import { useEventTemplateStore } from './stores/useEventTemplateStore'
 import { useSequenceStore } from './stores/useSequenceStore'
+import { useLogStore } from './stores/useLogStore'
 import { useSchemaStore } from './stores/useSchemaStore'
 import { useSocketStore } from './stores/useSocketStore'
 import { useChannelModeStore } from './stores/useChannelModeStore'
@@ -28,7 +29,7 @@ const views = { requests: RequestsView, sockets: SocketsView, templates: Templat
 export default function App() {
   const { mock, log, ui, counts } = useAppShellState()
   const { mocks, serverInfo, loadMocks, reloadMocks, advanceSequenceCursor } = mock
-  const { logEntries, connected, selectedLogId, setConnected, appendLogEvent, clearLog, selectLog } = log
+  const { connected, selectedLogId, selectedEntry, gapNotice, setConnected, appendLogEvents, clearLog, selectLog, setGapNotice, setSelectedEntry } = log
   const { sidebarOpen, sidebarCollapsed, activeView, drawerWidth, updateInfo, modalState, qrOpen, setSidebarOpen, toggleSidebarOpen, setSidebarCollapsed, toggleSidebarCollapsed, setDrawerWidth, setUpdateInfo, setModalState, setQrOpen, setActiveView } = ui
   const { connectedClientCount, channelCount, eventTemplateCount, sequenceCount, recordingCount } = counts
   const { toasts, showToast } = useToast()
@@ -52,9 +53,7 @@ export default function App() {
   }, [loadMocks])
 
   const scheduleSocketClientRefresh = useCallback(() => {
-    if (socketRefreshTimer.current) {
-      clearTimeout(socketRefreshTimer.current)
-    }
+    if (socketRefreshTimer.current) return
     socketRefreshTimer.current = setTimeout(() => {
       useSocketStore.getState().loadClients()
       socketRefreshTimer.current = null
@@ -62,9 +61,7 @@ export default function App() {
   }, [])
 
   const scheduleModeRefresh = useCallback(() => {
-    if (modeRefreshTimer.current) {
-      clearTimeout(modeRefreshTimer.current)
-    }
+    if (modeRefreshTimer.current) return
     modeRefreshTimer.current = setTimeout(() => {
       useChannelModeStore.getState().loadModes()
       modeRefreshTimer.current = null
@@ -72,9 +69,7 @@ export default function App() {
   }, [])
 
   const scheduleRecordingRefresh = useCallback(() => {
-    if (recordingRefreshTimer.current) {
-      clearTimeout(recordingRefreshTimer.current)
-    }
+    if (recordingRefreshTimer.current) return
     recordingRefreshTimer.current = setTimeout(() => {
       useRecordingStore.getState().loadRecordings()
       recordingRefreshTimer.current = null
@@ -82,25 +77,29 @@ export default function App() {
   }, [])
 
   useSSE(
-    useCallback((event) => {
-      appendLogEvent(event)
-      advanceSequenceCursor(event)
-      if (event.type === 'SOCKET') {
-        scheduleSocketClientRefresh()
-      }
-      if (event.type === 'MODE') {
-        scheduleModeRefresh()
-      }
-      if (event.type === 'RECORD') {
-        scheduleRecordingRefresh()
-      }
-    }, [advanceSequenceCursor, appendLogEvent, scheduleModeRefresh, scheduleRecordingRefresh, scheduleSocketClientRefresh]),
-    useCallback(() => {
-      setConnected(true)
-      refreshData()
-    }, [refreshData, setConnected]),
+    useCallback((events) => {
+      appendLogEvents(events)
+      events.forEach(event => {
+        advanceSequenceCursor(event)
+        if (event.type === 'SOCKET' && ['CONNECT', 'CLOSE', 'SUBSCRIBE', 'UNSUBSCRIBE', 'LIVE_CONNECT', 'LIVE_CLOSE'].includes(event.method)) {
+          scheduleSocketClientRefresh()
+        }
+        if (event.type === 'MODE') scheduleModeRefresh()
+        if (event.type === 'RECORD') scheduleRecordingRefresh()
+      })
+    }, [advanceSequenceCursor, appendLogEvents, scheduleModeRefresh, scheduleRecordingRefresh, scheduleSocketClientRefresh]),
+    useCallback(() => setConnected(true), [setConnected]),
     useCallback(() => setConnected(false), [setConnected]),
-    refreshData,
+    useCallback(() => refreshData(), [refreshData]),
+    useCallback(async (since: string) => {
+      return api.fetchLogHistory({ since, limit: 5000 })
+    }, []),
+    useCallback((gap, marker) => {
+      const reason = gap?.reason ?? marker.gap_reason ?? 'stream_gap'
+      const suffix = ` (${reason.replace(/_/g, ' ')})`
+      if (reason === 'server_reset') clearLog()
+      setGapNotice(`Event history had a gap${suffix}. Retained events were reloaded; older evicted events may be missing.`)
+    }, [clearLog, setGapNotice]),
   )
 
   useSequenceEvents(
@@ -152,7 +151,14 @@ export default function App() {
     clearLog()
   }, [clearLog])
 
-  const handleSaveAsMock = useCallback((entry: LogEntry) => {
+  const handleSaveAsMock = useCallback(async (summary: LogEntry) => {
+    let entry: LogEntry
+    try {
+      entry = await api.fetchLogDetail(summary.id)
+    } catch (err) {
+      showToast(`This event is no longer available: ${(err as Error).message}`, 'warn')
+      return
+    }
     const captureStatus = entry.response_payload?.capture_status
     if (entry.error || ['binary', 'truncated', 'error', 'unavailable', 'not_captured'].includes(captureStatus ?? '')) {
       showToast('This response cannot be saved as a mock because its body is binary, incomplete, or unavailable.', 'warn')
@@ -176,6 +182,17 @@ export default function App() {
     setModalState(createNewMockState(entry.method, entry.path, entry.status, entry.response_body, headers))
   }, [setModalState, showToast])
 
+  const handleSelectLog = useCallback((id: string | null) => {
+    selectLog(id)
+    if (!id) return
+    if (useLogStore.getState().selectedEntry) return
+    api.fetchLogDetail(id).then(entry => {
+      if (useLogStore.getState().selectedLogId === id) setSelectedEntry(entry)
+    }).catch(() => {
+      if (useLogStore.getState().selectedLogId === id) setGapNotice('This event is no longer retained. Its summary remains available in the log history.')
+    })
+  }, [selectLog, setGapNotice, setSelectedEntry])
+
   const handleCreateMock = useCallback(() => {
     setModalState(createNewMockState('GET', '', 200))
   }, [setModalState])
@@ -189,11 +206,6 @@ export default function App() {
       console.error('Failed to load mock for editing:', err)
     }
   }, [setModalState])
-
-  const selectedEntry = useMemo(
-    () => (selectedLogId ? logEntries.find(e => e.id === selectedLogId) ?? null : null),
-    [selectedLogId, logEntries],
-  )
 
   const View = views[activeView]
 
@@ -211,6 +223,7 @@ export default function App() {
       mocks={mocks}
       qrOpen={qrOpen}
       selectedEntry={selectedEntry}
+      gapNotice={gapNotice}
       sequenceCount={sequenceCount}
       recordingCount={recordingCount}
       serverInfo={serverInfo}
@@ -221,6 +234,7 @@ export default function App() {
       onChangeView={setActiveView}
       onClearLog={handleClearLog}
       onCloseDrawer={() => selectLog(null)}
+      onDismissGap={() => setGapNotice(null)}
       onCreateMock={handleCreateMock}
       onEditMock={handleEditMock}
       onMocksChanged={loadMocks}
@@ -238,7 +252,7 @@ export default function App() {
       <View
         serverInfo={serverInfo}
         selectedLogId={selectedLogId}
-        onSelectLog={selectLog}
+        onSelectLog={handleSelectLog}
         onSaveAsMock={handleSaveAsMock}
         showToast={showToast}
       />

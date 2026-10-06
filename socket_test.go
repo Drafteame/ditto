@@ -809,7 +809,8 @@ func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
 	defer bus.Unsubscribe(events)
 	pub := NewCoalescingPublisher(bus, false)
 	for i := 0; i < SocketLogCoalesceThresholdPerSecond+5; i++ {
-		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK})
+		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK,
+			Direction: "ditto_to_client", Source: "test", RequestBody: fmt.Sprintf(`{"index":%d}`, i)})
 	}
 	deadline := time.After(1500 * time.Millisecond)
 	summaries := 0
@@ -822,6 +823,22 @@ func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
 		case <-deadline:
 			if summaries != 1 {
 				t.Fatalf("burst summaries = %d, want 1", summaries)
+			}
+			var burst LogEvent
+			for _, event := range bus.LogSummaries() {
+				if event.Method == "DISPATCH_BURST" {
+					burst = event
+				}
+			}
+			if burst.BurstCount != SocketLogCoalesceThresholdPerSecond+5 || burst.BurstStartCursor == "" || burst.BurstEndCursor == "" {
+				t.Fatalf("burst summary = %#v", burst)
+			}
+			members := bus.History("", burst.BurstStartCursor, burst.BurstEndCursor, "/burst", "DISPATCH", "ditto_to_client", "test", "", 0, 100, burst.BurstCount)
+			if !members.Complete || len(members.Events) != burst.BurstCount {
+				t.Fatalf("burst members = %d complete=%t gap=%#v", len(members.Events), members.Complete, members.Gap)
+			}
+			if detail, ok := bus.LogDetail(members.Events[0].ID); !ok || detail.RequestBody == "" {
+				t.Fatalf("suppressed dispatch detail not retained: %#v found=%t", detail, ok)
 			}
 			return
 		}
