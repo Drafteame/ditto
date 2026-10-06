@@ -1885,6 +1885,98 @@ svg {
   flex-direction: column;
 }
 
+.log-detail-state {
+  padding: 7px 14px;
+  color: var(--fg-2);
+  font: 11px var(--font-sans);
+}
+.log-detail-state.warn {
+  color: var(--warn, #c58b28);
+}
+.log-inspector-content,
+.log-overview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.log-inspector-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.log-inspector-content > .code-block {
+  min-height: 150px;
+}
+.log-inspector-section {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--fg-2);
+  font: 11px var(--font-sans);
+}
+.log-inspector-section .code-block {
+  min-height: 80px;
+  max-height: 180px;
+}
+.log-inspector-kv {
+  display: grid;
+  gap: 5px;
+  font: 11px var(--font-sans);
+}
+.log-inspector-kv > div,
+.log-overview > div {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(0, 1.6fr);
+  gap: 10px;
+  align-items: start;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+.log-inspector-kv code,
+.log-overview code {
+  color: var(--fg-1);
+  overflow-wrap: anywhere;
+}
+.log-inspector-kv span,
+.log-overview > div > code {
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+.log-overview {
+  display: flex;
+  flex-direction: column;
+  font: 11px var(--font-sans);
+}
+.log-overview > div > span:first-child {
+  color: var(--fg-3);
+}
+.log-overview .error code {
+  color: var(--err);
+}
+.log-overview-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 14px;
+}
+.capture-notice {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg-2);
+  font: 11px var(--font-sans);
+  overflow-wrap: anywhere;
+}
+.capture-notice.truncated,
+.capture-notice.error {
+  border-color: color-mix(in oklch, var(--warn, #c58b28) 45%, var(--line));
+  color: var(--warn, #c58b28);
+}
+.capture-notice.binary {
+  color: var(--fg-1);
+}
+
 .code-block {
   position: relative;
   flex: 1;

@@ -36,8 +36,8 @@ export async function fetchLogSummaries(): Promise<LogSummary[]> {
   return res.json()
 }
 
-export async function fetchLogDetail(id: string): Promise<LogEvent> {
-  const res = await fetch(`${API_BASE}/logs/${encodeURIComponent(id)}`)
+export async function fetchLogDetail(id: string, signal?: AbortSignal): Promise<LogEvent> {
+  const res = await fetch(`${API_BASE}/logs/${encodeURIComponent(id)}`, { signal })
   if (!res.ok) throw new Error(res.status === 404 ? 'Log event expired or not found' : `HTTP ${res.status}`)
   return res.json()
 }

@@ -153,8 +153,28 @@ export default function App() {
   }, [clearLog])
 
   const handleSaveAsMock = useCallback((entry: LogEntry) => {
-    setModalState(createNewMockState(entry.method, entry.path, entry.status, entry.response_body))
-  }, [setModalState])
+    const captureStatus = entry.response_payload?.capture_status
+    if (entry.error || ['binary', 'truncated', 'error', 'unavailable', 'not_captured'].includes(captureStatus ?? '')) {
+      showToast('This response cannot be saved as a mock because its body is binary, incomplete, or unavailable.', 'warn')
+      return
+    }
+    try {
+      JSON.parse(entry.response_body || '')
+    } catch {
+      showToast('This mock editor only supports JSON response bodies. The captured response was left unchanged.', 'warn')
+      return
+    }
+    const transportHeaders = new Set([
+      'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer',
+      'transfer-encoding', 'upgrade', 'content-length', 'content-encoding', 'set-cookie',
+    ])
+    const headers = Object.fromEntries(
+      Object.entries(entry.response_headers ?? {})
+        .filter(([name]) => !transportHeaders.has(name.toLowerCase()))
+        .map(([name, values]) => [name, values.join(', ')]),
+    )
+    setModalState(createNewMockState(entry.method, entry.path, entry.status, entry.response_body, headers))
+  }, [setModalState, showToast])
 
   const handleCreateMock = useCallback(() => {
     setModalState(createNewMockState('GET', '', 200))

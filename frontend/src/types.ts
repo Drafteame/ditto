@@ -11,8 +11,12 @@ export interface LogEvent {
   request_payload?: LogPayloadMetadata
   response_payload?: LogPayloadMetadata
   source?: string
+  error?: string
   request_headers?: Record<string, string[]>
   response_headers?: Record<string, string[]>
+  request_form_fields?: Record<string, string[]>
+  request_files?: LogFileMetadata[]
+  request_forms_truncated?: boolean
   url?: string
   host?: string
   remote_addr?: string
@@ -37,9 +41,17 @@ export interface LogPayloadMetadata {
   captured_bytes: number
   content_type?: string
   encoding?: string
-  capture_status: 'empty' | 'not_captured' | 'captured' | 'binary' | 'truncated' | 'error' | 'unavailable' | 'omitted'
+  capture_status: 'empty' | 'not_captured' | 'captured' | 'binary' | 'truncated' | 'error' | 'unavailable' | 'metadata_only' | 'omitted'
   raw_base64?: string
   error?: string
+}
+
+export interface LogFileMetadata {
+  name: string
+  content_type?: string
+  size_bytes: number
+  captured_bytes: number
+  capture_status: string
 }
 
 export type LogSummary = Omit<LogEvent, 'request_body' | 'response_body' | 'request_headers' | 'response_headers'> & {

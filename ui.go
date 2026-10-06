@@ -23,35 +23,39 @@ var webFS embed.FS
 
 // LogEvent represents a single request passing through Ditto.
 type LogEvent struct {
-	ID              string              `json:"id"`
-	Timestamp       string              `json:"timestamp"`
-	Type            string              `json:"type"` // MOCK, PROXY, MISS, SOCKET, MODE, RECORD
-	Method          string              `json:"method"`
-	Path            string              `json:"path"`
-	Status          int                 `json:"status"`
-	DurationMs      int64               `json:"duration_ms"`
-	ResponseBody    string              `json:"response_body,omitempty"`
-	RequestBody     string              `json:"request_body,omitempty"`
-	RequestPayload  *LogPayloadMetadata `json:"request_payload,omitempty"`
-	ResponsePayload *LogPayloadMetadata `json:"response_payload,omitempty"`
-	Source          string              `json:"source,omitempty"`
-	RequestHeaders  map[string][]string `json:"request_headers,omitempty"`
-	ResponseHeaders map[string][]string `json:"response_headers,omitempty"`
-	URL             string              `json:"url,omitempty"`
-	Host            string              `json:"host,omitempty"`
-	RemoteAddr      string              `json:"remote_addr,omitempty"`
-	Protocol        string              `json:"protocol,omitempty"`
-	Direction       string              `json:"direction,omitempty"`
-	ConnectionID    string              `json:"connection_id,omitempty"`
-	ClientID        string              `json:"client_id,omitempty"`
-	SubscriptionID  string              `json:"subscription_id,omitempty"`
-	Adapter         string              `json:"adapter,omitempty"`
-	Subprotocol     string              `json:"subprotocol,omitempty"`
-	Mode            string              `json:"mode,omitempty"`
-	Target          string              `json:"target,omitempty"`
-	MockIndex       int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
-	SequenceStep    int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
-	SequenceLen     int                 `json:"sequence_len,omitempty"`
+	ID                    string              `json:"id"`
+	Timestamp             string              `json:"timestamp"`
+	Type                  string              `json:"type"` // MOCK, PROXY, MISS, SOCKET, MODE, RECORD
+	Method                string              `json:"method"`
+	Path                  string              `json:"path"`
+	Status                int                 `json:"status"`
+	DurationMs            int64               `json:"duration_ms"`
+	ResponseBody          string              `json:"response_body,omitempty"`
+	RequestBody           string              `json:"request_body,omitempty"`
+	RequestPayload        *LogPayloadMetadata `json:"request_payload,omitempty"`
+	ResponsePayload       *LogPayloadMetadata `json:"response_payload,omitempty"`
+	Source                string              `json:"source,omitempty"`
+	Error                 string              `json:"error,omitempty"`
+	RequestHeaders        map[string][]string `json:"request_headers,omitempty"`
+	ResponseHeaders       map[string][]string `json:"response_headers,omitempty"`
+	RequestFormFields     map[string][]string `json:"request_form_fields,omitempty"`
+	RequestFiles          []LogFileMetadata   `json:"request_files,omitempty"`
+	RequestFormsTruncated bool                `json:"request_forms_truncated,omitempty"`
+	URL                   string              `json:"url,omitempty"`
+	Host                  string              `json:"host,omitempty"`
+	RemoteAddr            string              `json:"remote_addr,omitempty"`
+	Protocol              string              `json:"protocol,omitempty"`
+	Direction             string              `json:"direction,omitempty"`
+	ConnectionID          string              `json:"connection_id,omitempty"`
+	ClientID              string              `json:"client_id,omitempty"`
+	SubscriptionID        string              `json:"subscription_id,omitempty"`
+	Adapter               string              `json:"adapter,omitempty"`
+	Subprotocol           string              `json:"subprotocol,omitempty"`
+	Mode                  string              `json:"mode,omitempty"`
+	Target                string              `json:"target,omitempty"`
+	MockIndex             int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
+	SequenceStep          int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
+	SequenceLen           int                 `json:"sequence_len,omitempty"`
 }
 
 // LogPayloadMetadata describes a captured payload without requiring consumers
@@ -61,9 +65,17 @@ type LogPayloadMetadata struct {
 	CapturedBytes int64  `json:"captured_bytes"`
 	ContentType   string `json:"content_type,omitempty"`
 	Encoding      string `json:"encoding,omitempty"`
-	CaptureStatus string `json:"capture_status"` // empty, not_captured, captured, binary, truncated, error, unavailable, or omitted
+	CaptureStatus string `json:"capture_status"` // empty, not_captured, captured, binary, truncated, error, unavailable, metadata_only, or omitted
 	RawBase64     string `json:"raw_base64,omitempty"`
 	Error         string `json:"error,omitempty"`
+}
+
+type LogFileMetadata struct {
+	Name          string `json:"name"`
+	ContentType   string `json:"content_type,omitempty"`
+	SizeBytes     int64  `json:"size_bytes"`
+	CapturedBytes int64  `json:"captured_bytes"`
+	CaptureStatus string `json:"capture_status"`
 }
 
 const (
@@ -97,6 +109,8 @@ func cloneLogEvent(event LogEvent) LogEvent {
 	}
 	event.RequestHeaders = cloneHeaders(event.RequestHeaders)
 	event.ResponseHeaders = cloneHeaders(event.ResponseHeaders)
+	event.RequestFormFields = cloneHeaders(event.RequestFormFields)
+	event.RequestFiles = append([]LogFileMetadata(nil), event.RequestFiles...)
 	if event.RequestPayload != nil {
 		value := *event.RequestPayload
 		event.RequestPayload = &value
@@ -111,6 +125,7 @@ func cloneLogEvent(event LogEvent) LogEvent {
 func summaryLogEvent(event LogEvent) LogEvent {
 	event.RequestBody, event.ResponseBody = "", ""
 	event.RequestHeaders, event.ResponseHeaders = nil, nil
+	event.RequestFormFields, event.RequestFiles, event.RequestFormsTruncated = nil, nil, false
 	if event.RequestPayload != nil {
 		meta := *event.RequestPayload
 		meta.RawBase64 = ""
