@@ -266,18 +266,9 @@ export async function stopRecording(id: string): Promise<RecordingManifest> {
   return res.json()
 }
 
-export async function fetchRecording(id: string): Promise<RecordingManifest> {
-  const res = await fetch(`${API_BASE}/recordings/${encodeURIComponent(id)}`)
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(text || `HTTP ${res.status}`)
-  }
-  return res.json()
-}
-
-export async function fetchRecordingFrames(id: string, channel: string, offset = 0, limit = 100): Promise<{ frames: RecordedFrame[]; offset: number; limit: number }> {
+export async function fetchRecordingFrames(id: string, channel: string, offset = 0, limit = 100, signal?: AbortSignal): Promise<{ frames: RecordedFrame[]; offset: number; limit: number }> {
   const params = new URLSearchParams({ channel, offset: String(offset), limit: String(limit) })
-  const res = await fetch(`${API_BASE}/recordings/${encodeURIComponent(id)}/frames?${params}`)
+  const res = await fetch(`${API_BASE}/recordings/${encodeURIComponent(id)}/frames?${params}`, { signal })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `HTTP ${res.status}`)

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { LogEntry, ServerInfo } from '../types'
 import { statusClass } from '../status'
 import { Bookmark, Clock } from './icons'
+import { formatLocalTimestamp } from '../time'
 
 export const LOG_SEARCH_INPUT_ID = 'log-search-input'
 
@@ -194,7 +195,7 @@ function LogRow({
 
   return (
     <div onClick={onClick} className={`log-row ${selected ? 'selected' : ''}`}>
-      <span className="t">{entry.timestamp}</span>
+      <span className="t" title={entry.timestamp}>{formatLocalTimestamp(entry.timestamp)}</span>
       <span>
         <span className={`tag-type ${entry.type}`}>{entry.type}</span>
       </span>

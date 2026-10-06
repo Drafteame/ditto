@@ -1,8 +1,11 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import type { LogEntry, RecordedFrame, RecordingManifest, ServerInfo } from '../types'
 import { useRecordingStore } from '../stores/useRecordingStore'
 import { Braces, Refresh, Send } from '../components/icons'
+import { SocketEventInspector } from '../components/SocketEventInspector'
+import * as api from '../api'
+import { formatLocalTimestamp } from '../time'
 
 interface RecordingsViewProps {
   serverInfo: ServerInfo | null
@@ -19,27 +22,19 @@ export const RecordingsView = memo(function RecordingsView({ showToast }: Record
   const {
     recordings,
     activeId,
-    selected,
-    frames,
     loading,
     error,
     loadRecordings,
     startRecording,
     stopRecording,
-    loadRecording,
-    loadFrames,
   } = useRecordingStore(useShallow(state => ({
     recordings: state.recordings,
     activeId: state.activeId,
-    selected: state.selected,
-    frames: state.frames,
     loading: state.loading,
     error: state.error,
     loadRecordings: state.loadRecordings,
     startRecording: state.startRecording,
     stopRecording: state.stopRecording,
-    loadRecording: state.loadRecording,
-    loadFrames: state.loadFrames,
   })))
 
   useEffect(() => {
@@ -70,9 +65,8 @@ export const RecordingsView = memo(function RecordingsView({ showToast }: Record
     }
   }
 
-  async function selectRecording(id: string) {
+  function selectRecording(id: string) {
     setSelectedId(id)
-    await loadRecording(id)
   }
 
   return (
@@ -148,9 +142,8 @@ export const RecordingsView = memo(function RecordingsView({ showToast }: Record
 
           <RecordingDetail
             id={selectedId}
-            manifest={selected ?? selectedRecording}
-            frames={frames}
-            onLoadFrames={loadFrames}
+            key={selectedId || 'empty'}
+            manifest={selectedRecording}
           />
         </div>
       </div>
@@ -161,47 +154,116 @@ export const RecordingsView = memo(function RecordingsView({ showToast }: Record
 function RecordingDetail({
   id,
   manifest,
-  frames,
-  onLoadFrames,
 }: {
   id: string
   manifest: RecordingManifest | null
-  frames: RecordedFrame[]
-  onLoadFrames: (id: string, channel: string, offset?: number) => Promise<void>
 }) {
   const firstChannel = manifest?.channels[0]?.channel ?? ''
+  const [channel, setChannel] = useState('')
+  const [frames, setFrames] = useState<RecordedFrame[]>([])
+  const [offset, setOffset] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [selectedFrame, setSelectedFrame] = useState<RecordedFrame | null>(null)
+  const controller = useRef<AbortController | null>(null)
+  const loadPage = useCallback(async (nextOffset: number) => {
+    if (!id || !channel) return
+    controller.current?.abort()
+    const request = new AbortController()
+    controller.current = request
+    setLoading(true)
+    setError('')
+    try {
+      const data = await api.fetchRecordingFrames(id, channel, nextOffset, 100, request.signal)
+      if (request.signal.aborted) return
+      const page = Array.isArray(data.frames) ? data.frames : []
+      setFrames(page)
+      setOffset(nextOffset)
+      setSelectedFrame(null)
+    } catch (err) {
+      if (!request.signal.aborted) setError((err as Error).message)
+    } finally {
+      if (!request.signal.aborted) setLoading(false)
+    }
+  }, [channel, id])
+
+  useEffect(() => {
+    setFrames([])
+    setOffset(0)
+    setSelectedFrame(null)
+    setError('')
+    if (!channel) setLoading(false)
+    if (channel) void loadPage(0)
+    return () => controller.current?.abort()
+  }, [id, channel, loadPage])
+
   if (!manifest) {
     return <section className="recording-detail socket-empty">Select a recording to inspect its manifest.</section>
   }
+  const selectedEvent = selectedFrame ? recordedFrameEvent(selectedFrame, manifest.started_at) : null
+  const channelTotal = manifest.channels.find(item => item.channel === channel)?.events
+  const hasMore = channelTotal === undefined ? frames.length === 100 : offset + frames.length < channelTotal
   return (
     <section className="recording-detail">
       <div className="panel-label">{manifest.id}</div>
       <div className="recording-channel-list">
-        {manifest.channels.map(channel => (
-          <button key={channel.channel} type="button" className="quick-template" onClick={() => onLoadFrames(id, channel.channel, 0)}>
-            <span>{channel.channel}</span>
-            <small>{channel.events} events / {channel.dropped} capped / {channel.queue_dropped ?? 0} queued</small>
+        {manifest.channels.map(item => (
+          <button key={item.channel} type="button" className={channel === item.channel ? 'quick-template active' : 'quick-template'} onClick={() => setChannel(item.channel)}>
+            <span>{item.channel}</span>
+            <small>{item.events} events / {item.dropped} capped / {item.queue_dropped ?? 0} queued</small>
           </button>
         ))}
       </div>
-      <div className="panel-label">Frames preview</div>
-      {frames.length === 0 ? (
-        <div className="socket-empty compact">
-          {firstChannel ? 'Load a channel to fetch the first 100 frames.' : 'No channels recorded.'}
-        </div>
-      ) : (
+      <div className="panel-label">Recorded frames {channel && `· ${channel}`}</div>
+      {error && <div className="socket-error">{error}</div>}
+      {loading && <div className="socket-empty compact">Loading frames…</div>}
+      {!loading && !frames.length && <div className="socket-empty compact">{channel ? 'No frames in this channel.' : firstChannel ? 'Select a channel to load frames.' : 'No channels recorded.'}</div>}
+      {!!frames.length && <>
         <div className="recording-frame-list">
-          {frames.map((frame, index) => (
-            <div key={`${frame.ts_ms}-${index}`} className="socket-event-row">
-              <span className="time">{frame.ts_ms}ms</span>
-              <span className="method">{frame.direction}</span>
-              <span className="path">{frame.channel}</span>
-              <span className="status">{frame.frame_kind}</span>
-              <span className="payload">{frame.decoded?.alias || frame.decode_error || 'raw'}</span>
-            </div>
-          ))}
+          {frames.map((frame, index) => {
+            const frameTime = new Date(Date.parse(manifest.started_at) + frame.ts_ms)
+            const timestamp = Number.isNaN(frameTime.getTime()) ? `${frame.ts_ms}ms from recording start` : frameTime.toISOString()
+            return <button key={`${frame.ts_ms}-${index}`} type="button" className={`socket-event-row recording-frame-row${selectedFrame === frame ? ' selected' : ''}`} onClick={() => setSelectedFrame(frame)}>
+            <span className="time" title={`${timestamp} · +${frame.ts_ms}ms from recording start`}>{Number.isNaN(frameTime.getTime()) ? `${frame.ts_ms}ms` : `${formatLocalTimestamp(timestamp)} · +${frame.ts_ms}ms`}</span>
+            <span className="method">{frame.direction}</span><span className="path">{frame.channel}</span>
+            <span className="status">{frame.frame_kind}</span><span className="payload">{frame.decoded?.alias || frame.decode_error || frame.decoded?.type_name || 'raw'}</span>
+          </button>})}
         </div>
-      )}
+        <div className="recording-pagination">
+          <span>{offset + 1}–{offset + frames.length}{channelTotal ? ` of ${channelTotal}` : ''}</span>
+          <button type="button" className="btn ghost" disabled={loading || offset === 0} onClick={() => void loadPage(Math.max(0, offset - 100))}>Previous</button>
+          <button type="button" className="btn ghost" disabled={loading || !hasMore} onClick={() => void loadPage(offset + frames.length)}>Next</button>
+        </div>
+      </>}
+      {selectedEvent && <div className="recorded-frame-inspector"><SocketEventInspector entry={selectedEvent} /></div>}
     </section>
   )
+}
+
+function recordedFrameEvent(frame: RecordedFrame, startedAt: string) {
+  const bytes = Uint8Array.from(atob(frame.raw_b64), char => char.charCodeAt(0))
+  const decodedPayload = frame.decoded?.payload_json
+  const recordedAt = Date.parse(startedAt)
+  return {
+    type: 'SOCKET' as const,
+    method: 'FRAME',
+    path: frame.channel,
+    timestamp: Number.isNaN(recordedAt) ? `${frame.ts_ms}ms from recording start` : new Date(recordedAt + frame.ts_ms).toISOString(),
+    direction: frame.direction,
+    source: 'recording',
+    channel: frame.channel,
+    frame_kind: frame.frame_kind,
+    request_body: frame.frame_kind === 'text' ? new TextDecoder().decode(bytes) : undefined,
+    request_payload: {
+      size_bytes: bytes.length,
+      captured_bytes: bytes.length,
+      content_type: frame.frame_kind === 'text' ? 'text/plain; charset=utf-8' : 'application/octet-stream',
+      capture_status: bytes.length ? 'captured' as const : 'empty' as const,
+      raw_base64: frame.raw_b64,
+    },
+    type_name: frame.decoded?.type_name,
+    alias: frame.decoded?.alias,
+    decoded_payload: decodedPayload === undefined ? undefined : typeof decodedPayload === 'string' ? decodedPayload : JSON.stringify(decodedPayload),
+    decode_error: frame.decode_error,
+  }
 }

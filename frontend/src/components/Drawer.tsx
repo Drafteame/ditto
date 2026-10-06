@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LogEntry, LogPayloadMetadata, ServerInfo } from '../types'
 import * as api from '../api'
 import { statusClass } from '../status'
 import { CodeBlock } from './CodeBlock'
-import { Alert, Bookmark, Check, Download, Globe, X } from './icons'
+import { Alert, Bookmark, Check, Globe, X } from './icons'
+import { SocketEventInspector } from './SocketEventInspector'
+import { DownloadCapture, formatBytes } from './PayloadTools'
 
 export const DRAWER_MIN_WIDTH = 340
 export const DRAWER_MAX_WIDTH = 720
@@ -38,12 +40,6 @@ function formatHeaders(headers: Record<string, string[]> | undefined): string {
     .flatMap(name => headers[name].map(value => `${name}: ${value}`)).join('\n')
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
-}
-
 function captureMessage(meta: LogPayloadMetadata | undefined, label: string): string | null {
   if (!meta) return null
   switch (meta.capture_status) {
@@ -60,21 +56,6 @@ function captureMessage(meta: LogPayloadMetadata | undefined, label: string): st
     case 'omitted': return `${label} body was omitted.`
     default: return `${label} capture status: ${meta.capture_status}.`
   }
-}
-
-function DownloadCapture({ metadata, filename }: { metadata: LogPayloadMetadata | undefined; filename: string }) {
-  if (!metadata?.raw_base64) return null
-  const download = () => {
-    const binary = atob(metadata.raw_base64!)
-    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
-    const url = URL.createObjectURL(new Blob([bytes], { type: metadata.content_type || 'application/octet-stream' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    link.click()
-    URL.revokeObjectURL(url)
-  }
-  return <button type="button" className="btn ghost" onClick={download}><Download /> Download captured bytes</button>
 }
 
 function MatchBanner({ entry, target }: { entry: LogEntry; target: string }) {
@@ -105,6 +86,8 @@ export function Drawer({ entry, width, onResize, onClose, onSaveAsMock }: Drawer
   const [tab, setTab] = useState<Tab>('overview')
   const [detail, setDetail] = useState<LogEntry | null>(null)
   const [detailState, setDetailState] = useState<'loading' | 'ready' | 'expired' | 'error'>('loading')
+  const drawerRef = useRef<HTMLElement>(null)
+  const closeRef = useRef(onClose)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -119,6 +102,35 @@ export function Drawer({ entry, width, onResize, onClose, onSaveAsMock }: Drawer
       setDetailState(error instanceof Error && error.message.includes('expired') ? 'expired' : 'error')
     })
     return () => controller.abort()
+  }, [entry.id])
+
+  useEffect(() => { closeRef.current = onClose }, [onClose])
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    drawerRef.current?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeRef.current()
+      } else if (event.key === 'Tab' && drawerRef.current) {
+        const focusable = [...drawerRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])')]
+        if (!focusable.length) { event.preventDefault(); return }
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === drawerRef.current)) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      if (previouslyFocused?.isConnected) previouslyFocused.focus()
+    }
   }, [entry.id])
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -147,7 +159,7 @@ export function Drawer({ entry, width, onResize, onClose, onSaveAsMock }: Drawer
   const responseNotice = captureMessage(shown.response_payload, 'Response')
 
   return (
-    <aside className="drawer" style={{ width }}>
+    <aside ref={drawerRef} className="drawer" style={{ width }} role="dialog" aria-modal="true" aria-label={`${shown.type} event details`} tabIndex={-1}>
       <div className="resize-handle left" onMouseDown={handleDragStart} title="Drag to resize" />
       <div className="drawer-head">
         <div className="row">
@@ -167,10 +179,10 @@ export function Drawer({ entry, width, onResize, onClose, onSaveAsMock }: Drawer
       {detailState === 'expired' && <div className="log-detail-state warn">Detailed event data expired or is no longer retained. Showing the live event copy where available.</div>}
       {detailState === 'error' && <div className="log-detail-state warn">Could not load retained event details. Check the connection and select the event again.</div>}
 
+      {shown.type === 'SOCKET' ? <SocketEventInspector entry={shown} /> : <>
       <div className="tabs">
         {(['overview', 'request', 'response'] as const).map(name => <button type="button" key={name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}
       </div>
-
       <div className="drawer-body">
         {tab === 'overview' && <div className="log-overview">
           <div><span>URL</span><code>{shown.url || shown.path}</code></div>
@@ -200,6 +212,7 @@ export function Drawer({ entry, width, onResize, onClose, onSaveAsMock }: Drawer
           <div className="log-inspector-section"><b>Response headers</b>{responseHeaders ? <CodeBlock key={`resh-${shown.id}`} text={responseHeaders} /> : <span className="text-fg-3">No response headers captured.</span>}</div>
         </div>}
       </div>
+      </>}
     </aside>
   )
 }

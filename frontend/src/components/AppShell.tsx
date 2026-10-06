@@ -130,6 +130,7 @@ export function AppShell({
           />
           {children}
         </section>
+        {selectedEntry && <button type="button" className="drawer-backdrop" aria-label="Close event inspector" onClick={onCloseDrawer} />}
         {selectedEntry && (
           <Drawer
             entry={selectedEntry}
