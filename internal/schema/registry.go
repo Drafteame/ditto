@@ -282,7 +282,7 @@ func (s *Registry) Import(filename string, reader io.Reader) (Pack, error) {
 	cleanupTmp := true
 	defer func() {
 		if cleanupTmp {
-			os.RemoveAll(tmpDir)
+			_ = os.RemoveAll(tmpDir)
 		}
 	}()
 
@@ -303,19 +303,19 @@ func (s *Registry) Import(filename string, reader io.Reader) (Pack, error) {
 		}
 		tmpPath := tmp.Name()
 		if _, err := copyLimited(tmp, reader, MaxUploadBytes, filename); err != nil {
-			tmp.Close()
-			os.Remove(tmpPath)
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
 			return Pack{}, err
 		}
 		if err := tmp.Close(); err != nil {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 			return Pack{}, err
 		}
 		if err := extractZip(tmpPath, tmpDir); err != nil {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 			return Pack{}, err
 		}
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		if err := normalizeExtractedPackLayout(tmpDir); err != nil {
 			return Pack{}, err
 		}
@@ -340,7 +340,7 @@ func (s *Registry) Import(filename string, reader io.Reader) (Pack, error) {
 
 	pack, err := s.RegisterPack(dest)
 	if err != nil {
-		os.RemoveAll(dest)
+		_ = os.RemoveAll(dest)
 		return Pack{}, err
 	}
 	return pack, nil
@@ -482,7 +482,7 @@ func schemaPackMetadataFromManifest(root string) (schemaPackManifest, []byte, er
 	if err != nil {
 		return schemaPackManifest{}, nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only
 	data, err := readLimited(file, maxManifestBytes, "manifest.json")
 	if err != nil {
 		return schemaPackManifest{}, nil, err
@@ -612,11 +612,11 @@ func moveDir(src, dest string) error {
 		return err
 	}
 	if err := copyDir(src, dest); err != nil {
-		os.RemoveAll(dest)
+		_ = os.RemoveAll(dest)
 		return err
 	}
 	if err := os.RemoveAll(src); err != nil {
-		os.RemoveAll(dest)
+		_ = os.RemoveAll(dest)
 		return err
 	}
 	return nil
@@ -776,7 +776,7 @@ func extractZipWithLimit(zipPath, dest string, maxUnpackBytes int64) error {
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }() // read-only
 
 	destClean, err := filepath.Abs(dest)
 	if err != nil {

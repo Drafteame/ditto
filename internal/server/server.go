@@ -101,7 +101,10 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	bus := eventlog.NewBus(eventlog.NewPrinter(os.Stdout, cfg.JSONLogs))
-	proxyMgr := proxy.NewUpstream(cfg.Target)
+	proxyMgr, err := proxy.NewUpstream(cfg.Target)
+	if err != nil {
+		return nil, err
+	}
 	modeRegistry, err := channelmode.NewRegistry(cfg.Layout.ChannelModesDir, bus)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load channel mode registry: %w", err)

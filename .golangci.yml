@@ -3,6 +3,21 @@ version: "2"
 linters:
   # errcheck, govet, ineffassign, staticcheck and unused.
   default: standard
+  settings:
+    errcheck:
+      exclude-functions:
+        # Writes of the startup banner, request log and SSE keepalives:
+        # nothing useful can be done when they fail.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # Tests close connections and bodies in defers; a failed close there
+      # does not change the outcome.
+      - path: _test\.go
+        linters:
+          - errcheck
 
 formatters:
   enable:

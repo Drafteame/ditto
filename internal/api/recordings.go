@@ -105,7 +105,7 @@ func (a *API) uploadSchemaPack(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `missing upload field "pack"`, http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only
 	pack, err := a.Schemas.Import(header.Filename, file)
 	if err != nil {
 		writeError(w, err)

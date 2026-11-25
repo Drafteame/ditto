@@ -465,9 +465,9 @@ func errorText(err error) string {
 	return err.Error()
 }
 
-// Tunnel relays the WebSocket upgrade r to the HTTP target through direct
-// (the reverse proxy's director, which rewrites the URL and headers) and
-// pipes complete messages both ways with nhooyr's streaming Reader and Writer
+// Tunnel relays the WebSocket upgrade r to the HTTP target, using direct to
+// point the upstream request at it (see proxy.Upstream.Router), and
+// pipes complete messages both ways with the websocket library's streaming Reader and Writer
 // APIs. It logs the handshake, the close and a bounded prefix of each message.
 func (h *Hub) Tunnel(w http.ResponseWriter, r *http.Request, target string, direct func(*http.Request)) {
 	upstreamReq := r.Clone(r.Context())
@@ -475,9 +475,10 @@ func (h *Hub) Tunnel(w http.ResponseWriter, r *http.Request, target string, dire
 	upstreamReq.Header = extractUpstreamHeaders(r.Header)
 	direct(upstreamReq)
 	u := upstreamReq.URL
-	if u.Scheme == "http" {
+	switch u.Scheme {
+	case "http":
 		u.Scheme = "ws"
-	} else if u.Scheme == "https" {
+	case "https":
 		u.Scheme = "wss"
 	}
 	if u.Scheme != "ws" && u.Scheme != "wss" {
@@ -497,17 +498,16 @@ func (h *Hub) Tunnel(w http.ResponseWriter, r *http.Request, target string, dire
 		HTTPClient: &http.Client{Transport: responseCaptureTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}})
 	if err != nil {
 		status := http.StatusBadGateway
-		respHeaders := make(http.Header)
 		if response != nil {
 			status = response.StatusCode
-			respHeaders = response.Header.Clone()
+			respHeaders := response.Header.Clone()
 			body, metadata := responseCaptureTransport.responseBody, responseCaptureTransport.responsePayload
 			event := eventlog.Event{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 				RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: status, DurationMs: time.Since(started).Milliseconds(),
 				Source: "websocket-proxy", Error: err.Error(), Target: target, ConnectionID: connectionID, ClientID: connectionID,
 				RequestHeaders: r.Header.Clone(), ResponseHeaders: respHeaders, ResponseBody: body, ResponsePayload: metadata}
 			if responseCaptureTransport.responseError != "" {
-				event.Error += "; response body cw: " + responseCaptureTransport.responseError
+				event.Error += "; response body capture: " + responseCaptureTransport.responseError
 			}
 			h.events.Publish(event)
 		} else {
@@ -519,7 +519,7 @@ func (h *Hub) Tunnel(w http.ResponseWriter, r *http.Request, target string, dire
 		}
 		return
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
 	copyResponseHeaders(w.Header(), response.Header)
 	cw := capture.NewWriter(w)
 	clientConn, acceptErr := websocket.Accept(cw, r, &websocket.AcceptOptions{InsecureSkipVerify: true,
@@ -550,7 +550,7 @@ func (h *Hub) Tunnel(w http.ResponseWriter, r *http.Request, target string, dire
 	_ = clientConn.Close(websocket.StatusCode(closeCode), closeReason)
 	_ = conn.Close(websocket.StatusCode(closeCode), closeReason)
 	cancel()
-	<-errCh
+	<-errCh //nolint:errcheck // the first direction to stop already decided the close
 	h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "CLOSE", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: closeCode, DurationMs: time.Since(started).Milliseconds(),
 		Source: "websocket-proxy", Target: target, ConnectionID: connectionID, ClientID: connectionID,
@@ -578,7 +578,7 @@ func (t *websocketResponseCaptureTransport) RoundTrip(req *http.Request) (*http.
 	if err != nil || resp == nil || resp.StatusCode == http.StatusSwitchingProtocols || resp.Body == nil {
 		return resp, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if t.writer != nil {
 		copyResponseHeaders(t.writer.Header(), resp.Header)
 		cw := capture.NewWriter(t.writer)

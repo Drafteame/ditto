@@ -7,13 +7,20 @@ import (
 )
 
 // Open starts the platform's URL opener for url without waiting for it.
-func Open(url string) {
+func Open(url string) error {
+	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		exec.Command("open", url).Start()
-	case "linux":
-		exec.Command("xdg-open", url).Start()
+		cmd = exec.Command("open", url)
 	case "windows":
-		exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
 	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// Reap the opener so it does not linger as a zombie process.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }

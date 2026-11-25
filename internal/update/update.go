@@ -21,7 +21,7 @@ func Check() (latestVersion, downloadURL string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("failed to check for updates: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)

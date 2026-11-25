@@ -440,7 +440,7 @@ func (r *Recorder) Frames(id, channel string, offset, limit int) ([]Frame, error
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only
 	dec := json.NewDecoder(file)
 	out := make([]Frame, 0)
 	index := 0

@@ -140,7 +140,7 @@ func TestFakeClockAdvanceFiresTimersChronologically(t *testing.T) {
 	if !first.firedAt.Equal(start.Add(20 * time.Millisecond)) {
 		t.Fatalf("first timer fired at %s", first.firedAt)
 	}
-	if !(second.firedSeq < third.firedSeq && third.firedSeq < first.firedSeq) {
+	if second.firedSeq >= third.firedSeq || third.firedSeq >= first.firedSeq {
 		t.Fatalf("unexpected fire order: second=%d third=%d first=%d", second.firedSeq, third.firedSeq, first.firedSeq)
 	}
 }

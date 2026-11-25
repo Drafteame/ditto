@@ -36,7 +36,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if socket.WantsProxy(r) {
-			if direct, target := h.Upstream.Director(); direct != nil {
+			if direct, target := h.Upstream.Router(); direct != nil {
 				h.Hub.Tunnel(w, r, target, direct)
 				return
 			}
