@@ -25,13 +25,14 @@ func runDesktop(srv *Server, cfg ServerConfig) {
 
 	// During Wails binding generation, skip server startup
 	if os.Getenv("WAILS_BINDING_GENERATION") != "true" {
-		if err := srv.ListenAndServeAsync(); err != nil {
+		if err := srv.Start(); err != nil {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 		printStartup(srv.Store.All(), cfg.Port, cfg.Target, cfg.MocksDir, cfg.HTTPS, srv.CertPath, true)
 	}
 
 	app := &DittoApp{
+		srv:    srv,
 		port:   cfg.Port,
 		scheme: scheme,
 	}
@@ -62,6 +63,7 @@ func runDesktop(srv *Server, cfg ServerConfig) {
 // DittoApp is the Wails application struct with methods callable from JS.
 type DittoApp struct {
 	ctx    context.Context
+	srv    *Server
 	port   int
 	scheme string
 }
@@ -71,6 +73,7 @@ func (a *DittoApp) startup(ctx context.Context) {
 }
 
 func (a *DittoApp) shutdown(ctx context.Context) {
+	shutdownServer(a.srv)
 }
 
 // OpenInBrowser opens the dashboard in the default browser.

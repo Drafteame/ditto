@@ -9,8 +9,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -141,8 +143,10 @@ type Server struct {
 	CertPath   string
 	KeyPath    string
 
-	mu       sync.Mutex
-	listener net.Listener
+	mu         sync.Mutex
+	http       *http.Server
+	listener   net.Listener
+	cancelBase context.CancelFunc
 }
 
 // NewServer creates and configures the HTTP server with all routes.
@@ -406,78 +410,102 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}, nil
 }
 
-// ListenAndServe starts the HTTP server (blocking).
-func (s *Server) ListenAndServe() error {
-	addr := fmt.Sprintf("0.0.0.0:%d", s.Config.Port)
-
-	ln, err := net.Listen("tcp", addr)
+// Start binds the configured port and serves in the background. It returns
+// once the port is bound, or the bind error.
+func (s *Server) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.http == nil {
+		baseCtx, cancel := context.WithCancel(context.Background())
+		s.cancelBase = cancel
+		s.http = &http.Server{
+			Handler:           s.Mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			// Cancelled on Shutdown so streaming (SSE) handlers return.
+			BaseContext: func(net.Listener) context.Context { return baseCtx },
+		}
+	}
+	ln, err := listen(s.Config.Port)
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
 	s.listener = ln
-	s.mu.Unlock()
+	go s.serve(s.http, ln)
+	return nil
+}
 
+func listen(port int) (net.Listener, error) {
+	return net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+}
+
+func (s *Server) serve(srv *http.Server, ln net.Listener) {
+	var err error
 	if s.Config.HTTPS {
-		return http.ServeTLS(ln, s.Mux, s.CertPath, s.KeyPath)
+		err = srv.ServeTLS(ln, s.CertPath, s.KeyPath)
+	} else {
+		err = srv.Serve(ln)
 	}
-	return http.Serve(ln, s.Mux)
+	// Restart closes the old listener on purpose; Shutdown closes the server.
+	if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		log.Printf("server on %s stopped: %v", ln.Addr(), err)
+	}
 }
 
-// ListenAndServeAsync starts the HTTP server in a goroutine and returns
-// once the server is ready to accept connections.
-func (s *Server) ListenAndServeAsync() error {
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- s.ListenAndServe()
-	}()
-
-	// Wait for the server to start (or fail)
-	for i := 0; i < 50; i++ {
-		select {
-		case err := <-errCh:
-			return err
-		default:
-		}
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/__ditto__/api/mocks", s.Config.Port))
-		if err == nil {
-			resp.Body.Close()
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("server failed to start within 5s")
-}
-
-// Stop closes the listener, freeing the port.
-func (s *Server) Stop() error {
+// Restart moves the server to newPort. The new port is bound before the old
+// listener closes, so a failed bind leaves the server on its current port,
+// and connections already open (SSE streams, WebSockets) stay up. Running
+// sequence players are stopped, as they always were on a port change.
+func (s *Server) Restart(newPort int) error {
+	s.stopPlayers()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.Player != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = s.Player.Shutdown(ctx)
-		cancel()
+	if s.http == nil {
+		return fmt.Errorf("server is not running")
 	}
-	if s.listener != nil {
-		err := s.listener.Close()
-		s.listener = nil
+	ln, err := listen(newPort)
+	if err != nil {
 		return err
+	}
+	old := s.listener
+	s.listener = ln
+	s.Config.Port = newPort
+	s.Info.Port = newPort
+	go s.serve(s.http, ln)
+	if old != nil {
+		_ = old.Close()
 	}
 	return nil
 }
 
-// Restart stops the server and starts it on a new port.
-func (s *Server) Restart(newPort int) error {
-	s.Stop()
-	time.Sleep(500 * time.Millisecond)
-	s.Config.Port = newPort
-	s.Info.Port = newPort
-	return s.ListenAndServeAsync()
+// Shutdown stops sequence players, ends streaming handlers and stops the
+// server, waiting for in-flight requests until ctx is done. Hijacked
+// WebSocket connections are not waited for.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopPlayers()
+	s.mu.Lock()
+	srv, cancel := s.http, s.cancelBase
+	s.listener = nil
+	s.mu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	cancel()
+	return srv.Shutdown(ctx)
+}
+
+func (s *Server) stopPlayers() {
+	if s.Player == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = s.Player.Shutdown(ctx)
 }
 
 // Port returns the current port.
 func (s *Server) Port() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.Config.Port
 }
 

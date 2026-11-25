@@ -10,7 +10,7 @@ import (
 // runDesktop is the fallback when Wails is not available (headless builds).
 // It starts the server and opens the dashboard in the default browser.
 func runDesktop(srv *Server, cfg ServerConfig) {
-	if err := srv.ListenAndServeAsync(); err != nil {
+	if err := srv.Start(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 
@@ -23,6 +23,5 @@ func runDesktop(srv *Server, cfg ServerConfig) {
 	dashURL := fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, cfg.Port)
 	openBrowser(dashURL)
 
-	// Block until the server exits
-	select {}
+	waitForSignalAndShutdown(srv)
 }

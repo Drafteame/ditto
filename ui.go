@@ -930,7 +930,8 @@ func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *ProxyManager,
 				})
 				return
 			}
-			// Respond first, then restart async (closing the listener kills in-flight requests)
+			// Respond before restarting; this connection survives the
+			// listener swap, so the client still reads the response.
 			if cfgStore != nil {
 				cfgStore.SetPort(req.Port)
 			}
@@ -941,12 +942,9 @@ func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *ProxyManager,
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			go func() {
-				time.Sleep(200 * time.Millisecond)
-				if err := srv.Restart(req.Port); err != nil {
-					log.Printf("Failed to restart on port %d: %v", req.Port, err)
-				}
-			}()
+			if err := srv.Restart(req.Port); err != nil {
+				log.Printf("Failed to restart on port %d: %v", req.Port, err)
+			}
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

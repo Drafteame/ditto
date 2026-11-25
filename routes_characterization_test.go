@@ -116,7 +116,7 @@ func serveCharacterizationRequest(t *testing.T, method, path, remoteAddr, origin
 		t.Fatal(err)
 	}
 	RegisterPortRoutes(srv.Mux, srv, srv.ProxyMgr, nil)
-	t.Cleanup(func() { _ = srv.Stop() })
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

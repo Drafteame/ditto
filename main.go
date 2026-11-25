@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
+	"syscall"
+	"time"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -109,11 +113,27 @@ func runHeadless(srv *Server, cfg ServerConfig) {
 		printStartup(srv.Store.All(), cfg.Port, cfg.Target, cfg.MocksDir, cfg.HTTPS, srv.CertPath, true)
 	}
 
-	if err := srv.ListenAndServeAsync(); err != nil {
+	if err := srv.Start(); err != nil {
 		log.Fatal(err)
 	}
-	// Block forever — server runs in goroutine, restarts are handled there
-	select {}
+	waitForSignalAndShutdown(srv)
+}
+
+// waitForSignalAndShutdown blocks until SIGINT or SIGTERM, then shuts the
+// server down gracefully.
+func waitForSignalAndShutdown(srv *Server) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+	shutdownServer(srv)
+}
+
+func shutdownServer(srv *Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
 }
 
 func openBrowser(url string) {
