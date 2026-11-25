@@ -48,6 +48,8 @@ cd frontend && npm install && npm run build && cd ..
 go build -o ditto .
 ```
 
+For the desktop app, run `wails build`. The Wails CLI v2.12 needs the Go version in `go.mod`; with newer Go it fails before compiling. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#building-the-desktop-app-locally) shows a workaround, how the code is organised, and the conventions for contributing.
+
 ## WebSocket mocking
 
 Ditto can also stand in for your app's WebSocket backend. The minimum to start mocking events:
