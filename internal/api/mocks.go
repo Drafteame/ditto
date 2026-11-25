@@ -14,7 +14,7 @@ type mocksResponse struct {
 }
 
 type disabledDuplicates struct {
-	DisabledDuplicates []int `json:"disabled_duplicates"`
+	DisabledDuplicates []string `json:"disabled_duplicates"`
 }
 
 // listMocks returns every mock with the server info the dashboard shows.
@@ -52,15 +52,12 @@ func (a *API) reloadMocks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) updateMock(w http.ResponseWriter, r *http.Request) {
-	index, ok := mockIndex(w, r)
-	if !ok {
-		return
-	}
+	id := r.PathValue("id")
 	var mock httpmock.Mock
 	if !readJSON(w, r, &mock, true) {
 		return
 	}
-	disabled, err := a.Mocks.Update(index, mock)
+	disabled, err := a.Mocks.Update(id, mock)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -69,11 +66,8 @@ func (a *API) updateMock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteMock(w http.ResponseWriter, r *http.Request) {
-	index, ok := mockIndex(w, r)
-	if !ok {
-		return
-	}
-	if err := a.Mocks.Delete(index); err != nil {
+	id := r.PathValue("id")
+	if err := a.Mocks.Delete(id); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -82,11 +76,8 @@ func (a *API) deleteMock(w http.ResponseWriter, r *http.Request) {
 
 // toggleMock flips a mock between enabled and disabled.
 func (a *API) toggleMock(w http.ResponseWriter, r *http.Request) {
-	index, ok := mockIndex(w, r)
-	if !ok {
-		return
-	}
-	found, disabled := a.Mocks.Toggle(index)
+	id := r.PathValue("id")
+	found, disabled := a.Mocks.Toggle(id)
 	if !found {
 		writeError(w, httpmock.ErrNotFound)
 		return
@@ -96,24 +87,10 @@ func (a *API) toggleMock(w http.ResponseWriter, r *http.Request) {
 
 // resetMockSequence moves a sequence mock back to its first step.
 func (a *API) resetMockSequence(w http.ResponseWriter, r *http.Request) {
-	index, ok := mockIndex(w, r)
-	if !ok {
-		return
-	}
-	if !a.Mocks.ResetSequence(index) {
+	id := r.PathValue("id")
+	if !a.Mocks.ResetSequence(id) {
 		http.Error(w, "mock not found or not a sequence", http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-}
-
-// mockIndex returns the {index} path value, answering 404 when it is not
-// a number.
-func mockIndex(w http.ResponseWriter, r *http.Request) (int, bool) {
-	index, err := strconv.Atoi(r.PathValue("index"))
-	if err != nil {
-		http.NotFound(w, r)
-		return 0, false
-	}
-	return index, true
 }

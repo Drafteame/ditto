@@ -7,18 +7,19 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
 	"ditto/internal/jsonfile"
 )
 
-// ErrNotFound is returned for a mock index outside the store.
+// ErrNotFound is returned for an unknown mock ID.
 var ErrNotFound = errors.New("mock not found")
 
 // Store holds the mocks loaded from one directory, one JSON file per mock,
-// and keeps each sequence mock's position in memory. Mocks are addressed by
-// their index in All.
+// and keeps each sequence mock's position in memory. A mock's ID is its
+// file name (Source).
 type Store struct {
 	mu    sync.RWMutex
 	mocks []Mock
@@ -74,11 +75,12 @@ func (s *Store) findBestLocked(r *http.Request, reqBody []byte) int {
 
 // Resolved is a snapshot of what to send for one matched request.
 type Resolved struct {
-	Status    int
-	Headers   map[string]string
-	Body      []byte
-	DelayMs   int
-	MockIndex int
+	Status  int
+	Headers map[string]string
+	Body    []byte
+	DelayMs int
+	// MockID is the Source of the mock that matched.
+	MockID string
 	// Sequence-only fields; zero-valued when not a sequence response.
 	IsSequence   bool
 	SequenceStep int // 1-based step that was served; 0 for reset-fallback
@@ -100,11 +102,11 @@ func (s *Store) Resolve(r *http.Request, reqBody []byte) *Resolved {
 
 	if !m.IsSequence() {
 		return &Resolved{
-			Status:    m.Status,
-			Headers:   m.Headers,
-			Body:      m.RawBody,
-			DelayMs:   m.DelayMs,
-			MockIndex: idx,
+			Status:  m.Status,
+			Headers: m.Headers,
+			Body:    m.RawBody,
+			DelayMs: m.DelayMs,
+			MockID:  m.Source,
 		}
 	}
 
@@ -121,7 +123,7 @@ func (s *Store) Resolve(r *http.Request, reqBody []byte) *Resolved {
 			Headers:      m.Headers,
 			Body:         m.RawBody,
 			DelayMs:      m.DelayMs,
-			MockIndex:    idx,
+			MockID:       m.Source,
 			IsSequence:   true,
 			SequenceStep: 0, // fall-back call between cycles
 			SequenceLen:  n,
@@ -173,31 +175,28 @@ func (s *Store) Resolve(r *http.Request, reqBody []byte) *Resolved {
 		Headers:      step.Headers,
 		Body:         body,
 		DelayMs:      step.DelayMs,
-		MockIndex:    idx,
+		MockID:       m.Source,
 		IsSequence:   true,
 		SequenceStep: served,
 		SequenceLen:  n,
 	}
 }
 
-// ResetSequence resets the in-memory counter of the sequence at the given index.
-// Returns false if the index is invalid or the mock is not a sequence.
-func (s *Store) ResetSequence(index int) bool {
+// ResetSequence moves the sequence mock id back to its first step. It
+// returns false when there is no such mock or it is not a sequence.
+func (s *Store) ResetSequence(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if index < 0 || index >= len(s.mocks) {
+	i := s.indexLocked(id)
+	if i < 0 || s.mocks[i].Sequence == nil {
 		return false
 	}
-	m := &s.mocks[index]
-	if m.Sequence == nil {
-		return false
-	}
-	m.Sequence.CurrentStep = 0
+	s.mocks[i].Sequence.CurrentStep = 0
 	return true
 }
 
-// All returns a copy of every mock in index order.
+// All returns a copy of every mock in load order.
 func (s *Store) All() []Mock {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -207,23 +206,19 @@ func (s *Store) All() []Mock {
 	return result
 }
 
-// Toggle flips a mock's enabled state. When enabling, any other mock with
-// identical method + path + match conditions is auto-disabled to prevent
-// ambiguity. Returns the indices of any mocks that were auto-disabled.
-func (s *Store) Toggle(index int) (bool, []int) {
+// Toggle flips mock id's enabled state. Enabling it disables any other
+// mock with the same method, path and match conditions; their IDs are
+// returned. It returns false when there is no such mock.
+func (s *Store) Toggle(id string) (bool, []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if index < 0 || index >= len(s.mocks) {
+	i := s.indexLocked(id)
+	if i < 0 {
 		return false, nil
 	}
-	s.mocks[index].Enabled = !s.mocks[index].Enabled
-
-	var disabled []int
-	if s.mocks[index].Enabled {
-		disabled = s.disableDuplicatesLocked(index)
-	}
-	return true, disabled
+	s.mocks[i].Enabled = !s.mocks[i].Enabled
+	return true, s.disableDuplicatesLocked(i)
 }
 
 // Count returns the number of mocks.
@@ -233,23 +228,21 @@ func (s *Store) Count() int {
 	return len(s.mocks)
 }
 
-// Create validates, enables and saves a new mock, returning the indices of
+// Create validates, enables and saves a new mock, returning the IDs of
 // mocks it disabled because they had the same method, path and conditions.
-func (s *Store) Create(mock Mock) ([]int, error) {
+// Without a Source, the file name is derived from the method and path.
+func (s *Store) Create(mock Mock) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if mock.Method == "" || mock.Path == "" {
-		return nil, fmt.Errorf("method and path are required")
+	if err := validateMock(&mock); err != nil {
+		return nil, err
 	}
-	if mock.Status == 0 {
-		mock.Status = 200
-	}
-	mock.RawBody = []byte(mock.Body)
 	mock.Enabled = true
-
 	if mock.Source == "" {
 		mock.Source = generateFilename(mock.Method, mock.Path, s.mocks)
+	} else if s.indexLocked(mock.Source) >= 0 {
+		return nil, fmt.Errorf("a mock named %q already exists", mock.Source)
 	}
 
 	if err := writeMockFile(s.dir, mock); err != nil {
@@ -257,101 +250,111 @@ func (s *Store) Create(mock Mock) ([]int, error) {
 	}
 
 	s.mocks = append(s.mocks, mock)
-	disabled := s.disableDuplicatesLocked(len(s.mocks) - 1)
-	return disabled, nil
+	return s.disableDuplicatesLocked(len(s.mocks) - 1), nil
 }
 
-// Update replaces the mock at index, keeping its enabled state and sequence
-// position, and returns the indices of duplicates it disabled.
-func (s *Store) Update(index int, mock Mock) ([]int, error) {
+// Update replaces mock id, keeping its enabled state and sequence position,
+// and returns the IDs of duplicates it disabled. A different Source renames
+// the mock's file.
+func (s *Store) Update(id string, mock Mock) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if index < 0 || index >= len(s.mocks) {
+	i := s.indexLocked(id)
+	if i < 0 {
 		return nil, ErrNotFound
 	}
-	if mock.Method == "" || mock.Path == "" {
-		return nil, fmt.Errorf("method and path are required")
+	if err := validateMock(&mock); err != nil {
+		return nil, err
 	}
-	if mock.Status == 0 {
-		mock.Status = 200
-	}
-	mock.RawBody = []byte(mock.Body)
-	mock.Enabled = s.mocks[index].Enabled
+	current := s.mocks[i]
+	mock.Enabled = current.Enabled
 
 	// Preserve in-memory sequence cursor across edits so callers aren't
 	// surprised by a reset mid-flow. If the step count shrank below the
 	// saved cursor, Resolve clamps it on the next call.
-	if mock.Sequence != nil && s.mocks[index].Sequence != nil {
-		mock.Sequence.CurrentStep = s.mocks[index].Sequence.CurrentStep
+	if mock.Sequence != nil && current.Sequence != nil {
+		mock.Sequence.CurrentStep = current.Sequence.CurrentStep
 	}
 
-	oldSource := s.mocks[index].Source
 	if mock.Source == "" {
-		mock.Source = oldSource
+		mock.Source = current.Source
 	}
-
-	if mock.Source != oldSource {
-		os.Remove(filepath.Join(s.dir, oldSource))
+	if mock.Source != current.Source {
+		if s.indexLocked(mock.Source) >= 0 {
+			return nil, fmt.Errorf("a mock named %q already exists", mock.Source)
+		}
+		os.Remove(filepath.Join(s.dir, current.Source))
 	}
 
 	if err := writeMockFile(s.dir, mock); err != nil {
 		return nil, err
 	}
 
-	s.mocks[index] = mock
-
-	var disabled []int
-	if mock.Enabled {
-		disabled = s.disableDuplicatesLocked(index)
-	}
-	return disabled, nil
+	s.mocks[i] = mock
+	return s.disableDuplicatesLocked(i), nil
 }
 
-// Delete removes the mock at index and its file.
-func (s *Store) Delete(index int) error {
+// Delete removes mock id and its file.
+func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if index < 0 || index >= len(s.mocks) {
+	i := s.indexLocked(id)
+	if i < 0 {
 		return ErrNotFound
 	}
 
-	filePath := filepath.Join(s.dir, s.mocks[index].Source)
+	filePath := filepath.Join(s.dir, s.mocks[i].Source)
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting %s: %w", filePath, err)
 	}
 
-	s.mocks = append(s.mocks[:index], s.mocks[index+1:]...)
+	s.mocks = slices.Delete(s.mocks, i, i+1)
 	return nil
 }
 
-// disableDuplicatesLocked auto-disables any other enabled mocks that share
-// method + path + match conditions with the mock at the given index.
-// MUST be called with s.mu held.
-func (s *Store) disableDuplicatesLocked(activeIndex int) []int {
-	active := s.mocks[activeIndex]
+// indexLocked returns the position of mock id, or -1. The caller holds s.mu.
+func (s *Store) indexLocked(id string) int {
+	return slices.IndexFunc(s.mocks, func(m Mock) bool { return m.Source == id })
+}
+
+// validateMock checks the fields a mock needs and fills in defaults. A
+// Source must be a plain .json file name: it names the mock's file inside
+// the store directory.
+func validateMock(mock *Mock) error {
+	if mock.Method == "" || mock.Path == "" {
+		return fmt.Errorf("method and path are required")
+	}
+	if src := mock.Source; src != "" &&
+		(src != filepath.Base(src) || strings.ContainsAny(src, `/\`) || !strings.HasSuffix(src, ".json") || src == ".json") {
+		return fmt.Errorf("source %q must be a .json file name", src)
+	}
+	if mock.Status == 0 {
+		mock.Status = 200
+	}
+	mock.RawBody = []byte(mock.Body)
+	return nil
+}
+
+// disableDuplicatesLocked disables every other enabled mock with the same
+// method, path and match conditions as the enabled mock at i, returning
+// their IDs. The caller holds s.mu.
+func (s *Store) disableDuplicatesLocked(i int) []string {
+	active := s.mocks[i]
 	if !active.Enabled {
 		return nil
 	}
 
-	var disabled []int
-	for i := range s.mocks {
-		if i == activeIndex || !s.mocks[i].Enabled {
+	var disabled []string
+	for j := range s.mocks {
+		other := s.mocks[j]
+		if j == i || !other.Enabled || !strings.EqualFold(other.Method, active.Method) ||
+			other.Path != active.Path || !other.Match.Equals(active.Match) {
 			continue
 		}
-		other := s.mocks[i]
-		if !strings.EqualFold(other.Method, active.Method) {
-			continue
-		}
-		if other.Path != active.Path {
-			continue
-		}
-		if !other.Match.Equals(active.Match) {
-			continue
-		}
-		s.mocks[i].Enabled = false
-		disabled = append(disabled, i)
+		s.mocks[j].Enabled = false
+		disabled = append(disabled, other.Source)
 	}
 	return disabled
 }

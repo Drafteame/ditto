@@ -39,7 +39,7 @@ interface AppShellProps {
   onCloseDrawer: () => void
   onDismissGap: () => void
   onCreateMock: () => void
-  onEditMock: (index: number) => void
+  onEditMock: (id: string) => void
   onMocksChanged: () => void
   onReloadMocks: () => Promise<void>
   onResizeDrawer: (width: number) => void

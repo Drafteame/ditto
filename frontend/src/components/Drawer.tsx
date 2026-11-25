@@ -63,7 +63,7 @@ function MatchBanner({ entry, target }: { entry: LogEntry; target: string }) {
     return <div className="match-banner miss"><Alert /><div className="flex-1 min-w-0"><div className="title">Request or response error</div><div className="detail">{entry.error}</div></div></div>
   }
   if (entry.type === 'MOCK') {
-    return <div className="match-banner"><Check /><div className="flex-1 min-w-0"><div className="title">Served from a mock</div><div className="detail"><code>{entry.method.toUpperCase()} {entry.path}</code> matched mock {entry.mock_index ?? ''}{entry.sequence_len ? ` · sequence step ${entry.sequence_step}/${entry.sequence_len}` : ''}.</div></div></div>
+    return <div className="match-banner"><Check /><div className="flex-1 min-w-0"><div className="title">Served from a mock</div><div className="detail"><code>{entry.method.toUpperCase()} {entry.path}</code> matched mock {entry.mock_id ?? ''}{entry.sequence_len ? ` · sequence step ${entry.sequence_step}/${entry.sequence_len}` : ''}.</div></div></div>
   }
   if (entry.type === 'PROXY') {
     return <div className="match-banner proxy"><Globe /><div className="flex-1 min-w-0"><div className="title">Forwarded to target</div><div className="detail">No mock matched — response came from <code>{target || 'target unavailable for this event'}</code></div></div></div>
@@ -190,7 +190,7 @@ export function Drawer({ entry, width, onResize, onClose, onSaveAsMock }: Drawer
           <div><span>Remote address</span><code>{shown.remote_addr || '—'}</code></div>
           <div><span>Protocol</span><code>{shown.protocol || '—'}</code></div>
           <div><span>Target used</span><code>{shown.target || '—'}</code></div>
-          {shown.type === 'MOCK' && <div><span>Mock</span><code>{shown.mock_index}{shown.sequence_len ? ` · step ${shown.sequence_step}/${shown.sequence_len}` : ''}</code></div>}
+          {shown.type === 'MOCK' && <div><span>Mock</span><code>{shown.mock_id}{shown.sequence_len ? ` · step ${shown.sequence_step}/${shown.sequence_len}` : ''}</code></div>}
           {shown.error && <div className="error"><span>Error</span><code>{shown.error}</code></div>}
           <div className="log-overview-section"><b>Query parameters</b><QueryRows entry={shown} /></div>
         </div>}

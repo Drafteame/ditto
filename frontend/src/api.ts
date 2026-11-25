@@ -63,8 +63,8 @@ export async function fetchMocks(): Promise<MocksResponse> {
   return res.json()
 }
 
-export async function toggleMock(index: number): Promise<{ disabled_duplicates?: string[] }> {
-  const res = await fetch(`${API_BASE}/mocks/${index}/toggle`, { method: 'POST' })
+export async function toggleMock(id: string): Promise<{ disabled_duplicates?: string[] }> {
+  const res = await fetch(`${API_BASE}/mocks/${encodeURIComponent(id)}/toggle`, { method: 'POST' })
   return res.json().catch(() => ({}))
 }
 
@@ -72,16 +72,16 @@ export async function reloadMocks(): Promise<void> {
   await fetch(`${API_BASE}/mocks/reload`, { method: 'POST' })
 }
 
-export async function deleteMock(index: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/mocks/${index}`, { method: 'DELETE' })
+export async function deleteMock(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/mocks/${encodeURIComponent(id)}`, { method: 'DELETE' })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `HTTP ${res.status}`)
   }
 }
 
-export async function resetSequence(index: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/mocks/${index}/sequence/reset`, { method: 'POST' })
+export async function resetSequence(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/mocks/${encodeURIComponent(id)}/sequence/reset`, { method: 'POST' })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(text || `HTTP ${res.status}`)
@@ -89,13 +89,13 @@ export async function resetSequence(index: number): Promise<void> {
 }
 
 export async function saveMock(
-  mock: Omit<Mock, 'enabled'>,
-  editingIndex: number | null
+  mock: Omit<Mock, 'enabled' | 'source'>,
+  editingId: string | null
 ): Promise<{ disabled_duplicates?: string[] }> {
-  const url = editingIndex !== null
-    ? `${API_BASE}/mocks/${editingIndex}`
+  const url = editingId !== null
+    ? `${API_BASE}/mocks/${encodeURIComponent(editingId)}`
     : `${API_BASE}/mocks`
-  const method = editingIndex !== null ? 'PUT' : 'POST'
+  const method = editingId !== null ? 'PUT' : 'POST'
 
   const res = await fetch(url, {
     method,

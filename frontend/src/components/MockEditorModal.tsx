@@ -16,7 +16,7 @@ export interface SequenceStepDraft {
 }
 
 export interface MockEditorState {
-  editingIndex: number | null // null = creating new
+  editingId: string | null // null = creating new
   method: string
   path: string
   status: number
@@ -95,7 +95,7 @@ export function createNewMockState(
     : ''
 
   return {
-    editingIndex: null,
+    editingId: null,
     method: method || 'GET',
     path: cleanPath,
     status: status || 200,
@@ -113,7 +113,7 @@ export function createNewMockState(
   }
 }
 
-export function createEditMockState(index: number, mock: Mock): MockEditorState {
+export function createEditMockState(mock: Mock): MockEditorState {
   let prettyBody = ''
   try {
     prettyBody = JSON.stringify(mock.body, null, 2)
@@ -125,7 +125,7 @@ export function createEditMockState(index: number, mock: Mock): MockEditorState 
   const pills = getMatchPillCount(match)
 
   return {
-    editingIndex: index,
+    editingId: mock.source,
     method: mock.method,
     path: mock.path,
     status: mock.status,
@@ -489,8 +489,8 @@ export function MockEditorModal({
 
     try {
       const result = await api.saveMock(
-        mock as unknown as Omit<Mock, 'enabled'>,
-        initial.editingIndex,
+        mock as unknown as Omit<Mock, 'enabled' | 'source'>,
+        initial.editingId,
       )
       if (result.disabled_duplicates?.length) {
         showToast(
@@ -516,14 +516,14 @@ export function MockEditorModal({
     responseMode,
     sequenceSteps,
     sequenceOnEnd,
-    initial.editingIndex,
+    initial.editingId,
     onClose,
     onSaved,
     showToast,
   ])
 
   const handleDelete = useCallback(async () => {
-    if (initial.editingIndex === null) return
+    if (initial.editingId === null) return
     const ok = await confirm({
       title: 'Delete mock?',
       message: (
@@ -539,14 +539,14 @@ export function MockEditorModal({
     })
     if (!ok) return
     try {
-      await api.deleteMock(initial.editingIndex)
+      await api.deleteMock(initial.editingId)
       onClose()
       onSaved()
       showToast('Mock deleted')
     } catch (err) {
       showToast(`Failed to delete mock: ${(err as Error).message}`, 'warn')
     }
-  }, [initial.editingIndex, method, path, confirm, onClose, onSaved, showToast])
+  }, [initial.editingId, method, path, confirm, onClose, onSaved, showToast])
 
   const handleOverlayMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -556,15 +556,15 @@ export function MockEditorModal({
   )
 
   const handleResetCounter = useCallback(async () => {
-    if (initial.editingIndex === null) return
+    if (initial.editingId === null) return
     try {
-      await api.resetSequence(initial.editingIndex)
+      await api.resetSequence(initial.editingId)
       setSequenceCurrentStep(0)
       showToast('Sequence counter reset')
     } catch (err) {
       showToast(`Failed to reset counter: ${(err as Error).message}`, 'warn')
     }
-  }, [initial.editingIndex, showToast])
+  }, [initial.editingId, showToast])
 
   const addStep = useCallback(() => {
     setSequenceSteps(prev => {
@@ -584,7 +584,7 @@ export function MockEditorModal({
     setEditingStepIndex(prev => (prev === index ? null : prev !== null && prev > index ? prev - 1 : prev))
   }, [])
 
-  const isEditing = initial.editingIndex !== null
+  const isEditing = initial.editingId !== null
   const sequenceExhausted =
     sequenceSteps.length > 0 &&
     (sequenceOnEnd === 'reset' || sequenceOnEnd === 'proxy') &&

@@ -31,7 +31,7 @@ func TestLogEventJSONCharacterization(t *testing.T) {
 func TestRequestLogFormatCharacterization(t *testing.T) {
 	event := Event{
 		ID: "log-1", Timestamp: "2026-01-02T03:04:05Z", Type: "MOCK", Method: "GET",
-		Path: "/api/users?x=1", Status: 200, DurationMs: 12, MockIndex: 3,
+		Path: "/api/users?x=1", Status: 200, DurationMs: 12, MockID: "get_api_users.json",
 		RequestHeaders: map[string][]string{"Accept": {"application/json"}},
 		ResponseBody:   `{"html":"<b>&</b>"}`,
 	}

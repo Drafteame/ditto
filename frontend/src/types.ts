@@ -59,7 +59,7 @@ export interface LogEvent {
   subprotocol?: string
   mode?: string
   target?: string
-  mock_index?: number
+  mock_id?: string
   sequence_step?: number
   sequence_len?: number
 }
@@ -160,6 +160,8 @@ export interface Mock {
   headers?: Record<string, string>
   delay_ms?: number
   enabled: boolean
+  /** File name of the mock; its stable ID in the API. */
+  source: string
   match?: MockMatch
   response_mode?: ResponseMode
   sequence?: Sequence
