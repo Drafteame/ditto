@@ -1,4 +1,7 @@
-package main
+// Package server assembles Ditto: it loads every store and registry from
+// the data directory, wires them into the socket hub, dashboard API and
+// catch-all mock/proxy handler, and runs the HTTP(S) listener.
+package server
 
 import (
 	"context"
@@ -26,8 +29,8 @@ import (
 	"ditto/internal/socket"
 )
 
-// ServerConfig holds all the parameters needed to create and run the HTTP server.
-type ServerConfig struct {
+// Config holds all the parameters needed to create and run the HTTP server.
+type Config struct {
 	Port       int
 	Target     string
 	LiveTarget string
@@ -39,6 +42,8 @@ type ServerConfig struct {
 	UI          fs.FS
 	JSONLogs    bool
 	ConfigStore *appdata.SettingsStore
+	// Version is reported by the dashboard and the update check.
+	Version string
 }
 
 // Server holds the running server state.
@@ -56,7 +61,7 @@ type Server struct {
 	Sequences  *sequence.Store
 	Player     *sequence.Player
 	Info       api.Info
-	Config     ServerConfig
+	Config     Config
 	CertPath   string
 	KeyPath    string
 
@@ -66,8 +71,8 @@ type Server struct {
 	cancelBase context.CancelFunc
 }
 
-// NewServer creates and configures the HTTP server with all routes.
-func NewServer(cfg ServerConfig) (*Server, error) {
+// New creates and configures the HTTP server with all routes.
+func New(cfg Config) (*Server, error) {
 	if cfg.MocksDir == "" {
 		return nil, fmt.Errorf("server config mocks dir is required")
 	}
@@ -158,7 +163,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		HTTPS:      cfg.HTTPS,
 		MocksDir:   cfg.MocksDir,
 		LocalIPs:   ipStrings,
-		Version:    version,
+		Version:    cfg.Version,
 	}
 
 	mux.Handle("/", &proxy.Handler{Mocks: store, Upstream: proxyMgr, Bus: bus, Hub: socketHub})

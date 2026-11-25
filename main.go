@@ -13,6 +13,7 @@ import (
 
 	"ditto/internal/appdata"
 	"ditto/internal/httpmock"
+	"ditto/internal/server"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -79,7 +80,7 @@ func main() {
 		*liveTarget = savedCfg.LiveTarget
 	}
 
-	cfg := ServerConfig{
+	cfg := server.Config{
 		Port:        *port,
 		Target:      *target,
 		LiveTarget:  *liveTarget,
@@ -90,9 +91,10 @@ func main() {
 		UI:          dashboardAssets(),
 		JSONLogs:    *logFormat == "json",
 		ConfigStore: cfgStore,
+		Version:     version,
 	}
 
-	srv, err := NewServer(cfg)
+	srv, err := server.New(cfg)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
 	}
@@ -104,7 +106,7 @@ func main() {
 	}
 }
 
-func runHeadless(srv *Server, cfg ServerConfig) {
+func runHeadless(srv *server.Server, cfg server.Config) {
 	if cfg.JSONLogs {
 		printStartupJSON(srv.Store.Count(), cfg.Port, cfg.Target, cfg.MocksDir, cfg.HTTPS, false)
 	} else {
@@ -119,14 +121,14 @@ func runHeadless(srv *Server, cfg ServerConfig) {
 
 // waitForSignalAndShutdown blocks until SIGINT or SIGTERM, then shuts the
 // server down gracefully.
-func waitForSignalAndShutdown(srv *Server) {
+func waitForSignalAndShutdown(srv *server.Server) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	<-ctx.Done()
 	shutdownServer(srv)
 }
 
-func shutdownServer(srv *Server) {
+func shutdownServer(srv *server.Server) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {

@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -25,7 +25,7 @@ func newHTTPLogTestServer(t *testing.T, target string) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServer(ServerConfig{Port: 0, Target: target, MocksDir: layout.MocksDir, Layout: layout})
+	srv, err := New(Config{Port: 0, Target: target, MocksDir: layout.MocksDir, Layout: layout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,14 +217,14 @@ func TestProxiedGzipReachesLogAsCleanJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	srv, err := NewServer(ServerConfig{
+	srv, err := New(Config{
 		Port:     0,
 		Target:   upstream.URL,
 		MocksDir: filepath.Join(root, "mocks"),
 		Layout:   layout,
 	})
 	if err != nil {
-		t.Fatalf("NewServer: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 
 	events := srv.Bus.Subscribe()
@@ -263,14 +263,14 @@ func TestWebSocketProxyModeRejectsForbiddenOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv, err := NewServer(ServerConfig{
+	srv, err := New(Config{
 		Port:     8888,
 		Target:   target.URL,
 		MocksDir: layout.MocksDir,
 		Layout:   layout,
 	})
 	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:8888/events?__ditto_ws=live", nil)

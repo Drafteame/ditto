@@ -14,12 +14,13 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
 	"ditto/internal/browser"
+	"ditto/internal/server"
 )
 
 //go:embed all:desktop
 var desktopAssets embed.FS
 
-func runDesktop(srv *Server, cfg ServerConfig) {
+func runDesktop(srv *server.Server, cfg server.Config) {
 	scheme := "http"
 	if cfg.HTTPS {
 		scheme = "https"
@@ -65,7 +66,7 @@ func runDesktop(srv *Server, cfg ServerConfig) {
 // DittoApp is the Wails application struct with methods callable from JS.
 type DittoApp struct {
 	ctx    context.Context
-	srv    *Server
+	srv    *server.Server
 	port   int
 	scheme string
 }
