@@ -365,14 +365,14 @@ func (r *Recorder) List() ([]RecordingManifest, error) {
 }
 
 func (r *Recorder) Manifest(id string) (RecordingManifest, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return RecordingManifest{}, fmt.Errorf("invalid recording id")
 	}
 	return readRecordingManifest(filepath.Join(r.dir, id))
 }
 
 func (r *Recorder) Delete(id string) error {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return fmt.Errorf("invalid recording id")
 	}
 	if active := r.ActiveID(); active == id {
@@ -386,7 +386,7 @@ func (r *Recorder) Delete(id string) error {
 }
 
 func (r *Recorder) Frames(id, channel string, offset, limit int) ([]RecordedFrame, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return nil, fmt.Errorf("invalid recording id")
 	}
 	if offset < 0 {
@@ -864,7 +864,7 @@ func readRecordingManifest(dir string) (RecordingManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return RecordingManifest{}, err
 	}
-	if manifest.Version != 1 || !isSafeEventTemplateID(manifest.ID) {
+	if manifest.Version != 1 || !validID(manifest.ID) {
 		return RecordingManifest{}, fmt.Errorf("invalid recording manifest")
 	}
 	if manifest.Channels == nil {
@@ -895,7 +895,7 @@ func writeRecordingManifest(dir string, manifest RecordingManifest) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(filepath.Join(dir, "manifest.json"), data, 0o644)
+	return writeFileAtomic(filepath.Join(dir, "manifest.json"), data, 0o644)
 }
 
 func (r *Recorder) publish(method, path string, status int, body string) {
@@ -913,20 +913,11 @@ func (r *Recorder) publish(method, path string, status int, body string) {
 }
 
 func recordingID(name string, at time.Time) string {
-	base := sanitizePackName(name)
-	if base == "" {
-		base = "recording"
-	}
-	runes := []rune(base)
-	if len(runes) > 48 {
-		base = strings.Trim(string(runes[:48]), "-")
-	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\n%s", name, at.Format(time.RFC3339Nano))))
-	return fmt.Sprintf("%s-%s", base, hex.EncodeToString(sum[:])[:8])
+	return hashedID(name, "recording", fmt.Sprintf("%s\n%s", name, at.Format(time.RFC3339Nano)))
 }
 
 func channelFileName(channel string) string {
-	base := sanitizePackName(channel)
+	base := slug(channel)
 	if base == "" {
 		base = "channel"
 	}
@@ -1017,7 +1008,7 @@ func RegisterRecordingRoutes(mux *http.ServeMux, recorder *Recorder) {
 		}
 		rel := strings.Trim(strings.TrimPrefix(r.URL.Path, "/__ditto__/api/recordings/"), "/")
 		parts := strings.Split(rel, "/")
-		if len(parts) == 0 || !isSafeEventTemplateID(parts[0]) {
+		if len(parts) == 0 || !validID(parts[0]) {
 			http.NotFound(w, r)
 			return
 		}

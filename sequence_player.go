@@ -183,7 +183,7 @@ func NewSequencePlayer(cfg SequencePlayerConfig) *SequencePlayer {
 func (p *SequencePlayer) Play(id string, opts PlayOptions) (PlayerState, error) {
 	// TODO: M7 — support fire-and-forget runs for HTTP triggers so concurrent
 	// trigger hits can launch independent snapshots of the same sequence ID.
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return PlayerState{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	opts = normalizePlayOptions(opts)
@@ -309,7 +309,7 @@ func (p *SequencePlayer) Shutdown(ctx context.Context) error {
 }
 
 func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	p.mu.Lock()
@@ -336,7 +336,7 @@ func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error 
 }
 
 func (p *SequencePlayer) runner(id string) (*sequenceRunner, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return nil, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	p.mu.RLock()

@@ -172,14 +172,14 @@ func TestEventSequenceRejectsTrimmedVariableKeyCollision(t *testing.T) {
 func TestSequenceIDsRejectDotsAndSlashesInPath(t *testing.T) {
 	invalid := []string{".", "..", "../x", "x/y", `x\y`}
 	for _, id := range invalid {
-		if isSafeEventTemplateID(id) {
+		if validID(id) {
 			t.Fatalf("expected id %q to be unsafe", id)
 		}
 		if gotID, _, ok := splitSequencePath(id); ok {
 			t.Fatalf("expected path %q to be rejected, got id %q", id, gotID)
 		}
 	}
-	if isSafeEventTemplateID("my.seq-abc12345") {
+	if validID("my.seq-abc12345") {
 		t.Fatal("interior dots should be rejected by slug-safe ids")
 	}
 }

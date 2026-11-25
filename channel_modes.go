@@ -223,7 +223,7 @@ func writeChannelModeState(path string, channels []ChannelConfig) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(path, data, 0o644)
+	return writeFileAtomic(path, data, 0o644)
 }
 
 func (r *ChannelModeRegistry) publishModeEvent(method string, cfg ChannelConfig) {

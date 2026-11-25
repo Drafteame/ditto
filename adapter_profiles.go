@@ -331,7 +331,7 @@ func SeedDefaultAdapterProfiles(dir string) error {
 		if err != nil {
 			return err
 		}
-		if err := atomicWriteFile(target, data, 0o644); err != nil {
+		if err := writeFileAtomic(target, data, 0o644); err != nil {
 			return err
 		}
 		seeded[entry.Name()] = true
@@ -396,33 +396,7 @@ func writeSeededAdapterProfiles(dir string, seeded map[string]bool) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return atomicWriteFile(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
-}
-
-func atomicWriteFile(path string, data []byte, perm fs.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return writeFileAtomic(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
 }
 
 func readEmbeddedAdapterProfile(path string) ([]byte, error) {

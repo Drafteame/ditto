@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -120,7 +118,7 @@ func (r *EventTemplateRegistry) Load() error {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !isSafeEventTemplateID(id) {
+		if !validID(id) {
 			log.Printf("event template %s skipped: unsafe id", entry.Name())
 			continue
 		}
@@ -140,7 +138,7 @@ func (r *EventTemplateRegistry) Load() error {
 		fileID := tmpl.ID
 		tmpl = normalizeEventTemplate(tmpl)
 		tmpl.ID = fileID
-		if tmpl.ID != id || !isSafeEventTemplateID(tmpl.ID) {
+		if tmpl.ID != id || !validID(tmpl.ID) {
 			log.Printf("event template %s skipped: id mismatch", entry.Name())
 			continue
 		}
@@ -172,7 +170,7 @@ func (r *EventTemplateRegistry) Templates() []EventTemplate {
 }
 
 func (r *EventTemplateRegistry) Get(id string) (EventTemplate, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return EventTemplate{}, fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	r.mu.RLock()
@@ -212,7 +210,7 @@ func (r *EventTemplateRegistry) Create(tmpl EventTemplate) (EventTemplate, error
 }
 
 func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate) (EventTemplate, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return EventTemplate{}, fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	tmpl = normalizeEventTemplate(tmpl)
@@ -240,7 +238,7 @@ func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate) (EventTemp
 }
 
 func (r *EventTemplateRegistry) Delete(id string) error {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	r.mu.Lock()
@@ -308,33 +306,7 @@ func (r *EventTemplateRegistry) nextIDLocked(name string) string {
 }
 
 func (r *EventTemplateRegistry) writeLocked(tmpl EventTemplate, overwrite bool) error {
-	data, err := json.MarshalIndent(tmpl, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := r.pathForIDLocked(tmpl.ID)
-	tmp := path + ".tmp"
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	if !overwrite {
-		if _, err := os.Stat(path); err == nil {
-			return os.ErrExist
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
+	return writeJSONFile(r.pathForIDLocked(tmpl.ID), tmpl, overwrite)
 }
 
 func (r *EventTemplateRegistry) pathForIDLocked(id string) string {
@@ -730,10 +702,10 @@ func describeInvalidCasts(casts []EventTemplateInvalidCast) string {
 
 func splitEventTemplatePath(rest string) (id string, action string, ok bool) {
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) == 1 && isSafeEventTemplateID(parts[0]) {
+	if len(parts) == 1 && validID(parts[0]) {
 		return parts[0], "", true
 	}
-	if len(parts) == 2 && parts[1] == "dispatch" && isSafeEventTemplateID(parts[0]) {
+	if len(parts) == 2 && parts[1] == "dispatch" && validID(parts[0]) {
 		return parts[0], parts[1], true
 	}
 	return "", "", false
@@ -895,30 +867,7 @@ func normalizeEventTemplate(tmpl EventTemplate) EventTemplate {
 }
 
 func eventTemplateID(name string, attempt int) string {
-	base := sanitizePackName(name)
-	if base == "" {
-		base = "event-template"
-	}
-	runes := []rune(base)
-	if len(runes) > 48 {
-		base = strings.Trim(string(runes[:48]), "-")
-	}
-	input := name
-	if attempt > 0 {
-		input = fmt.Sprintf("%s\n%d", name, attempt)
-	}
-	sum := sha256.Sum256([]byte(input))
-	return fmt.Sprintf("%s-%s", base, hex.EncodeToString(sum[:])[:8])
-}
-
-func isSafeEventTemplateID(id string) bool {
-	id = strings.TrimSpace(id)
-	return id != "" &&
-		id != "." &&
-		id != ".." &&
-		!strings.Contains(id, "/") &&
-		!strings.Contains(id, string(os.PathSeparator)) &&
-		id == sanitizePackName(id)
+	return hashedID(name, "event-template", nameAttempt(name, attempt))
 }
 
 func cloneEventTemplate(tmpl EventTemplate) EventTemplate {

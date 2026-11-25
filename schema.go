@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -252,7 +251,7 @@ func (s *SchemaRegistry) Decode(typeName string, data []byte) (json.RawMessage, 
 }
 
 func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (SchemaPack, error) {
-	baseName := sanitizePackName(strings.TrimSuffix(filename, filepath.Ext(filename)))
+	baseName := slug(strings.TrimSuffix(filename, filepath.Ext(filename)))
 	if baseName == "" {
 		baseName = "schema-pack"
 	}
@@ -567,12 +566,12 @@ func schemaPackMetadata(root, fallbackName string) (schemaPackMeta, error) {
 	if name == "" {
 		name = fallbackName
 	}
-	name = sanitizePackName(name)
+	name = slug(name)
 	if name == "" {
 		name = "schema-pack"
 	}
 
-	id := sanitizePackName(manifest.ID)
+	id := slug(manifest.ID)
 	if id == "" {
 		id = fmt.Sprintf("%s-%s", name, contentID[:12])
 	}
@@ -945,23 +944,4 @@ func hasSchemaRootArtifact(root string) (bool, error) {
 		}
 	}
 	return false, nil
-}
-
-func sanitizePackName(name string) string {
-	name = strings.TrimSpace(strings.ToLower(name))
-	var b strings.Builder
-	lastDash := false
-	for _, r := range name {
-		ok := unicode.IsLetter(r) || unicode.IsDigit(r)
-		if ok {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
 }
