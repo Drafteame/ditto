@@ -51,13 +51,10 @@ message ScoreEvent {
 	if err != nil {
 		t.Fatalf("Encode() error = %v", err)
 	}
-	if encoded.ContentType != "application/x-protobuf" || encoded.TypeName != "ditto.test.ScoreEvent" {
-		t.Fatalf("Encode() metadata = %#v", encoded)
-	}
 
 	desc := reg.Descriptor("ditto.test.ScoreEvent")
 	msg := dynamicpb.NewMessage(desc)
-	if err := proto.Unmarshal(encoded.Data, msg); err != nil {
+	if err := proto.Unmarshal(encoded, msg); err != nil {
 		t.Fatalf("encoded payload is not valid protobuf: %v", err)
 	}
 	if got := msg.Get(desc.Fields().ByName("match_id")).String(); got != "abc" {
@@ -67,7 +64,7 @@ message ScoreEvent {
 		t.Fatalf("home_score = %d, want 2", got)
 	}
 
-	decoded, err := reg.Decode("ditto.test.ScoreEvent", encoded.Data)
+	decoded, err := reg.Decode("ditto.test.ScoreEvent", encoded)
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}

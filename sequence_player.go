@@ -691,10 +691,11 @@ func (r *sequenceRunner) prepareRenderedStep(step EventSequenceStep, rendered Re
 		rendered.EncodedPayload = &encoded
 		return rendered, nil
 	}
-	encoded, err := r.player.schemas.Encode(typeName, rendered.Payload)
+	data, err := r.player.schemas.Encode(typeName, rendered.Payload)
 	if err != nil {
 		return rendered, fmt.Errorf("protobuf encode failed: %w", err)
 	}
+	encoded := ProtobufPayload(typeName, data)
 	r.cache[step.ID] = stepCacheEntry{payloadHash: hash, encoded: encoded}
 	rendered.EncodedPayload = &encoded
 	return rendered, nil

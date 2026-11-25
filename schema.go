@@ -27,7 +27,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
-	"nhooyr.io/websocket"
 )
 
 const (
@@ -201,10 +200,12 @@ func (s *SchemaRegistry) Descriptor(typeName string) protoreflect.MessageDescrip
 	return s.types[strings.TrimSpace(typeName)]
 }
 
-func (s *SchemaRegistry) Encode(typeName string, payload json.RawMessage) (EncodedPayload, error) {
+// Encode converts a protojson payload to protobuf wire bytes for typeName.
+// An empty payload encodes the zero message.
+func (s *SchemaRegistry) Encode(typeName string, payload json.RawMessage) ([]byte, error) {
 	typeName = strings.TrimSpace(typeName)
 	if typeName == "" {
-		return EncodedPayload{}, fmt.Errorf("type name is required")
+		return nil, fmt.Errorf("type name is required")
 	}
 
 	s.mu.RLock()
@@ -212,7 +213,7 @@ func (s *SchemaRegistry) Encode(typeName string, payload json.RawMessage) (Encod
 	resolver := s.resolver
 	s.mu.RUnlock()
 	if desc == nil {
-		return EncodedPayload{}, fmt.Errorf("schema type %q is not loaded", typeName)
+		return nil, fmt.Errorf("schema type %q is not loaded", typeName)
 	}
 
 	msg := dynamicpb.NewMessage(desc)
@@ -220,19 +221,9 @@ func (s *SchemaRegistry) Encode(typeName string, payload json.RawMessage) (Encod
 		payload = json.RawMessage(`{}`)
 	}
 	if err := (protojson.UnmarshalOptions{Resolver: resolver}).Unmarshal(payload, msg); err != nil {
-		return EncodedPayload{}, err
+		return nil, err
 	}
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		return EncodedPayload{}, err
-	}
-	return EncodedPayload{
-		Data:        data,
-		Kind:        websocket.MessageBinary,
-		Value:       base64.StdEncoding.EncodeToString(data),
-		ContentType: "application/x-protobuf",
-		TypeName:    typeName,
-	}, nil
+	return proto.Marshal(msg)
 }
 
 func (s *SchemaRegistry) Decode(typeName string, data []byte) (json.RawMessage, error) {

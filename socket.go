@@ -58,6 +58,18 @@ type EncodedPayload struct {
 	TypeName    string
 }
 
+// ProtobufPayload wraps protobuf wire bytes of typeName as a binary socket
+// payload. Value carries the base64 form for adapters that embed it in JSON.
+func ProtobufPayload(typeName string, data []byte) EncodedPayload {
+	return EncodedPayload{
+		Data:        data,
+		Kind:        websocket.MessageBinary,
+		Value:       base64.StdEncoding.EncodeToString(data),
+		ContentType: "application/x-protobuf",
+		TypeName:    typeName,
+	}
+}
+
 type GreetingAdapter interface {
 	GreetsOnConnect() bool
 }
@@ -554,12 +566,13 @@ func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered Rendered
 		}
 		encoded := rendered.EncodedPayload
 		if encoded == nil {
-			next, err := schemas.Encode(typeName, rendered.Payload)
+			data, err := schemas.Encode(typeName, rendered.Payload)
 			if err != nil {
 				wrapped := fmt.Errorf("protobuf encode failed: %w", err)
 				fail(wrapped.Error(), false)
 				return SocketDispatchResult{}, wrapped
 			}
+			next := ProtobufPayload(typeName, data)
 			encoded = &next
 		}
 		return hub.DispatchEncodedWithSourcePayload(channel, *encoded, adapter, rendered.Source, rendered.Payload), nil

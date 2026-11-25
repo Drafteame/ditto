@@ -352,10 +352,11 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := schemas.Encode("ditto.frame.Event", json.RawMessage(`{"message":"hello"}`))
+	data, err := schemas.Encode("ditto.frame.Event", json.RawMessage(`{"message":"hello"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
+	encoded := ProtobufPayload("ditto.frame.Event", data)
 	envelope, err := json.Marshal(map[string]any{"type": "data", "payload": map[string]any{"data": map[string]any{
 		"base64": base64.StdEncoding.EncodeToString(encoded.Data), "content_type": encoded.ContentType, "type_name": encoded.TypeName,
 	}}})

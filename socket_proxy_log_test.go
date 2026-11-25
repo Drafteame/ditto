@@ -308,10 +308,11 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := schemas.Encode("ditto.test.Item", json.RawMessage(`{"name":"without-subscriber"}`))
+	data, err := schemas.Encode("ditto.test.Item", json.RawMessage(`{"name":"without-subscriber"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
+	encoded := ProtobufPayload("ditto.test.Item", data)
 	bus := NewEventBus()
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.schemas = schemas

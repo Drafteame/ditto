@@ -931,3 +931,11 @@ func (a *countingAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
 func (a *countingAdapter) Subprotocols() []string {
 	return nil
 }
+
+func TestProtobufPayloadDescribesBinaryProtobuf(t *testing.T) {
+	got := ProtobufPayload("ditto.test.Item", []byte{0x0a, 0x01, 'x'})
+	if got.Kind != websocket.MessageBinary || got.ContentType != "application/x-protobuf" ||
+		got.TypeName != "ditto.test.Item" || got.Value != "CgF4" {
+		t.Fatalf("ProtobufPayload() = %#v", got)
+	}
+}
