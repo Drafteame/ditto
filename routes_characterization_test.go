@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"ditto/internal/appdata"
+	"ditto/internal/golden"
 )
 
 // TestRouteTableCharacterization pins method, path and origin handling for
@@ -94,7 +97,7 @@ func TestRouteTableCharacterization(t *testing.T) {
 			}
 		}
 	}
-	assertGolden(t, "routes.golden", []byte(out.String()))
+	golden.Assert(t, "routes.golden", []byte(out.String()))
 }
 
 // tempPathPattern matches the per-test data directory that leaks into some
@@ -107,7 +110,7 @@ var tempPathPattern = regexp.MustCompile(`/\S*TestRouteTableCharacterization\S*`
 // after their headers.
 func serveCharacterizationRequest(t *testing.T, method, path, remoteAddr, origin string) (int, string) {
 	t.Helper()
-	layout, err := EnsureDataLayout(t.TempDir())
+	layout, err := appdata.Ensure(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

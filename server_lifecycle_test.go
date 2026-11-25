@@ -9,10 +9,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ditto/internal/appdata"
+	"ditto/internal/eventlog"
 )
 
 func TestServerRestartSwapsListenerAndShutdownEndsStreams(t *testing.T) {
-	layout, err := EnsureDataLayout(t.TempDir())
+	layout, err := appdata.Ensure(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +46,7 @@ func TestServerRestartSwapsListenerAndShutdownEndsStreams(t *testing.T) {
 	assertServing(t, second, true)
 	assertServing(t, first, false)
 
-	srv.Bus.Publish(LogEvent{Type: "MOCK", Method: "GET", Path: "/after-restart"})
+	srv.Bus.Publish(eventlog.Event{Type: "MOCK", Method: "GET", Path: "/after-restart"})
 	if !scanUntil(lines, "/after-restart") {
 		t.Fatal("SSE stream opened before the restart did not receive a later event")
 	}

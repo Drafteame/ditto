@@ -12,6 +12,9 @@ import (
 	"runtime"
 	"syscall"
 	"time"
+
+	"ditto/internal/appdata"
+	"ditto/internal/httpmock"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -48,19 +51,19 @@ func main() {
 	log.SetFlags(0)
 
 	// Load persistent config
-	cfgStore, err := NewConfigStore()
+	cfgStore, err := appdata.NewSettingsStore()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	savedCfg := cfgStore.Get()
 
 	// Resolve mocks directory: explicit flag > persistent storage
-	layout, err := DataDir()
+	layout, err := appdata.Locate()
 	if err != nil {
 		log.Fatalf("Failed to determine data directory: %v", err)
 	}
 	if *mocksDir == "" {
-		defaultDir, err := DefaultMocksDir()
+		defaultDir, err := appdata.DefaultMocksDir()
 		if err != nil {
 			log.Fatalf("Failed to determine data directory: %v", err)
 		}
@@ -147,7 +150,7 @@ func openBrowser(url string) {
 	}
 }
 
-func printStartup(mocks []Mock, port int, target, mocksDir string, https bool, certPath string, ui bool) {
+func printStartup(mocks []httpmock.Mock, port int, target, mocksDir string, https bool, certPath string, ui bool) {
 	scheme := "http"
 	if https {
 		scheme = "https"

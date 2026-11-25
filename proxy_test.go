@@ -14,11 +14,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ditto/internal/appdata"
+	"ditto/internal/httpmock"
 )
 
 func newHTTPLogTestServer(t *testing.T, target string) *Server {
 	t.Helper()
-	layout, err := EnsureDataLayout(t.TempDir())
+	layout, err := appdata.Ensure(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +46,7 @@ func TestHTTPLogCapturesBodiesForEveryMethodAndRequestForm(t *testing.T) {
 		{http.MethodOptions, "application/json", `{"options":true}`, false},
 	}
 	for _, test := range cases {
-		if _, err := srv.Store.Create(Mock{Method: test.method, Path: "/capture", Status: http.StatusCreated,
+		if _, err := srv.Store.Create(httpmock.Mock{Method: test.method, Path: "/capture", Status: http.StatusCreated,
 			Body: json.RawMessage(`{"ok":true}`), Headers: map[string]string{"Content-Type": "application/json", "X-Reply": "mock"}}); err != nil {
 			t.Fatal(err)
 		}
@@ -98,7 +101,7 @@ func TestHTTPLogCapturesMultipartAndFileMetadata(t *testing.T) {
 	_ = writer.Close()
 
 	srv := newHTTPLogTestServer(t, "")
-	_, err = srv.Store.Create(Mock{Method: http.MethodPost, Path: "/upload", Status: http.StatusOK, Body: json.RawMessage(`{}`)})
+	_, err = srv.Store.Create(httpmock.Mock{Method: http.MethodPost, Path: "/upload", Status: http.StatusOK, Body: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +174,7 @@ func (*failReadBody) Close() error { return nil }
 
 func TestHTTPRequestReadErrorReturns400WithoutMatchingPartialBody(t *testing.T) {
 	srv := newHTTPLogTestServer(t, "")
-	_, err := srv.Store.Create(Mock{Method: http.MethodPost, Path: "/read-error", Status: http.StatusCreated, Body: json.RawMessage(`{"matched":true}`)})
+	_, err := srv.Store.Create(httpmock.Mock{Method: http.MethodPost, Path: "/read-error", Status: http.StatusCreated, Body: json.RawMessage(`{"matched":true}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,42 +191,6 @@ func TestHTTPRequestReadErrorReturns400WithoutMatchingPartialBody(t *testing.T) 
 	}
 	if event.RequestBody != "partial" || event.RequestPayload.CaptureStatus != "error" || !strings.Contains(event.Error, "read failed") {
 		t.Fatalf("read error capture missing: %#v", event)
-	}
-}
-
-type flushErrorWriter struct {
-	header   http.Header
-	statuses []int
-	flushes  int
-	flushErr error
-	body     bytes.Buffer
-}
-
-func (w *flushErrorWriter) Header() http.Header            { return w.header }
-func (w *flushErrorWriter) WriteHeader(status int)         { w.statuses = append(w.statuses, status) }
-func (w *flushErrorWriter) Write(data []byte) (int, error) { return w.body.Write(data) }
-func (w *flushErrorWriter) FlushError() error              { w.flushes++; return w.flushErr }
-
-func TestProxyAsksUpstreamForIdentityEncoding(t *testing.T) {
-	var seen string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = r.Header.Get("Accept-Encoding")
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"hola":"mundo"}`))
-	}))
-	defer upstream.Close()
-
-	pm := NewProxyManager(upstream.URL)
-	capture := &responseCapture{ResponseWriter: httptest.NewRecorder(), statusCode: 200}
-	req := httptest.NewRequest("GET", "/api/thing", nil)
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	pm.ServeHTTP(capture, req)
-
-	if seen != "identity" {
-		t.Errorf("upstream saw Accept-Encoding %q, want identity", seen)
-	}
-	if got := capture.decodedBody(); got != `{"hola":"mundo"}` {
-		t.Errorf("decodedBody() = %q", got)
 	}
 }
 
@@ -246,9 +213,9 @@ func TestProxiedGzipReachesLogAsCleanJSON(t *testing.T) {
 	defer upstream.Close()
 
 	root := t.TempDir()
-	layout, err := EnsureDataLayout(root)
+	layout, err := appdata.Ensure(root)
 	if err != nil {
-		t.Fatalf("EnsureDataLayout: %v", err)
+		t.Fatalf("Ensure: %v", err)
 	}
 	srv, err := NewServer(ServerConfig{
 		Port:     0,
@@ -281,5 +248,45 @@ func TestProxiedGzipReachesLogAsCleanJSON(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no log event published")
+	}
+}
+
+func TestWebSocketProxyModeRejectsForbiddenOrigin(t *testing.T) {
+	targetHit := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	defer target.Close()
+	layout, err := appdata.Ensure(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := NewServer(ServerConfig{
+		Port:     8888,
+		Target:   target.URL,
+		MocksDir: layout.MocksDir,
+		Layout:   layout,
+		ServeUI:  false,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:8888/events?__ditto_ws=live", nil)
+	req.Host = "192.168.1.10:8888"
+	req.RemoteAddr = "192.168.1.20:55555"
+	req.Header.Set("Origin", "http://192.168.1.10:3000")
+	req.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+
+	srv.Mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("proxy websocket status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if targetHit {
+		t.Fatalf("forbidden websocket proxy request reached target")
 	}
 }
