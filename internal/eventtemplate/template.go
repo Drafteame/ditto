@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -116,17 +116,17 @@ func (r *Store) Load() error {
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
 		if !jsonfile.ValidID(id) {
-			log.Printf("event template %s skipped: unsafe id", entry.Name())
+			slog.Warn("event template skipped", "file", entry.Name(), "reason", "unsafe id")
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(r.dir, entry.Name()))
 		if err != nil {
-			log.Printf("event template %s skipped: %v", entry.Name(), err)
+			slog.Warn("event template skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 		var tmpl Template
 		if err := json.Unmarshal(data, &tmpl); err != nil {
-			log.Printf("event template %s skipped: %v", entry.Name(), err)
+			slog.Warn("event template skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 		if tmpl.ID == "" {
@@ -136,11 +136,11 @@ func (r *Store) Load() error {
 		tmpl = normalize(tmpl)
 		tmpl.ID = fileID
 		if tmpl.ID != id || !jsonfile.ValidID(tmpl.ID) {
-			log.Printf("event template %s skipped: id mismatch", entry.Name())
+			slog.Warn("event template skipped", "file", entry.Name(), "reason", "id mismatch")
 			continue
 		}
 		if err := validate(tmpl, r.schemas, r.adapters); err != nil {
-			log.Printf("event template %s skipped: %v", entry.Name(), err)
+			slog.Warn("event template skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 		next[tmpl.ID] = clone(tmpl)

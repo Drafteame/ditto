@@ -2,9 +2,10 @@ package appdata
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"sync"
+
+	"ditto/internal/jsonfile"
 )
 
 // Settings holds persistent user settings.
@@ -30,16 +31,12 @@ type SettingsStore struct {
 	filePath string
 }
 
-// NewSettingsStore creates a store that reads/writes to the data directory.
-func NewSettingsStore() (*SettingsStore, error) {
-	layout, err := Locate()
-	if err != nil {
-		return nil, fmt.Errorf("resolving data dir: %w", err)
-	}
-
+// NewSettingsStore loads the settings saved at path (Layout.ConfigPath),
+// falling back to the defaults when the file is missing or unreadable.
+func NewSettingsStore(path string) *SettingsStore {
 	cs := &SettingsStore{
 		config:   DefaultSettings(),
-		filePath: layout.ConfigPath,
+		filePath: path,
 	}
 
 	// Load existing config if present
@@ -54,7 +51,7 @@ func NewSettingsStore() (*SettingsStore, error) {
 		}
 	}
 
-	return cs, nil
+	return cs
 }
 
 // Get returns the current config.
@@ -101,5 +98,5 @@ func (cs *SettingsStore) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cs.filePath, data, 0o644)
+	return jsonfile.WriteAtomic(cs.filePath, data, 0o644)
 }

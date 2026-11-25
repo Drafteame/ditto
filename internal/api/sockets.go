@@ -3,11 +3,19 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
-	"ditto/internal/adapter"
+	"ditto/internal/channelmode"
 	"ditto/internal/socket"
 )
+
+func (a *API) listSocketClients(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"clients": a.Hub.Snapshot()})
+}
+
+func (a *API) listAdapterProfiles(w http.ResponseWriter, r *http.Request) {
+	// A nil registry knows only the built-ins and lists no profiles.
+	writeJSON(w, http.StatusOK, a.Adapters.Summaries())
+}
 
 type socketDispatchRequest struct {
 	Channel  string          `json:"channel"`
@@ -16,107 +24,70 @@ type socketDispatchRequest struct {
 	TypeName string          `json:"type_name,omitempty"`
 }
 
-func registerSocketRoutes(mux *http.ServeMux, hub *socket.Hub, adapters *adapter.Registry) {
-	mux.HandleFunc("/__ditto__/socket", hub.ServeHTTP)
-	mux.HandleFunc("/__ditto__/ws", hub.ServeHTTP)
-	mux.HandleFunc("/__ditto__/api/socket/clients", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !socket.OriginAllowed(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"clients": hub.Snapshot()})
-	})
-	mux.HandleFunc("/__ditto__/api/socket/adapter-profiles", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !socket.OriginAllowed(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(adapters.Summaries())
-	})
-	mux.HandleFunc("/__ditto__/api/socket/dispatch", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !socket.OriginAllowed(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		if !hasJSONContentType(r) {
-			http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
-			return
-		}
-		var req socketDispatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if len(req.Payload) == 0 {
-			req.Payload = json.RawMessage(`{}`)
-		}
-		result, err := hub.Dispatch(socket.Dispatch{
-			Channel:  req.Channel,
-			Adapter:  req.Adapter,
-			TypeName: req.TypeName,
-			Payload:  req.Payload,
-			Source:   "manual",
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
-	})
-}
-
-func registerLiveTargetRoutes(mux *http.ServeMux, manager *socket.LiveTargets) {
-	if manager == nil {
+// dispatchSocketEvent sends a payload composed in the dashboard to a
+// channel's subscribers.
+func (a *API) dispatchSocketEvent(w http.ResponseWriter, r *http.Request) {
+	var req socketDispatchRequest
+	if !readJSON(w, r, &req, true) {
 		return
 	}
-	mux.HandleFunc("/__ditto__/api/socket/live-target", func(w http.ResponseWriter, r *http.Request) {
-		if !socket.OriginAllowed(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"live_target": manager.Target()})
-		case http.MethodPut:
-			if !hasJSONContentType(r) {
-				http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
-				return
-			}
-			var req struct {
-				LiveTarget string `json:"live_target"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			if err := manager.SetTarget(req.LiveTarget); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
+	if len(req.Payload) == 0 {
+		req.Payload = json.RawMessage(`{}`)
+	}
+	result, err := a.Hub.Dispatch(socket.Dispatch{
+		Channel:  req.Channel,
+		Adapter:  req.Adapter,
+		TypeName: req.TypeName,
+		Payload:  req.Payload,
+		Source:   "manual",
 	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
-func hasJSONContentType(r *http.Request) bool {
-	contentType := strings.ToLower(r.Header.Get("Content-Type"))
-	return contentType == "application/json" || strings.HasPrefix(contentType, "application/json;")
+func (a *API) getLiveTarget(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"live_target": a.LiveTargets.Target()})
+}
+
+func (a *API) setLiveTarget(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LiveTarget string `json:"live_target"`
+	}
+	if !readJSON(w, r, &req, true) {
+		return
+	}
+	if err := a.LiveTargets.SetTarget(req.LiveTarget); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (a *API) listChannelModes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"channels": a.Modes.Snapshot()})
+}
+
+// setChannelMode stores a channel's mode and returns the stored config.
+func (a *API) setChannelMode(w http.ResponseWriter, r *http.Request) {
+	var cfg channelmode.Config
+	if !readJSON(w, r, &cfg, true) {
+		return
+	}
+	if err := a.Modes.Set(cfg); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.Modes.Get(cfg.Channel))
+}
+
+// deleteChannelMode returns ?channel= to the default mode.
+func (a *API) deleteChannelMode(w http.ResponseWriter, r *http.Request) {
+	if err := a.Modes.Delete(r.URL.Query().Get("channel")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

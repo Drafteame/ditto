@@ -38,3 +38,24 @@ func TestEnsureDataLayoutCreatesBundleCompatibleDirectories(t *testing.T) {
 		t.Fatalf("ConfigPath = %q, want %q", got, want)
 	}
 }
+
+func TestSeedExampleMockOnlyIntoAnEmptyDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := SeedExampleMock(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "example.json")); err != nil {
+		t.Fatalf("example not seeded into an empty dir: %v", err)
+	}
+
+	// Once the user has mocks of their own, deleting the example is final.
+	if err := os.Rename(filepath.Join(dir, "example.json"), filepath.Join(dir, "mine.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedExampleMock(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "example.json")); !os.IsNotExist(err) {
+		t.Fatalf("example re-seeded next to user mocks: %v", err)
+	}
+}

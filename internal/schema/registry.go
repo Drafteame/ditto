@@ -11,9 +11,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -40,6 +41,9 @@ const (
 	maxProtoFileBytes    = 32 << 20
 	maxManifestBytes     = 1 << 20
 )
+
+// ErrPackNotFound is returned when deleting an unknown schema pack.
+var ErrPackNotFound = errors.New("schema pack not found")
 
 // Registry holds the schema packs found in one directory and the message
 // types they define, indexed by full name. It is safe for concurrent use.
@@ -141,7 +145,7 @@ func (s *Registry) Load() error {
 		}
 		packPath := filepath.Join(s.dir, entry.Name())
 		if _, err := s.registerPackLocked(packPath); err != nil {
-			log.Printf("schema pack %s skipped: %v", entry.Name(), err)
+			slog.Warn("schema pack skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 	}
@@ -197,7 +201,7 @@ func (s *Registry) DeletePack(id string) error {
 	pack, ok := s.packs[id]
 	s.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("schema pack %q not found", id)
+		return fmt.Errorf("%w: %q", ErrPackNotFound, id)
 	}
 	if err := os.RemoveAll(pack.Path); err != nil {
 		return err

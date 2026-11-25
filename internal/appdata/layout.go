@@ -115,20 +115,15 @@ func Locate() (Layout, error) {
 	return Ensure(base)
 }
 
-// DefaultMocksDir returns the persistent mocks directory inside Locate.
-// Creates it with an example mock if it doesn't exist yet.
-func DefaultMocksDir() (string, error) {
-	layout, err := Locate()
-	if err != nil {
-		return "", err
+// SeedExampleMock writes an example mock into dir when dir holds no mock
+// files yet, so a first run has something to show. A user who deletes the
+// example does not get it back.
+func SeedExampleMock(dir string) error {
+	existing, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil || len(existing) > 0 {
+		return err
 	}
-
-	mocksDir := layout.MocksDir
-
-	// Seed with example mock on first run
-	examplePath := filepath.Join(mocksDir, "example.json")
-	if _, err := os.Stat(examplePath); os.IsNotExist(err) {
-		example := `{
+	example := `{
   "method": "GET",
   "path": "/api/v1/users",
   "status": 200,
@@ -143,8 +138,5 @@ func DefaultMocksDir() (string, error) {
   },
   "delay_ms": 0
 }`
-		os.WriteFile(examplePath, []byte(example), 0o644)
-	}
-
-	return mocksDir, nil
+	return os.WriteFile(filepath.Join(dir, "example.json"), []byte(example), 0o644)
 }

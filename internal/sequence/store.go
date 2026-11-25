@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -107,17 +107,17 @@ func (r *Store) Load() error {
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
 		if !jsonfile.ValidID(id) {
-			log.Printf("event sequence %s skipped: unsafe id", entry.Name())
+			slog.Warn("event sequence skipped", "file", entry.Name(), "reason", "unsafe id")
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(r.dir, entry.Name()))
 		if err != nil {
-			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
+			slog.Warn("event sequence skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 		var seq Sequence
 		if err := json.Unmarshal(data, &seq); err != nil {
-			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
+			slog.Warn("event sequence skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 		if seq.ID == "" {
@@ -125,17 +125,17 @@ func (r *Store) Load() error {
 		}
 		fileID := seq.ID
 		if err := validateSequenceVariableKeyCollisions(seq); err != nil {
-			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
+			slog.Warn("event sequence skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 		seq = normalize(seq)
 		seq.ID = fileID
 		if seq.ID != id || !jsonfile.ValidID(seq.ID) {
-			log.Printf("event sequence %s skipped: id mismatch", entry.Name())
+			slog.Warn("event sequence skipped", "file", entry.Name(), "reason", "id mismatch")
 			continue
 		}
 		if err := r.validate(seq); err != nil {
-			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
+			slog.Warn("event sequence skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 		next[seq.ID] = clone(seq)

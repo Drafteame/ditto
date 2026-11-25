@@ -272,9 +272,9 @@ func TestAdapterRegistryLoadRegistersValidFilesAndSkipsInvalidFiles(t *testing.T
 			t.Fatalf("invalid profile %q was registered", name)
 		}
 	}
-	if !strings.Contains(logs.String(), "bad-version.json skipped") ||
-		!strings.Contains(logs.String(), "missing-name.json skipped") ||
-		!strings.Contains(logs.String(), "collision.json skipped") {
+	if !strings.Contains(logs.String(), "file=bad-version.json") ||
+		!strings.Contains(logs.String(), "file=missing-name.json") ||
+		!strings.Contains(logs.String(), "file=collision.json") {
 		t.Fatalf("logs = %q, want warnings for invalid profiles", logs.String())
 	}
 }

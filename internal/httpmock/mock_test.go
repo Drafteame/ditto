@@ -2,7 +2,10 @@ package httpmock
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -118,5 +121,52 @@ func TestResolveSequenceProxyFallsThroughAfterLastStep(t *testing.T) {
 
 	if got := store.mocks[0].Sequence.CurrentStep; got != 1 {
 		t.Fatalf("expected current step to stay exhausted at 1, got %d", got)
+	}
+}
+
+func TestStoreAddressesMocksByFileName(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if _, err := store.Create(Mock{Method: "GET", Path: "/a", Source: "a.json"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(Mock{Method: "GET", Path: "/b", Source: "b.json"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deleting the first mock must not shift the second one's ID.
+	if err := store.Delete("a.json"); err != nil {
+		t.Fatal(err)
+	}
+	if found, _ := store.Toggle("b.json"); !found {
+		t.Fatal("b.json not found after deleting a.json")
+	}
+	if err := store.Delete("a.json"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := store.Update("b.json", Mock{Method: "GET", Path: "/b", Source: "renamed.json"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.json")); !os.IsNotExist(err) {
+		t.Fatalf("rename left the old file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "renamed.json")); err != nil {
+		t.Fatalf("rename did not write the new file: %v", err)
+	}
+}
+
+func TestStoreRejectsUnsafeOrDuplicateSources(t *testing.T) {
+	store := NewStore(t.TempDir())
+	if _, err := store.Create(Mock{Method: "GET", Path: "/a", Source: "a.json"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, src := range []string{"../escape.json", "sub/dir.json", `sub\dir.json`, "notes.txt", ".json", "a.json"} {
+		if _, err := store.Create(Mock{Method: "GET", Path: "/x", Source: src}); err == nil {
+			t.Errorf("Create with source %q succeeded", src)
+		}
+	}
+	if _, err := store.Update("a.json", Mock{Method: "GET", Path: "/a", Source: "../escape.json"}); err == nil {
+		t.Error("Update renaming to ../escape.json succeeded")
 	}
 }

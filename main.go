@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -48,36 +49,36 @@ func main() {
 
 	log.SetOutput(os.Stderr)
 	log.SetFlags(0)
-
-	// Load persistent config
-	cfgStore, err := appdata.NewSettingsStore()
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+	if *logFormat == "json" {
+		// Diagnostics on stderr are JSON too, like the request log on stdout.
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	}
-	savedCfg := cfgStore.Get()
 
-	// Resolve mocks directory: explicit flag > persistent storage
 	layout, err := appdata.Locate()
 	if err != nil {
 		log.Fatalf("Failed to determine data directory: %v", err)
 	}
+	cfgStore := appdata.NewSettingsStore(layout.ConfigPath)
+	saved := cfgStore.Get()
+
 	if *mocksDir == "" {
-		defaultDir, err := appdata.DefaultMocksDir()
-		if err != nil {
-			log.Fatalf("Failed to determine data directory: %v", err)
+		*mocksDir = layout.MocksDir
+		if err := appdata.SeedExampleMock(*mocksDir); err != nil {
+			log.Fatalf("Failed to seed the example mock: %v", err)
 		}
-		*mocksDir = defaultDir
 	}
 
-	// Use saved config values as defaults when flags aren't explicitly set
-	if *port == 8888 && savedCfg.Port != 0 && savedCfg.Port != 8888 {
-		*port = savedCfg.Port
+	// Saved settings fill in only the flags the user did not pass.
+	explicit := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	if !explicit["port"] && saved.Port != 0 {
+		*port = saved.Port
 	}
-	if *target == "" && savedCfg.Target != "" {
-		*target = savedCfg.Target
+	if !explicit["target"] {
+		*target = saved.Target
 	}
-	if *liveTarget == "" && savedCfg.LiveTarget != "" {
-		*liveTarget = savedCfg.LiveTarget
+	if !explicit["live-target"] {
+		*liveTarget = saved.LiveTarget
 	}
 
 	cfg := server.Config{

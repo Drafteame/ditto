@@ -197,11 +197,11 @@ export default function App() {
     setModalState(createNewMockState('GET', '', 200))
   }, [setModalState])
 
-  const handleEditMock = useCallback(async (index: number) => {
+  const handleEditMock = useCallback(async (id: string) => {
     try {
       const data = await api.fetchMocks()
-      const mock = data.mocks[index]
-      if (mock) setModalState(createEditMockState(index, mock))
+      const mock = data.mocks.find(m => m.source === id)
+      if (mock) setModalState(createEditMockState(mock))
     } catch (err) {
       console.error('Failed to load mock for editing:', err)
     }

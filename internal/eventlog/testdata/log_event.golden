@@ -5,8 +5,7 @@
   "method": "",
   "path": "",
   "status": 0,
-  "duration_ms": 0,
-  "mock_index": 0
+  "duration_ms": 0
 }
 {
   "id": "ID",
@@ -105,7 +104,7 @@
   "subprotocol": "Subprotocol",
   "mode": "Mode",
   "target": "Target",
-  "mock_index": 9,
+  "mock_id": "MockID",
   "sequence_step": 12,
   "sequence_len": 11
 }

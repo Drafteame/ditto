@@ -115,7 +115,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		event := requestContext
 		event.Type, event.Method, event.Path = "MOCK", r.Method, requestPath
-		event.Status, event.DurationMs, event.MockIndex = cw.Status(), time.Since(start).Milliseconds(), resolved.MockIndex
+		event.Status, event.DurationMs, event.MockID = cw.Status(), time.Since(start).Milliseconds(), resolved.MockID
 		event.ResponseBody, event.ResponsePayload, event.ResponseHeaders = responseBody, responsePayload, cw.Headers()
 		if cw.WriteErr() != nil {
 			event.Error = cw.WriteErr().Error()

@@ -34,13 +34,13 @@ export const useMockStore = create<MockStore>((set, get) => ({
       event.type !== 'MOCK' ||
       !event.sequence_step ||
       !event.sequence_len ||
-      typeof event.mock_index !== 'number'
+      !event.mock_id
     ) {
       return
     }
 
     set((state) => {
-      const idx = event.mock_index!
+      const idx = state.mocks.findIndex(mock => mock.source === event.mock_id)
       const target = state.mocks[idx]
       if (!target?.sequence) return state
 

@@ -68,7 +68,7 @@ type Event struct {
 	Subprotocol           string              `json:"subprotocol,omitempty"`
 	Mode                  string              `json:"mode,omitempty"`
 	Target                string              `json:"target,omitempty"`
-	MockIndex             int                 `json:"mock_index"`              // index into mocks list; valid when Type == "MOCK"
+	MockID                string              `json:"mock_id,omitempty"`       // Source of the mock that served a MOCK event
 	SequenceStep          int                 `json:"sequence_step,omitempty"` // 1-based; 0 for non-sequence or reset-fallback
 	SequenceLen           int                 `json:"sequence_len,omitempty"`
 }

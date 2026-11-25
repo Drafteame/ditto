@@ -15,7 +15,7 @@ interface SidebarProps {
   onClose: () => void
   onCollapse: () => void
   onMocksChanged: () => void
-  onEditMock: (index: number) => void
+  onEditMock: (id: string) => void
   onCreateMock: () => void
   showToast: (message: string, kind?: 'warn') => void
 }
@@ -482,14 +482,14 @@ function MocksPanel({
 }: {
   mocks: Mock[]
   onMocksChanged: () => void
-  onEditMock: (index: number) => void
+  onEditMock: (id: string) => void
   onCreateMock: () => void
   showToast: (message: string, kind?: 'warn') => void
 }) {
   const handleToggle = useCallback(
-    async (index: number) => {
+    async (id: string) => {
       try {
-        const result = await api.toggleMock(index)
+        const result = await api.toggleMock(id)
         if (result.disabled_duplicates?.length) {
           showToast(`${result.disabled_duplicates.length} duplicate mock(s) auto-disabled`, 'warn')
         }
@@ -504,7 +504,7 @@ function MocksPanel({
   const confirm = useConfirm()
 
   const handleDelete = useCallback(
-    async (index: number, mock: Mock) => {
+    async (id: string, mock: Mock) => {
       const ok = await confirm({
         title: 'Delete mock?',
         message: (
@@ -520,7 +520,7 @@ function MocksPanel({
       })
       if (!ok) return
       try {
-        await api.deleteMock(index)
+        await api.deleteMock(id)
         onMocksChanged()
         showToast('Mock deleted')
       } catch (err) {
@@ -549,11 +549,10 @@ function MocksPanel({
             No mocks yet. Click <span className="text-accent font-semibold">+ New</span> to create one.
           </div>
         ) : (
-          mocks.map((mock, index) => (
+          mocks.map(mock => (
             <MockItem
-              key={index}
+              key={mock.source}
               mock={mock}
-              index={index}
               onToggle={handleToggle}
               onEdit={onEditMock}
               onDelete={handleDelete}
@@ -567,16 +566,14 @@ function MocksPanel({
 
 function MockItem({
   mock,
-  index,
   onToggle,
   onEdit,
   onDelete,
 }: {
   mock: Mock
-  index: number
-  onToggle: (i: number) => void
-  onEdit: (i: number) => void
-  onDelete: (i: number, mock: Mock) => void
+  onToggle: (id: string) => void
+  onEdit: (id: string) => void
+  onDelete: (id: string, mock: Mock) => void
 }) {
   const methodUpper = mock.method.toUpperCase()
   const pills = getMatchPills(mock.match)
@@ -586,13 +583,13 @@ function MockItem({
   const displayStatus = seqWorstStatus ?? mock.status
 
   return (
-    <div className={`mock-row ${mock.enabled ? '' : 'disabled'}`} onClick={() => onEdit(index)}>
+    <div className={`mock-row ${mock.enabled ? '' : 'disabled'}`} onClick={() => onEdit(mock.source)}>
       <button
         type="button"
         className={`switch ${mock.enabled ? 'on' : ''}`}
         onClick={e => {
           e.stopPropagation()
-          onToggle(index)
+          onToggle(mock.source)
         }}
         aria-label={mock.enabled ? 'Disable mock' : 'Enable mock'}
       />
@@ -626,7 +623,7 @@ function MockItem({
           className="icon-btn"
           onClick={e => {
             e.stopPropagation()
-            onEdit(index)
+            onEdit(mock.source)
           }}
           title="Edit mock"
           aria-label="Edit"
@@ -638,7 +635,7 @@ function MockItem({
           className="icon-btn danger"
           onClick={e => {
             e.stopPropagation()
-            onDelete(index, mock)
+            onDelete(mock.source, mock)
           }}
           title="Delete mock"
           aria-label="Delete"
