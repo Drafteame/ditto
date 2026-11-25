@@ -30,7 +30,7 @@ PATCH  /__ditto__/unknown                               local-dev 404 "404 page 
 PATCH  /__ditto__/unknown                               lan-cross 404 "404 page not found"
 GET    /__ditto__/events                                loopback  200
 GET    /__ditto__/events                                local-dev 200
-GET    /__ditto__/events                                lan-cross 200
+GET    /__ditto__/events                                lan-cross 403 "origin not allowed"
 POST   /__ditto__/events                                loopback  404 "404 page not found"
 POST   /__ditto__/events                                local-dev 404 "404 page not found"
 POST   /__ditto__/events                                lan-cross 404 "404 page not found"
