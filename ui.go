@@ -18,6 +18,7 @@ import (
 	"ditto/internal/appdata"
 	"ditto/internal/eventlog"
 	"ditto/internal/httpmock"
+	"ditto/internal/proxy"
 )
 
 //go:embed all:frontend/dist
@@ -37,7 +38,7 @@ type ServerInfo struct {
 
 // RegisterUI sets up the dashboard routes on the given mux.
 // If serveUI is true, the embedded static files are served; otherwise only the API is available.
-func RegisterUI(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, proxyMgr *ProxyManager, liveTarget func() string, info ServerInfo, serveUI bool) {
+func RegisterUI(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, proxyMgr *proxy.Upstream, liveTarget func() string, info ServerInfo, serveUI bool) {
 	// Serve embedded static files at /__ditto__/ (only when UI is enabled)
 	if serveUI {
 		webContent, _ := fs.Sub(webFS, "frontend/dist")
@@ -425,7 +426,7 @@ func writeSSELogEvent(w http.ResponseWriter, flusher http.Flusher, event eventlo
 
 // RegisterPortRoutes adds port management and config persistence endpoints.
 // Called after the server is created so the server reference is available.
-func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *ProxyManager, cfgStore *appdata.SettingsStore) {
+func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *proxy.Upstream, cfgStore *appdata.SettingsStore) {
 	// Port check — probe if a port is available
 	mux.HandleFunc("/__ditto__/api/port/check", func(w http.ResponseWriter, r *http.Request) {
 		portStr := r.URL.Query().Get("port")

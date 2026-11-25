@@ -1,16 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -20,93 +16,16 @@ import (
 
 	"ditto/internal/adapter"
 	"ditto/internal/appdata"
-	"ditto/internal/capture"
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/eventtemplate"
 	"ditto/internal/httpmock"
+	"ditto/internal/proxy"
 	"ditto/internal/recording"
 	"ditto/internal/schema"
 	"ditto/internal/sequence"
 	"ditto/internal/socket"
 )
-
-// ProxyManager allows changing the target URL at runtime.
-type ProxyManager struct {
-	mu     sync.RWMutex
-	proxy  *httputil.ReverseProxy
-	target string
-}
-
-func NewProxyManager(target string) *ProxyManager {
-	pm := &ProxyManager{}
-	if target != "" {
-		pm.SetTarget(target)
-	}
-	return pm
-}
-
-func (pm *ProxyManager) SetTarget(target string) error {
-	targetURL, err := url.Parse(target)
-	if err != nil {
-		return fmt.Errorf("invalid target URL: %w", err)
-	}
-
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = targetURL.Host
-		// Ask upstream for plain bytes. ReverseProxy streams the response
-		// through untouched, so a compressed body would reach the log and
-		// "Save as mock" as binary garbage.
-		req.Header.Set("Accept-Encoding", "identity")
-	}
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		if cw, ok := w.(*capture.Writer); ok {
-			cw.SetProxyError(err.Error())
-		}
-		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
-	}
-
-	pm.mu.Lock()
-	pm.proxy = proxy
-	pm.target = target
-	pm.mu.Unlock()
-	return nil
-}
-
-// Director returns the current reverse proxy's request director and target
-// as one snapshot, or a nil director when no target is configured.
-func (pm *ProxyManager) Director() (func(*http.Request), string) {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	if pm.proxy == nil || pm.target == "" {
-		return nil, ""
-	}
-	return pm.proxy.Director, pm.target
-}
-
-func (pm *ProxyManager) Target() string {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	return pm.target
-}
-
-// ServeHTTPWithTarget snapshots the proxy and target together so the request
-// and its log always agree when a target changes concurrently.
-func (pm *ProxyManager) ServeHTTPWithTarget(w http.ResponseWriter, r *http.Request) (bool, string) {
-	pm.mu.RLock()
-	proxy := pm.proxy
-	target := pm.target
-	pm.mu.RUnlock()
-
-	if proxy == nil {
-		return false, ""
-	}
-	proxy.ServeHTTP(w, r)
-	return true, target
-}
 
 // ServerConfig holds all the parameters needed to create and run the HTTP server.
 type ServerConfig struct {
@@ -127,7 +46,7 @@ type Server struct {
 	Mux        *http.ServeMux
 	Store      *httpmock.Store
 	Bus        *eventlog.Bus
-	ProxyMgr   *ProxyManager
+	ProxyMgr   *proxy.Upstream
 	SocketHub  *socket.Hub
 	Modes      *channelmode.Registry
 	Recorder   *recording.Recorder
@@ -177,7 +96,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	bus := eventlog.NewBus(eventlog.NewPrinter(os.Stdout, cfg.JSONLogs))
-	proxyMgr := NewProxyManager(cfg.Target)
+	proxyMgr := proxy.NewUpstream(cfg.Target)
 	modeRegistry, err := channelmode.NewRegistry(cfg.Layout.ChannelModesDir, bus)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load channel mode registry: %w", err)
@@ -251,146 +170,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub)
 	RegisterSequenceRoutes(mux, eventSequences, sequencePlayer, playerBroadcaster)
 
-	// Main proxy/mock handler
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/__ditto__/") {
-			return
-		}
-		if socket.IsUpgrade(r) {
-			if !socket.OriginAllowed(r) {
-				http.Error(w, "origin not allowed", http.StatusForbidden)
-				return
-			}
-			if socket.WantsProxy(r) {
-				if direct, target := proxyMgr.Director(); direct != nil {
-					socketHub.Tunnel(w, r, target, direct)
-					return
-				}
-			}
-			socketHub.ServeHTTP(w, r)
-			return
-		}
-
-		// Serve favicon at root
-		if r.URL.Path == "/favicon.ico" {
-			http.Redirect(w, r, "/__ditto__/favicon.png", http.StatusFound)
-			return
-		}
-
-		start := time.Now()
-
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		requestHost, remoteAddr, protocol := r.Host, r.RemoteAddr, r.Proto
-		requestURI := r.RequestURI
-		if requestURI == "" {
-			requestURI = r.URL.RequestURI()
-		}
-		requestPath := requestURI
-		requestURL := scheme + "://" + requestHost + requestURI
-		if originalURL, err := url.ParseRequestURI(requestURI); err == nil && originalURL.IsAbs() {
-			requestURL = originalURL.String()
-			requestPath = originalURL.RequestURI()
-		}
-		reqHeaders := r.Header.Clone()
-		var reqBody []byte
-		var reqReadErr error
-		if r.Body != nil {
-			reqBody, reqReadErr = io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewReader(reqBody))
-		}
-		requestBody, requestPayload := capture.Payload(reqBody, int64(len(reqBody)), reqHeaders.Get("Content-Type"), reqHeaders.Get("Content-Encoding"), reqReadErr)
-		if r.Body == nil {
-			requestPayload.CaptureStatus = "not_captured"
-		}
-		formFields, uploadedFiles, formTruncated := capture.Form(reqBody, reqHeaders.Get("Content-Type"), reqReadErr != nil)
-		requestContext := eventlog.Event{URL: requestURL, Host: requestHost, RemoteAddr: remoteAddr, Protocol: protocol,
-			RequestBody: requestBody, RequestPayload: requestPayload, RequestHeaders: reqHeaders,
-			RequestFormFields: formFields, RequestFiles: uploadedFiles, RequestFormsTruncated: formTruncated}
-		if reqReadErr != nil {
-			cw := capture.NewWriter(w)
-			cw.Header().Set("Content-Type", "application/json")
-			cw.WriteHeader(http.StatusBadRequest)
-			_, _ = cw.Write([]byte(`{"error":"failed to read request body"}`))
-			responseBody, responsePayload := cw.Payload()
-			event := requestContext
-			event.Type, event.Method, event.Path, event.Status = "MISS", r.Method, requestPath, http.StatusBadRequest
-			event.DurationMs, event.ResponseBody, event.ResponsePayload = time.Since(start).Milliseconds(), responseBody, responsePayload
-			event.ResponseHeaders, event.Error = cw.Headers(), reqReadErr.Error()
-			bus.Publish(event)
-			return
-		}
-
-		resolved := store.Resolve(r, reqBody)
-		if resolved != nil {
-			if resolved.DelayMs > 0 {
-				time.Sleep(time.Duration(resolved.DelayMs) * time.Millisecond)
-			}
-			cw := capture.NewWriter(w)
-			for k, v := range resolved.Headers {
-				cw.Header().Set(k, v)
-			}
-			if cw.Header().Get("Content-Type") == "" {
-				cw.Header().Set("Content-Type", "application/json")
-			}
-			cw.WriteHeader(resolved.Status)
-			_, _ = cw.Write(resolved.Body)
-			responseBody, responsePayload := cw.Payload()
-
-			event := requestContext
-			event.Type, event.Method, event.Path = "MOCK", r.Method, requestPath
-			event.Status, event.DurationMs, event.MockIndex = cw.Status(), time.Since(start).Milliseconds(), resolved.MockIndex
-			event.ResponseBody, event.ResponsePayload, event.ResponseHeaders = responseBody, responsePayload, cw.Headers()
-			if cw.WriteErr() != nil {
-				event.Error = cw.WriteErr().Error()
-			}
-			if resolved.IsSequence {
-				event.SequenceStep = resolved.SequenceStep
-				event.SequenceLen = resolved.SequenceLen
-			}
-			bus.Publish(event)
-			return
-		}
-
-		cw := capture.NewWriter(w)
-		served, target := proxyMgr.ServeHTTPWithTarget(cw, r)
-		if served {
-			responseBody, responsePayload := cw.Payload()
-
-			event := requestContext
-			event.Type, event.Method, event.Path, event.Status = "PROXY", r.Method, requestPath, cw.Status()
-			event.DurationMs, event.ResponseBody, event.ResponsePayload = time.Since(start).Milliseconds(), responseBody, responsePayload
-			event.ResponseHeaders, event.Target = cw.Headers(), target
-			if cw.ProxyError() != "" {
-				event.Error = cw.ProxyError()
-			}
-			if cw.WriteErr() != nil {
-				event.Error = cw.WriteErr().Error()
-			}
-			bus.Publish(event)
-			return
-		}
-
-		cw = capture.NewWriter(w)
-		cw.Header().Set("Content-Type", "application/json")
-		cw.WriteHeader(http.StatusBadGateway)
-		_, _ = cw.Write([]byte(`{"error": "no mock found and no target configured"}`))
-		responseBody, responsePayload := cw.Payload()
-
-		event := requestContext
-		event.Type, event.Method, event.Path, event.Status = "MISS", r.Method, requestPath, http.StatusBadGateway
-		event.DurationMs, event.ResponseBody, event.ResponsePayload = time.Since(start).Milliseconds(), responseBody, responsePayload
-		event.ResponseHeaders = cw.Headers()
-		if cw.WriteErr() != nil {
-			event.Error = cw.WriteErr().Error()
-		}
-		if reqReadErr != nil {
-			event.Error = "request body: " + reqReadErr.Error()
-		}
-		bus.Publish(event)
-	})
+	mux.Handle("/", &proxy.Handler{Mocks: store, Upstream: proxyMgr, Bus: bus, Hub: socketHub})
 
 	return &Server{
 		Mux:        mux,

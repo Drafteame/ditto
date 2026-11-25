@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"ditto/internal/eventtemplate"
@@ -20,10 +19,6 @@ func writeProto(t *testing.T, dir, name, body string) string {
 		t.Fatal(err)
 	}
 	return dir
-}
-
-func httpToWS(raw string) string {
-	return "ws" + strings.TrimPrefix(raw, "http")
 }
 
 // newTestSequenceRegistry returns an empty sequence store backed by an empty
