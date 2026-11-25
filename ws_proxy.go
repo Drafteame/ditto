@@ -15,6 +15,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 )
 
@@ -256,8 +257,8 @@ func (ch *liveChannel) run() {
 				if dialCapture.responsePayload != nil {
 					event.ResponseBody, event.ResponsePayload = dialCapture.responseBody, dialCapture.responsePayload
 				} else if response.Body != nil {
-					prefix, _ := io.ReadAll(io.LimitReader(response.Body, MaxLogPayloadCaptureBytes))
-					event.ResponseBody, event.ResponsePayload = captureLogPayload(prefix, int64(len(prefix)), response.Header.Get("Content-Type"), response.Header.Get("Content-Encoding"), nil)
+					prefix, _ := io.ReadAll(io.LimitReader(response.Body, capture.MaxBytes))
+					event.ResponseBody, event.ResponsePayload = capture.Payload(prefix, int64(len(prefix)), response.Header.Get("Content-Type"), response.Header.Get("Content-Encoding"), nil)
 				}
 			}
 			ch.bridge.hub.events.Publish(event)
@@ -495,7 +496,7 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 				Source: "websocket-proxy", Error: err.Error(), Target: target, ConnectionID: connectionID, ClientID: connectionID,
 				RequestHeaders: r.Header.Clone(), ResponseHeaders: respHeaders, ResponseBody: body, ResponsePayload: metadata}
 			if responseCaptureTransport.responseError != "" {
-				event.Error += "; response body capture: " + responseCaptureTransport.responseError
+				event.Error += "; response body cw: " + responseCaptureTransport.responseError
 			}
 			h.events.Publish(event)
 		} else {
@@ -509,14 +510,14 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	copyResponseHeaders(w.Header(), response.Header)
-	capture := newResponseCapture(w)
-	clientConn, acceptErr := websocket.Accept(capture, r, &websocket.AcceptOptions{InsecureSkipVerify: true,
+	cw := capture.NewWriter(w)
+	clientConn, acceptErr := websocket.Accept(cw, r, &websocket.AcceptOptions{InsecureSkipVerify: true,
 		CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{conn.Subprotocol()}, OriginPatterns: []string{"*"}})
 	if acceptErr != nil {
 		_ = conn.Close(websocket.StatusInternalError, "client handshake failed")
 		h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL,
-			Status: capture.statusCode, DurationMs: time.Since(started).Milliseconds(), Source: "websocket-proxy", Error: acceptErr.Error(),
-			Target: target, ConnectionID: connectionID, RequestHeaders: r.Header.Clone(), ResponseHeaders: capture.responseHeaders()})
+			Status: cw.Status(), DurationMs: time.Since(started).Milliseconds(), Source: "websocket-proxy", Error: acceptErr.Error(),
+			Target: target, ConnectionID: connectionID, RequestHeaders: r.Header.Clone(), ResponseHeaders: cw.Headers()})
 		return
 	}
 	conn.SetReadLimit(-1)
@@ -524,7 +525,7 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 	h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "CONNECT", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: http.StatusSwitchingProtocols, DurationMs: time.Since(started).Milliseconds(),
 		Source: "websocket-proxy", Target: target, ConnectionID: connectionID, ClientID: connectionID, Adapter: adapter, Mode: "proxy",
-		Subprotocol: conn.Subprotocol(), RequestHeaders: r.Header.Clone(), ResponseHeaders: capture.responseHeaders()})
+		Subprotocol: conn.Subprotocol(), RequestHeaders: r.Header.Clone(), ResponseHeaders: cw.Headers()})
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	errCh := make(chan error, 2)
@@ -569,14 +570,14 @@ func (t *websocketResponseCaptureTransport) RoundTrip(req *http.Request) (*http.
 	defer resp.Body.Close()
 	if t.writer != nil {
 		copyResponseHeaders(t.writer.Header(), resp.Header)
-		capture := newResponseCapture(t.writer)
-		capture.WriteHeader(resp.StatusCode)
-		_, err = io.Copy(capture, resp.Body)
-		t.responseBody, t.responsePayload = capture.responsePayload()
+		cw := capture.NewWriter(t.writer)
+		cw.WriteHeader(resp.StatusCode)
+		_, err = io.Copy(cw, resp.Body)
+		t.responseBody, t.responsePayload = cw.Payload()
 	} else {
-		capture := &boundedLogWriter{}
-		_, err = io.Copy(io.Discard, io.TeeReader(resp.Body, capture))
-		t.responseBody, t.responsePayload = captureLogPayload(capture.buf.Bytes(), capture.total,
+		cw := &boundedLogWriter{}
+		_, err = io.Copy(io.Discard, io.TeeReader(resp.Body, cw))
+		t.responseBody, t.responsePayload = capture.Payload(cw.buf.Bytes(), cw.total,
 			resp.Header.Get("Content-Type"), resp.Header.Get("Content-Encoding"), err)
 	}
 	if err != nil {
@@ -589,7 +590,7 @@ func (t *websocketResponseCaptureTransport) RoundTrip(req *http.Request) (*http.
 func (w *boundedLogWriter) Write(p []byte) (int, error) {
 	w.total += int64(len(p))
 	n := len(p)
-	remaining := MaxLogPayloadCaptureBytes - w.buf.Len()
+	remaining := capture.MaxBytes - w.buf.Len()
 	if remaining > n {
 		remaining = n
 	}
@@ -611,8 +612,8 @@ func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub 
 			errCh <- err
 			return
 		}
-		capture := &boundedLogWriter{}
-		_, copyErr := io.Copy(writer, io.TeeReader(reader, capture))
+		cw := &boundedLogWriter{}
+		_, copyErr := io.Copy(writer, io.TeeReader(reader, cw))
 		closeErr := writer.Close()
 		if copyErr == nil {
 			copyErr = closeErr
@@ -624,7 +625,7 @@ func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub 
 			contentType = "text/plain; charset=utf-8"
 			kind = "text"
 		}
-		body, meta := captureLogPayload(capture.buf.Bytes(), capture.total, contentType, "", copyErr)
+		body, meta := capture.Payload(cw.buf.Bytes(), cw.total, contentType, "", copyErr)
 		if typ == websocket.MessageText {
 			body = truncateSocketPreview(body)
 		}
@@ -646,7 +647,7 @@ func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub 
 		}
 		if typ == websocket.MessageBinary {
 			event.DecodeError = "binary frame has no text envelope; raw bytes are available"
-		} else if decoded, decodeErr := hub.decodeSocketFrame(typ, capture.buf.Bytes(), adapter, ""); decoded != nil {
+		} else if decoded, decodeErr := hub.decodeSocketFrame(typ, cw.buf.Bytes(), adapter, ""); decoded != nil {
 			event.TypeName, event.Alias = decoded.TypeName, decoded.Alias
 			event.DecodedPayload, event.DecodedTruncated = boundedSocketJSON(decoded.PayloadJSON)
 			if decodeErr != "" {
@@ -657,7 +658,7 @@ func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub 
 			var envelope struct {
 				Type string `json:"type"`
 			}
-			if json.Unmarshal(capture.buf.Bytes(), &envelope) == nil && isSocketControlType(envelope.Type) {
+			if json.Unmarshal(cw.buf.Bytes(), &envelope) == nil && isSocketControlType(envelope.Type) {
 				event.ControlType = envelope.Type
 			}
 		}

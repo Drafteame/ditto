@@ -18,6 +18,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 )
 
@@ -117,7 +118,7 @@ func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
 				if e.Direction == "client_to_upstream" && e.FrameKind == "binary" && e.RequestPayload != nil {
 					detail, ok := bus.Detail(e.ID)
 					foundTruncated = ok && detail.RequestPayload != nil && detail.RequestPayload.SizeBytes == int64(len(large)) &&
-						detail.RequestPayload.CapturedBytes == MaxLogPayloadCaptureBytes && detail.RequestPayload.CaptureStatus == "truncated"
+						detail.RequestPayload.CapturedBytes == capture.MaxBytes && detail.RequestPayload.CaptureStatus == "truncated"
 				}
 			}
 		}
@@ -166,7 +167,7 @@ func TestDirectWebSocketProxyReplaysFullUpstreamRejectionBody(t *testing.T) {
 			if !ok {
 				t.Fatal("handshake detail missing")
 			}
-			if detail.ResponsePayload == nil || detail.ResponsePayload.SizeBytes != int64(len(body)) || detail.ResponsePayload.CapturedBytes != MaxLogPayloadCaptureBytes {
+			if detail.ResponsePayload == nil || detail.ResponsePayload.SizeBytes != int64(len(body)) || detail.ResponsePayload.CapturedBytes != capture.MaxBytes {
 				t.Fatalf("rejection capture metadata = %#v", detail.ResponsePayload)
 			}
 			return

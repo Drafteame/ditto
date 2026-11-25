@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ditto/internal/capture"
 )
 
 func newHTTPLogTestServer(t *testing.T, target string) *Server {
@@ -191,19 +193,6 @@ func TestHTTPRequestReadErrorReturns400WithoutMatchingPartialBody(t *testing.T) 
 	}
 }
 
-type flushErrorWriter struct {
-	header   http.Header
-	statuses []int
-	flushes  int
-	flushErr error
-	body     bytes.Buffer
-}
-
-func (w *flushErrorWriter) Header() http.Header            { return w.header }
-func (w *flushErrorWriter) WriteHeader(status int)         { w.statuses = append(w.statuses, status) }
-func (w *flushErrorWriter) Write(data []byte) (int, error) { return w.body.Write(data) }
-func (w *flushErrorWriter) FlushError() error              { w.flushes++; return w.flushErr }
-
 func TestProxyAsksUpstreamForIdentityEncoding(t *testing.T) {
 	var seen string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -214,16 +203,16 @@ func TestProxyAsksUpstreamForIdentityEncoding(t *testing.T) {
 	defer upstream.Close()
 
 	pm := NewProxyManager(upstream.URL)
-	capture := &responseCapture{ResponseWriter: httptest.NewRecorder(), statusCode: 200}
+	cw := capture.NewWriter(httptest.NewRecorder())
 	req := httptest.NewRequest("GET", "/api/thing", nil)
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	pm.ServeHTTP(capture, req)
+	pm.ServeHTTPWithTarget(cw, req)
 
 	if seen != "identity" {
 		t.Errorf("upstream saw Accept-Encoding %q, want identity", seen)
 	}
-	if got := capture.decodedBody(); got != `{"hola":"mundo"}` {
-		t.Errorf("decodedBody() = %q", got)
+	if got, _ := cw.Payload(); got != `{"hola":"mundo"}` {
+		t.Errorf("captured body = %q", got)
 	}
 }
 

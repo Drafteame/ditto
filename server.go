@@ -1,19 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
-	"compress/flate"
-	"compress/gzip"
-	"compress/zlib"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"mime"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -24,8 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
+	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 )
 
@@ -61,8 +54,8 @@ func (pm *ProxyManager) SetTarget(target string) error {
 		req.Header.Set("Accept-Encoding", "identity")
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		if capture, ok := w.(*responseCapture); ok {
-			capture.proxyError = err.Error()
+		if cw, ok := w.(*capture.Writer); ok {
+			cw.SetProxyError(err.Error())
 		}
 		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 	}
@@ -89,11 +82,6 @@ func (pm *ProxyManager) Target() string {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	return pm.target
-}
-
-func (pm *ProxyManager) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
-	served, _ := pm.ServeHTTPWithTarget(w, r)
-	return served
 }
 
 // ServeHTTPWithTarget snapshots the proxy and target together so the request
@@ -300,24 +288,24 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			reqBody, reqReadErr = io.ReadAll(r.Body)
 			r.Body = io.NopCloser(bytes.NewReader(reqBody))
 		}
-		requestBody, requestPayload := captureLogPayload(reqBody, int64(len(reqBody)), reqHeaders.Get("Content-Type"), reqHeaders.Get("Content-Encoding"), reqReadErr)
+		requestBody, requestPayload := capture.Payload(reqBody, int64(len(reqBody)), reqHeaders.Get("Content-Type"), reqHeaders.Get("Content-Encoding"), reqReadErr)
 		if r.Body == nil {
 			requestPayload.CaptureStatus = "not_captured"
 		}
-		formFields, uploadedFiles, formTruncated := parseRequestForm(reqBody, reqHeaders.Get("Content-Type"), reqReadErr != nil)
+		formFields, uploadedFiles, formTruncated := capture.Form(reqBody, reqHeaders.Get("Content-Type"), reqReadErr != nil)
 		requestContext := eventlog.Event{URL: requestURL, Host: requestHost, RemoteAddr: remoteAddr, Protocol: protocol,
 			RequestBody: requestBody, RequestPayload: requestPayload, RequestHeaders: reqHeaders,
 			RequestFormFields: formFields, RequestFiles: uploadedFiles, RequestFormsTruncated: formTruncated}
 		if reqReadErr != nil {
-			capture := newResponseCapture(w)
-			capture.Header().Set("Content-Type", "application/json")
-			capture.WriteHeader(http.StatusBadRequest)
-			_, _ = capture.Write([]byte(`{"error":"failed to read request body"}`))
-			responseBody, responsePayload := capture.responsePayload()
+			cw := capture.NewWriter(w)
+			cw.Header().Set("Content-Type", "application/json")
+			cw.WriteHeader(http.StatusBadRequest)
+			_, _ = cw.Write([]byte(`{"error":"failed to read request body"}`))
+			responseBody, responsePayload := cw.Payload()
 			event := requestContext
 			event.Type, event.Method, event.Path, event.Status = "MISS", r.Method, requestPath, http.StatusBadRequest
 			event.DurationMs, event.ResponseBody, event.ResponsePayload = time.Since(start).Milliseconds(), responseBody, responsePayload
-			event.ResponseHeaders, event.Error = capture.responseHeaders(), reqReadErr.Error()
+			event.ResponseHeaders, event.Error = cw.Headers(), reqReadErr.Error()
 			bus.Publish(event)
 			return
 		}
@@ -327,23 +315,23 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			if resolved.DelayMs > 0 {
 				time.Sleep(time.Duration(resolved.DelayMs) * time.Millisecond)
 			}
-			capture := newResponseCapture(w)
+			cw := capture.NewWriter(w)
 			for k, v := range resolved.Headers {
-				capture.Header().Set(k, v)
+				cw.Header().Set(k, v)
 			}
-			if capture.Header().Get("Content-Type") == "" {
-				capture.Header().Set("Content-Type", "application/json")
+			if cw.Header().Get("Content-Type") == "" {
+				cw.Header().Set("Content-Type", "application/json")
 			}
-			capture.WriteHeader(resolved.Status)
-			_, _ = capture.Write(resolved.Body)
-			responseBody, responsePayload := capture.responsePayload()
+			cw.WriteHeader(resolved.Status)
+			_, _ = cw.Write(resolved.Body)
+			responseBody, responsePayload := cw.Payload()
 
 			event := requestContext
 			event.Type, event.Method, event.Path = "MOCK", r.Method, requestPath
-			event.Status, event.DurationMs, event.MockIndex = capture.statusCode, time.Since(start).Milliseconds(), resolved.MockIndex
-			event.ResponseBody, event.ResponsePayload, event.ResponseHeaders = responseBody, responsePayload, capture.responseHeaders()
-			if capture.writeErr != nil {
-				event.Error = capture.writeErr.Error()
+			event.Status, event.DurationMs, event.MockIndex = cw.Status(), time.Since(start).Milliseconds(), resolved.MockIndex
+			event.ResponseBody, event.ResponsePayload, event.ResponseHeaders = responseBody, responsePayload, cw.Headers()
+			if cw.WriteErr() != nil {
+				event.Error = cw.WriteErr().Error()
 			}
 			if resolved.IsSequence {
 				event.SequenceStep = resolved.SequenceStep
@@ -353,37 +341,37 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return
 		}
 
-		capture := newResponseCapture(w)
-		served, target := proxyMgr.ServeHTTPWithTarget(capture, r)
+		cw := capture.NewWriter(w)
+		served, target := proxyMgr.ServeHTTPWithTarget(cw, r)
 		if served {
-			responseBody, responsePayload := capture.responsePayload()
+			responseBody, responsePayload := cw.Payload()
 
 			event := requestContext
-			event.Type, event.Method, event.Path, event.Status = "PROXY", r.Method, requestPath, capture.statusCode
+			event.Type, event.Method, event.Path, event.Status = "PROXY", r.Method, requestPath, cw.Status()
 			event.DurationMs, event.ResponseBody, event.ResponsePayload = time.Since(start).Milliseconds(), responseBody, responsePayload
-			event.ResponseHeaders, event.Target = capture.responseHeaders(), target
-			if capture.proxyError != "" {
-				event.Error = capture.proxyError
+			event.ResponseHeaders, event.Target = cw.Headers(), target
+			if cw.ProxyError() != "" {
+				event.Error = cw.ProxyError()
 			}
-			if capture.writeErr != nil {
-				event.Error = capture.writeErr.Error()
+			if cw.WriteErr() != nil {
+				event.Error = cw.WriteErr().Error()
 			}
 			bus.Publish(event)
 			return
 		}
 
-		capture = newResponseCapture(w)
-		capture.Header().Set("Content-Type", "application/json")
-		capture.WriteHeader(http.StatusBadGateway)
-		_, _ = capture.Write([]byte(`{"error": "no mock found and no target configured"}`))
-		responseBody, responsePayload := capture.responsePayload()
+		cw = capture.NewWriter(w)
+		cw.Header().Set("Content-Type", "application/json")
+		cw.WriteHeader(http.StatusBadGateway)
+		_, _ = cw.Write([]byte(`{"error": "no mock found and no target configured"}`))
+		responseBody, responsePayload := cw.Payload()
 
 		event := requestContext
 		event.Type, event.Method, event.Path, event.Status = "MISS", r.Method, requestPath, http.StatusBadGateway
 		event.DurationMs, event.ResponseBody, event.ResponsePayload = time.Since(start).Milliseconds(), responseBody, responsePayload
-		event.ResponseHeaders = capture.responseHeaders()
-		if capture.writeErr != nil {
-			event.Error = capture.writeErr.Error()
+		event.ResponseHeaders = cw.Headers()
+		if cw.WriteErr() != nil {
+			event.Error = cw.WriteErr().Error()
 		}
 		if reqReadErr != nil {
 			event.Error = "request body: " + reqReadErr.Error()
@@ -563,350 +551,4 @@ func SuggestPorts(exclude int) []int {
 		}
 	}
 	return available
-}
-
-const MaxLogPayloadCaptureBytes = 1 << 20
-const MaxLogFormFields = 1000
-
-// responseCapture preserves streaming while retaining at most one body prefix.
-type responseCapture struct {
-	http.ResponseWriter
-	statusCode    int
-	headerWritten bool
-	headers       http.Header
-	body          bytes.Buffer
-	totalBytes    int64
-	writeErr      error
-	proxyError    string
-}
-
-func (rc *responseCapture) WriteHeader(code int) {
-	final := code >= http.StatusOK || code == http.StatusSwitchingProtocols
-	if final && rc.headerWritten {
-		return
-	}
-	if final {
-		rc.statusCode = code
-		rc.headerWritten = true
-		rc.headers = rc.ResponseWriter.Header().Clone()
-	}
-	rc.ResponseWriter.WriteHeader(code)
-}
-
-func (rc *responseCapture) Write(b []byte) (int, error) {
-	if !rc.headerWritten {
-		rc.statusCode, rc.headerWritten = http.StatusOK, true
-		rc.headers = rc.ResponseWriter.Header().Clone()
-	}
-	n, err := rc.ResponseWriter.Write(b)
-	if n > 0 {
-		rc.totalBytes += int64(n)
-		remaining := MaxLogPayloadCaptureBytes - rc.body.Len()
-		if remaining > 0 {
-			if n < remaining {
-				remaining = n
-			}
-			_, _ = rc.body.Write(b[:remaining])
-		}
-	}
-	if err != nil {
-		rc.writeErr = err
-	}
-	return n, err
-}
-
-func newResponseCapture(w http.ResponseWriter) *responseCapture {
-	return &responseCapture{ResponseWriter: w, statusCode: http.StatusOK}
-}
-
-// Unwrap lets http.ResponseController reach optional transport capabilities.
-func (rc *responseCapture) Unwrap() http.ResponseWriter { return rc.ResponseWriter }
-
-func (rc *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return http.NewResponseController(rc.ResponseWriter).Hijack()
-}
-
-func (rc *responseCapture) Flush() {
-	_ = rc.FlushError()
-}
-
-func (rc *responseCapture) FlushError() error {
-	if !rc.headerWritten {
-		rc.statusCode, rc.headerWritten = http.StatusOK, true
-		rc.headers = rc.ResponseWriter.Header().Clone()
-	}
-	err := http.NewResponseController(rc.ResponseWriter).Flush()
-	if err != nil {
-		rc.writeErr = err
-	}
-	return err
-}
-
-func (rc *responseCapture) responseHeaders() http.Header {
-	if rc.headers != nil {
-		return rc.headers.Clone()
-	}
-	return rc.ResponseWriter.Header().Clone()
-}
-
-// decodedBody returns the captured body as text suitable for the log stream
-// and for "Save as mock". Upstreams are asked for identity encoding, but some
-// compress anyway, so gzip/deflate are decoded here as a fallback. Anything
-// that still isn't valid UTF-8 is binary and is summarised rather than dumped
-// as replacement characters.
-func (rc *responseCapture) decodedBody() string {
-	body, _, _ := rc.decodedBodyInfo()
-	return body
-}
-
-func (rc *responseCapture) decodedBodyInfo() (string, bool, error) {
-	headers := rc.responseHeaders()
-	wire := rc.body.Bytes()
-	if len(wire) == 0 {
-		return "", false, nil
-	}
-	wireTruncated := rc.totalBytes > int64(len(wire))
-	raw, supported, decodedTruncated, decodeErr := decodePayload(wire, headers.Get("Content-Encoding"))
-	truncated := wireTruncated || decodedTruncated
-	if decodeErr != nil && !truncated {
-		return "", truncated, decodeErr
-	}
-	if !supported {
-		return fmt.Sprintf("<binary response: %d bytes, content-type=%q, content-encoding=%q>",
-			rc.totalBytes, headers.Get("Content-Type"), headers.Get("Content-Encoding")), truncated, nil
-	}
-	if truncated && isTextContentType(headers.Get("Content-Type")) && !utf8.Valid(raw) {
-		if prefix, ok := incompleteUTF8Prefix(raw); ok {
-			raw = prefix
-		}
-	}
-	if !utf8.Valid(raw) || !isTextContentType(headers.Get("Content-Type")) {
-		return fmt.Sprintf("<binary response: %d bytes, content-type=%q, content-encoding=%q>",
-			rc.totalBytes, headers.Get("Content-Type"), headers.Get("Content-Encoding")), truncated, nil
-	}
-	return string(raw), truncated, decodeErr
-}
-
-func decodePayload(raw []byte, encoding string) ([]byte, bool, bool, error) {
-	var reader io.ReadCloser
-	switch strings.ToLower(strings.TrimSpace(encoding)) {
-	case "", "identity":
-		return raw, true, false, nil
-	case "gzip", "x-gzip":
-		zr, err := gzip.NewReader(bytes.NewReader(raw))
-		if err != nil {
-			return nil, true, false, err
-		}
-		reader = zr
-	case "deflate":
-		zr, err := zlib.NewReader(bytes.NewReader(raw))
-		if err == nil {
-			reader = zr
-		} else {
-			reader = flate.NewReader(bytes.NewReader(raw))
-		}
-	default:
-		return raw, false, false, nil
-	}
-	out, readErr := io.ReadAll(io.LimitReader(reader, MaxLogPayloadCaptureBytes+1))
-	closeErr := reader.Close()
-	truncated := len(out) > MaxLogPayloadCaptureBytes
-	if truncated {
-		out = out[:MaxLogPayloadCaptureBytes]
-	}
-	if readErr != nil {
-		return out, true, truncated, readErr
-	}
-	if closeErr != nil {
-		return out, true, truncated, closeErr
-	}
-	return out, true, truncated, nil
-}
-
-func incompleteUTF8Prefix(data []byte) ([]byte, bool) {
-	start := len(data)
-	for start > 0 && len(data)-start < utf8.UTFMax {
-		start--
-		if utf8.Valid(data[:start]) && !utf8.FullRune(data[start:]) {
-			return data[:start], true
-		}
-	}
-	return data, false
-}
-
-func isTextContentType(contentType string) bool {
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return contentType == ""
-	}
-	mediaType = strings.ToLower(mediaType)
-	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" ||
-		strings.HasSuffix(mediaType, "+json") || mediaType == "application/xml" ||
-		strings.HasSuffix(mediaType, "+xml") || mediaType == "application/javascript" ||
-		mediaType == "application/x-www-form-urlencoded" || mediaType == "multipart/form-data"
-}
-
-func (rc *responseCapture) responsePayload() (string, *eventlog.Payload) {
-	captured := rc.body.Bytes()
-	body, decodedTruncated, decodeErr := rc.decodedBodyInfo()
-	headers := rc.responseHeaders()
-	meta := &eventlog.Payload{SizeBytes: rc.totalBytes, CapturedBytes: int64(len(captured)),
-		ContentType: headers.Get("Content-Type"), Encoding: headers.Get("Content-Encoding"),
-		RawBase64: base64.StdEncoding.EncodeToString(captured)}
-	switch {
-	case decodeErr != nil && !decodedTruncated && rc.totalBytes <= int64(len(captured)):
-		meta.CaptureStatus, meta.Error = "error", decodeErr.Error()
-	case rc.writeErr != nil:
-		meta.CaptureStatus, meta.Error = "error", rc.writeErr.Error()
-	case rc.totalBytes == 0:
-		meta.CaptureStatus = "empty"
-	case decodedTruncated || rc.totalBytes > int64(len(captured)):
-		meta.CaptureStatus = "truncated"
-		if decodeErr != nil {
-			meta.Error = decodeErr.Error()
-		}
-	case decodeErr != nil:
-		meta.CaptureStatus, meta.Error = "error", decodeErr.Error()
-	case strings.HasPrefix(body, "<binary response:"):
-		meta.CaptureStatus = "binary"
-	default:
-		meta.CaptureStatus = "captured"
-	}
-	return body, meta
-}
-
-func captureLogPayload(raw []byte, total int64, contentType, encoding string, captureErr error) (string, *eventlog.Payload) {
-	captured := raw
-	truncated := total > int64(len(captured))
-	if len(captured) > MaxLogPayloadCaptureBytes {
-		captured, truncated = captured[:MaxLogPayloadCaptureBytes], true
-	}
-	displayBytes, supported, decodedTruncated, decodeErr := decodePayload(captured, encoding)
-	truncated = truncated || decodedTruncated
-	meta := &eventlog.Payload{SizeBytes: total, CapturedBytes: int64(len(captured)), ContentType: contentType,
-		Encoding: encoding, RawBase64: base64.StdEncoding.EncodeToString(captured)}
-	switch {
-	case captureErr != nil:
-		meta.CaptureStatus, meta.Error = "error", captureErr.Error()
-	case total == 0:
-		meta.CaptureStatus = "empty"
-	case decodeErr != nil && !truncated && captureErr == nil:
-		meta.CaptureStatus, meta.Error = "error", decodeErr.Error()
-	case !supported:
-		meta.CaptureStatus = "binary"
-	case truncated:
-		meta.CaptureStatus = "truncated"
-	case !utf8.Valid(displayBytes) || !isTextContentType(contentType):
-		meta.CaptureStatus = "binary"
-	default:
-		meta.CaptureStatus = "captured"
-	}
-	if decodeErr != nil && meta.Error == "" {
-		meta.Error = decodeErr.Error()
-	}
-	if meta.CaptureStatus == "binary" {
-		return fmt.Sprintf("<binary request: %d bytes, content-type=%q, content-encoding=%q>", total, contentType, encoding), meta
-	}
-	if (truncated || captureErr != nil) && isTextContentType(contentType) && !utf8.Valid(displayBytes) {
-		if prefix, ok := incompleteUTF8Prefix(displayBytes); ok {
-			displayBytes = prefix
-		}
-	}
-	if !utf8.Valid(displayBytes) {
-		return "", meta
-	}
-	return string(displayBytes), meta
-}
-
-func parseRequestForm(body []byte, contentType string, inputIncomplete bool) (map[string][]string, []eventlog.FileMeta, bool) {
-	mediaType, params, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return nil, nil, false
-	}
-	switch mediaType {
-	case "application/x-www-form-urlencoded":
-		captured := body[:min(len(body), MaxLogPayloadCaptureBytes)]
-		truncated := inputIncomplete || len(captured) < len(body)
-		fieldCount := 1
-		for i, b := range captured {
-			if b == '&' {
-				fieldCount++
-				if fieldCount > MaxLogFormFields {
-					captured, truncated = captured[:i], true
-					break
-				}
-			}
-		}
-		values, err := url.ParseQuery(string(captured))
-		if err != nil && !truncated {
-			return nil, nil, false
-		}
-		return map[string][]string(values), nil, truncated
-	case "multipart/form-data":
-		boundary := params["boundary"]
-		if boundary == "" {
-			return nil, nil, false
-		}
-		reader := multipart.NewReader(bytes.NewReader(body), boundary)
-		fields := make(map[string][]string)
-		fieldBytesRemaining := MaxLogPayloadCaptureBytes
-		fieldCount := 0
-		partCount := 0
-		formsTruncated := inputIncomplete
-		var files []eventlog.FileMeta
-		for {
-			part, err := reader.NextPart()
-			if err != nil {
-				if err != io.EOF {
-					formsTruncated = true
-				}
-				break
-			}
-			partCount++
-			if partCount > MaxLogFormFields {
-				formsTruncated = true
-				_ = part.Close()
-				break
-			}
-			if name := part.FileName(); name != "" {
-				size, readErr := io.Copy(io.Discard, part)
-				status := "metadata_only"
-				if readErr != nil {
-					status = "error"
-				}
-				files = append(files, eventlog.FileMeta{Name: name, ContentType: part.Header.Get("Content-Type"),
-					SizeBytes: size, CapturedBytes: 0, CaptureStatus: status})
-				_ = part.Close()
-				continue
-			}
-			if fieldCount >= MaxLogFormFields {
-				formsTruncated = true
-				_ = part.Close()
-				break
-			}
-			if fieldBytesRemaining <= 0 {
-				formsTruncated = true
-				_ = part.Close()
-				continue
-			}
-			partData, readErr := io.ReadAll(io.LimitReader(part, int64(fieldBytesRemaining)+1))
-			_ = part.Close()
-			if len(partData) > fieldBytesRemaining {
-				partData = partData[:fieldBytesRemaining]
-				formsTruncated = true
-			}
-			if readErr != nil {
-				formsTruncated = true
-				continue
-			}
-			fields[part.FormName()] = append(fields[part.FormName()], string(partData))
-			fieldCount++
-			fieldBytesRemaining -= len(partData)
-		}
-		if len(fields) == 0 {
-			fields = nil
-		}
-		return fields, files, formsTruncated
-	}
-	return nil, nil, false
 }

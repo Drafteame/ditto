@@ -18,6 +18,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 )
 
@@ -250,7 +251,7 @@ func socketFramePreview(raw []byte, kind websocket.MessageType) (string, *eventl
 	if kind == websocket.MessageText {
 		contentType = "text/plain; charset=utf-8"
 	}
-	preview, metadata := captureLogPayload(raw, int64(len(raw)), contentType, "", nil)
+	preview, metadata := capture.Payload(raw, int64(len(raw)), contentType, "", nil)
 	return truncateSocketPreview(preview), metadata
 }
 
@@ -587,7 +588,7 @@ func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload
 		event.Errors = 1
 	}
 	if len(payload) > 0 {
-		preview, metadata := captureLogPayload(payload, int64(len(payload)), "application/json", "", nil)
+		preview, metadata := capture.Payload(payload, int64(len(payload)), "application/json", "", nil)
 		event.RequestBody, event.RequestPayload = preview, metadata
 		decoded, decodeErr := h.adapters.DecodeFrame(h.schemas, "text", payload, "raw")
 		if decoded != nil {
@@ -661,13 +662,13 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	requestURL := socketRequestURL(r, requestURI)
 	requestHeaders := r.Header.Clone()
-	capture := newResponseCapture(w)
+	cw := capture.NewWriter(w)
 	logHandshakeFailure := func(err error) {
-		body, metadata := capture.responsePayload()
+		body, metadata := cw.Payload()
 		event := eventlog.Event{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: requestURI, URL: requestURL,
-			Host: r.Host, RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: capture.statusCode,
+			Host: r.Host, RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: cw.Status(),
 			DurationMs: time.Since(start).Milliseconds(), Source: "socket-hub", ConnectionID: connectionID,
-			ClientID: connectionID, RequestHeaders: requestHeaders, ResponseHeaders: capture.responseHeaders(),
+			ClientID: connectionID, RequestHeaders: requestHeaders, ResponseHeaders: cw.Headers(),
 			ResponseBody: body, ResponsePayload: metadata}
 		if err != nil {
 			event.Error = err.Error()
@@ -681,18 +682,18 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	adapter, err := h.adapters.Protocol(adapterName)
 	if err != nil {
-		http.Error(capture, err.Error(), http.StatusBadRequest)
+		http.Error(cw, err.Error(), http.StatusBadRequest)
 		logHandshakeFailure(err)
 		return
 	}
 	if !isAllowedSocketAPIRequest(r) {
 		err := errors.New("origin not allowed")
-		http.Error(capture, err.Error(), http.StatusForbidden)
+		http.Error(cw, err.Error(), http.StatusForbidden)
 		logHandshakeFailure(err)
 		return
 	}
 
-	conn, err := websocket.Accept(capture, r, &websocket.AcceptOptions{
+	conn, err := websocket.Accept(cw, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 		CompressionMode:    websocket.CompressionDisabled,
 		Subprotocols:       adapter.Subprotocols(),
@@ -723,9 +724,9 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.addClient(client)
 	h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "CONNECT", Path: requestURI, URL: requestURL, Host: r.Host,
-		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: capture.statusCode, DurationMs: time.Since(start).Milliseconds(),
+		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: cw.Status(), DurationMs: time.Since(start).Milliseconds(),
 		Source: "socket-hub", ConnectionID: connectionID, ClientID: connectionID, Adapter: adapterName,
-		Subprotocol: conn.Subprotocol(), RequestHeaders: requestHeaders, ResponseHeaders: capture.responseHeaders()})
+		Subprotocol: conn.Subprotocol(), RequestHeaders: requestHeaders, ResponseHeaders: cw.Headers()})
 
 	ctx, cancel := context.WithCancel(r.Context())
 	writeDone := make(chan error, 1)
@@ -889,9 +890,9 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 				contentType = "text/plain; charset=utf-8"
 			}
 		}
-		event.RequestBody, event.RequestPayload = captureLogPayload(hint.RawData, int64(len(hint.RawData)), contentType, "", nil)
+		event.RequestBody, event.RequestPayload = capture.Payload(hint.RawData, int64(len(hint.RawData)), contentType, "", nil)
 	} else if len(hint.Payload) > 0 {
-		event.RequestBody, event.RequestPayload = captureLogPayload(hint.Payload, int64(len(hint.Payload)), "application/json", "", nil)
+		event.RequestBody, event.RequestPayload = capture.Payload(hint.Payload, int64(len(hint.Payload)), "application/json", "", nil)
 	}
 	h.events.Publish(event)
 	return result
@@ -918,8 +919,8 @@ func (h *SocketHub) logClientDelivery(client *SocketClient, msg EncodedServerMes
 }
 
 func boundedSocketJSON(raw []byte) (string, bool) {
-	if len(raw) > MaxLogPayloadCaptureBytes {
-		raw = raw[:MaxLogPayloadCaptureBytes]
+	if len(raw) > capture.MaxBytes {
+		raw = raw[:capture.MaxBytes]
 		for !utf8.Valid(raw) {
 			raw = raw[:len(raw)-1]
 		}
