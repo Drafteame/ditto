@@ -1,4 +1,4 @@
-package main
+package eventtemplate
 
 import (
 	"encoding/json"
@@ -14,11 +14,11 @@ import (
 
 func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewEventTemplateRegistry(dir, nil, nil)
+	reg, err := NewStore(dir, nil, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("NewStore() error = %v", err)
 	}
-	created, err := reg.Create(EventTemplate{
+	created, err := reg.Create(Template{
 		Name:    "Ticket Created",
 		Channel: "tickets",
 		Adapter: "raw",
@@ -31,7 +31,7 @@ func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reloaded, err := NewEventTemplateRegistry(dir, nil, nil)
+	reloaded, err := NewStore(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("reload error = %v", err)
 	}
@@ -42,18 +42,18 @@ func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 }
 
 func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := NewStore(t.TempDir(), nil, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("NewStore() error = %v", err)
 	}
-	first, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: " tickets ", Payload: json.RawMessage(`{"id":1}`)})
+	first, err := reg.Create(Template{Name: "Ticket Created", Channel: " tickets ", Payload: json.RawMessage(`{"id":1}`)})
 	if err != nil {
 		t.Fatalf("Create(first) error = %v", err)
 	}
 	if first.Version != 1 {
 		t.Fatalf("Version = %d, want 1", first.Version)
 	}
-	second, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":2}`)})
+	second, err := reg.Create(Template{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":2}`)})
 	if err != nil {
 		t.Fatalf("Create(second) error = %v", err)
 	}
@@ -64,7 +64,7 @@ func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
 		t.Fatalf("ids = %q %q, want slug-derived ids", first.ID, second.ID)
 	}
 
-	updated, err := reg.Update(first.ID, EventTemplate{Name: "Ticket Updated", Channel: "updates", Payload: json.RawMessage(`{"ok":true}`)})
+	updated, err := reg.Update(first.ID, Template{Name: "Ticket Updated", Channel: "updates", Payload: json.RawMessage(`{"ok":true}`)})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
@@ -81,16 +81,16 @@ func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
 
 func TestEventTemplateRegistryCreateAvoidsOrphanedFileCollision(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewEventTemplateRegistry(dir, nil, nil)
+	reg, err := NewStore(dir, nil, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("NewStore() error = %v", err)
 	}
-	orphanID := eventTemplateID("Ticket Created", 0)
+	orphanID := templateID("Ticket Created", 0)
 	if err := os.WriteFile(filepath.Join(dir, orphanID+".json"), []byte(`{"stale":true}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	created, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":"x"}`)})
+	created, err := reg.Create(Template{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":"x"}`)})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -108,15 +108,15 @@ func TestEventTemplateRegistryCreateAvoidsOrphanedFileCollision(t *testing.T) {
 
 func TestEventTemplateRegistryGetReturnsSnapshot(t *testing.T) {
 	defaultValue := "fallback"
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := NewStore(t.TempDir(), nil, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("NewStore() error = %v", err)
 	}
-	tmpl, err := reg.Create(EventTemplate{
+	tmpl, err := reg.Create(Template{
 		Name:    "Snapshot",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"id":"{{ticketId}}"}`),
-		Variables: []EventTemplateVariable{{
+		Variables: []Variable{{
 			Name:    "ticketId",
 			Default: &defaultValue,
 		}},
@@ -157,7 +157,7 @@ func TestResolveTemplateValuesDefaultsBuiltinsAndMissing(t *testing.T) {
 		"noRecursive": "{{chain}}"
 	}`)
 	emptyDefault := ""
-	resolved, missing, err := resolveTemplate(payload, map[string]string{
+	resolved, missing, _, err := Resolve(payload, map[string]string{
 		"ticketId": "123",
 		"name":     `Ada "quoted"`,
 		"flag":     "true",
@@ -167,7 +167,7 @@ func TestResolveTemplateValuesDefaultsBuiltinsAndMissing(t *testing.T) {
 		"empty": &emptyDefault,
 	})
 	if err != nil {
-		t.Fatalf("resolveTemplate() error = %v", err)
+		t.Fatalf("Resolve() error = %v", err)
 	}
 	if len(missing) != 1 || missing[0] != "missing" {
 		t.Fatalf("missing = %#v, want [missing]", missing)
@@ -208,29 +208,29 @@ func TestResolveTemplateValuesDefaultsBuiltinsAndMissing(t *testing.T) {
 }
 
 func TestResolveTemplateRejectsInvalidJSONAndDeepPayload(t *testing.T) {
-	if _, _, err := ResolveTemplate(json.RawMessage(`{"x":`), nil); err == nil {
-		t.Fatalf("ResolveTemplate(invalid JSON) unexpectedly succeeded")
+	if _, _, _, err := Resolve(json.RawMessage(`{"x":`), nil, nil); err == nil {
+		t.Fatalf("Resolve(invalid JSON) unexpectedly succeeded")
 	}
 
 	value := `"{{x}}"`
 	for i := 0; i < maxTemplateResolveDepth+2; i++ {
 		value = `{"x":` + value + `}`
 	}
-	if _, _, err := ResolveTemplate(json.RawMessage(value), map[string]string{"x": "1"}); err == nil {
-		t.Fatalf("ResolveTemplate(deep payload) unexpectedly succeeded")
+	if _, _, _, err := Resolve(json.RawMessage(value), map[string]string{"x": "1"}, nil); err == nil {
+		t.Fatalf("Resolve(deep payload) unexpectedly succeeded")
 	}
 }
 
 func TestResolveTemplateReportsInvalidCasts(t *testing.T) {
 	payload := json.RawMessage(`{"age":"{{int:age}}","future":"{{date:dob}}"}`)
-	resolved, missing, invalid, err := resolveTemplateDetailed(payload, map[string]string{"age": "abc", "dob": "2026-05-07"}, nil)
+	resolved, missing, invalid, err := Resolve(payload, map[string]string{"age": "abc", "dob": "2026-05-07"}, nil)
 	if err != nil {
-		t.Fatalf("resolveTemplateDetailed() error = %v", err)
+		t.Fatalf("Resolve() error = %v", err)
 	}
 	if len(missing) != 0 {
 		t.Fatalf("missing = %#v, want none", missing)
 	}
-	byName := make(map[string]EventTemplateInvalidCast, len(invalid))
+	byName := make(map[string]InvalidCast, len(invalid))
 	for _, cast := range invalid {
 		byName[cast.Name] = cast
 	}
@@ -249,27 +249,27 @@ func TestValidateTemplateRejectsUnsupportedAndInlineCasts(t *testing.T) {
 		"key":         json.RawMessage(`{"{{int:age}}":"value"}`),
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := validateEventTemplate(EventTemplate{
+			err := validate(Template{
 				Version: 1,
 				Name:    name,
 				Channel: "tickets",
 				Payload: payload,
 			}, nil, nil)
 			if err == nil {
-				t.Fatalf("validateEventTemplate() unexpectedly succeeded")
+				t.Fatalf("validate() unexpectedly succeeded")
 			}
 		})
 	}
 }
 
 func TestDescribeInvalidCastsDeduplicatesAndSorts(t *testing.T) {
-	got := describeInvalidCasts([]EventTemplateInvalidCast{
+	got := DescribeInvalidCasts([]InvalidCast{
 		{Name: "age", Kind: "int"},
 		{Name: "dob", Kind: "date"},
 		{Name: "age", Kind: "int"},
 	})
 	if got != "date:dob, int:age" {
-		t.Fatalf("describeInvalidCasts() = %q", got)
+		t.Fatalf("DescribeInvalidCasts() = %q", got)
 	}
 }
 
@@ -280,11 +280,11 @@ func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T)
 	if err != nil {
 		t.Fatalf("schema.NewRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
+	reg, err := NewStore(t.TempDir(), schemas, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("NewStore() error = %v", err)
 	}
-	tmpl, err := reg.Create(EventTemplate{
+	tmpl, err := reg.Create(Template{
 		Name:     "Ticket",
 		Channel:  "tickets",
 		TypeName: "ditto.events.Ticket",
@@ -311,11 +311,11 @@ func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T)
 }
 
 func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := NewStore(t.TempDir(), nil, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("NewStore() error = %v", err)
 	}
-	tmpl, err := reg.Create(EventTemplate{Name: "Race", Channel: "tickets", Payload: json.RawMessage(`{"v":0}`)})
+	tmpl, err := reg.Create(Template{Name: "Race", Channel: "tickets", Payload: json.RawMessage(`{"v":0}`)})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -326,7 +326,7 @@ func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := reg.Update(tmpl.ID, EventTemplate{
+			_, err := reg.Update(tmpl.ID, Template{
 				Name:    "Race",
 				Channel: "tickets",
 				Payload: json.RawMessage(`{"v":` + strconv.Itoa(i) + `}`),
@@ -351,4 +351,16 @@ func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
 	if parsed.V < 1 || parsed.V > 32 {
 		t.Fatalf("payload = %s, want one of the concurrent updates", got.Payload)
 	}
+}
+
+// writeProto writes a .proto file into dir, creating it, and returns dir.
+func writeProto(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

@@ -22,6 +22,7 @@ import (
 	"ditto/internal/capture"
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
+	"ditto/internal/eventtemplate"
 	"ditto/internal/httpmock"
 	"ditto/internal/recording"
 	"ditto/internal/schema"
@@ -129,7 +130,7 @@ type Server struct {
 	Recorder   *recording.Recorder
 	LiveTarget *LiveTargetManager
 	Schemas    *schema.Registry
-	Templates  *EventTemplateRegistry
+	Templates  *eventtemplate.Store
 	Sequences  *EventSequenceRegistry
 	Player     *SequencePlayer
 	Info       ServerInfo
@@ -188,7 +189,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err := adapters.Load(cfg.Layout.AdapterProfilesDir); err != nil {
 		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
 	}
-	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir, schemaRegistry, adapters)
+	eventTemplates, err := eventtemplate.NewStore(cfg.Layout.EventTemplatesDir, schemaRegistry, adapters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event template registry: %w", err)
 	}

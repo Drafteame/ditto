@@ -16,12 +16,13 @@ import (
 	"nhooyr.io/websocket"
 
 	"ditto/internal/eventlog"
+	"ditto/internal/eventtemplate"
 	"ditto/internal/schema"
 )
 
 func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +79,7 @@ func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 
 func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +120,7 @@ func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 
 func TestSequencePlayerTerminalControlsReturnErrors(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestSequenceRunnerCachesEncodedPayloadByStepAndPayload(t *testing.T) {
 
 func TestSequencePlayerRejectsZeroStepSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +227,7 @@ func TestSequencePlayerRejectsZeroStepSnapshot(t *testing.T) {
 
 func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +282,7 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 
 func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +337,7 @@ func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 
 func TestSequencePlayerSpeedZeroDuringWaitDispatchesImmediately(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +373,7 @@ func TestSequencePlayerSpeedZeroDuringWaitDispatchesImmediately(t *testing.T) {
 
 func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +419,7 @@ func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 
 func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +462,7 @@ func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
 
 func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +502,7 @@ func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
 
 func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +539,7 @@ func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 
 func TestSequencePlayerEmitsWaitingEventBeforeStep(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,11 +581,11 @@ func TestSequencePlayerEmitsWaitingEventBeforeStep(t *testing.T) {
 
 func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpl, err := templates.Create(EventTemplate{
+	tmpl, err := templates.Create(eventtemplate.Template{
 		Name:    "Gone",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"ok":true}`),
@@ -625,7 +626,7 @@ func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 
 func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,7 +693,7 @@ func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T)
 
 func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -738,7 +739,7 @@ func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
 func TestSequencePlayerShutdownPublishesStoppedAndReleasesRunner(t *testing.T) {
 	before := runtime.NumGoroutine()
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +776,7 @@ func TestSequencePlayerShutdownPublishesStoppedAndReleasesRunner(t *testing.T) {
 
 func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

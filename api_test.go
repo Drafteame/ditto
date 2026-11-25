@@ -15,6 +15,7 @@ import (
 	"ditto/internal/adapter"
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
+	"ditto/internal/eventtemplate"
 	"ditto/internal/schema"
 )
 
@@ -105,9 +106,9 @@ func TestChannelModeRouteDelete(t *testing.T) {
 }
 
 func TestEventTemplateRoutesRejectInvalidPayloadAndPathTraversal(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := eventtemplate.NewStore(t.TempDir(), nil, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("eventtemplate.NewStore() error = %v", err)
 	}
 	mux := http.NewServeMux()
 	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)}))
@@ -162,9 +163,9 @@ func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema.NewRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
+	reg, err := eventtemplate.NewStore(t.TempDir(), schemas, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("eventtemplate.NewStore() error = %v", err)
 	}
 	mux := http.NewServeMux()
 	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: schemas}))
@@ -195,11 +196,11 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema.NewRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
+	reg, err := eventtemplate.NewStore(t.TempDir(), schemas, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("eventtemplate.NewStore() error = %v", err)
 	}
-	tmpl, err := reg.Create(EventTemplate{
+	tmpl, err := reg.Create(eventtemplate.Template{
 		Name:     "Ticket",
 		Channel:  " tickets ",
 		TypeName: "ditto.events.Ticket",
@@ -231,22 +232,22 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 }
 
 func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := eventtemplate.NewStore(t.TempDir(), nil, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("eventtemplate.NewStore() error = %v", err)
 	}
-	missing, err := reg.Create(EventTemplate{
+	missing, err := reg.Create(eventtemplate.Template{
 		Name:    "Missing",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"id":"{{ticketId}}"}`),
-		Variables: []EventTemplateVariable{
+		Variables: []eventtemplate.Variable{
 			{Name: "ticketId"},
 		},
 	})
 	if err != nil {
 		t.Fatalf("Create(missing) error = %v", err)
 	}
-	builtins, err := reg.Create(EventTemplate{
+	builtins, err := reg.Create(eventtemplate.Template{
 		Name:    "Builtins",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"now":"{{now}}","uuid":"{{uuid}}"}`),
@@ -276,11 +277,11 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 }
 
 func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := eventtemplate.NewStore(t.TempDir(), nil, nil)
 	if err != nil {
-		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
+		t.Fatalf("eventtemplate.NewStore() error = %v", err)
 	}
-	tmpl, err := reg.Create(EventTemplate{
+	tmpl, err := reg.Create(eventtemplate.Template{
 		Name:    "Typed",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"age":"{{int:age}}","obj":"{{json:obj}}","maybe":"{{json:maybe}}"}`),
@@ -382,7 +383,7 @@ func TestSSEStartsImmediatelyAndReplaysSummariesAfterReset(t *testing.T) {
 
 func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +422,7 @@ func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 
 func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

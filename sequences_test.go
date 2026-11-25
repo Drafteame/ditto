@@ -6,12 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"ditto/internal/eventtemplate"
 	"ditto/internal/jsonfile"
 )
 
 func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 
 func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +187,7 @@ func TestSequenceIDsRejectDotsAndSlashesInPath(t *testing.T) {
 func newTestSequenceRegistry(t *testing.T) *EventSequenceRegistry {
 	t.Helper()
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
+	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

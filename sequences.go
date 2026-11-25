@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"ditto/internal/adapter"
+	"ditto/internal/eventtemplate"
 	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
 )
@@ -56,7 +57,7 @@ type EventSequenceRegistry struct {
 	mu        sync.RWMutex
 	dir       string
 	sequences map[string]EventSequence
-	templates *EventTemplateRegistry
+	templates *eventtemplate.Store
 	schemas   *schema.Registry
 	adapters  *adapter.Registry
 }
@@ -82,7 +83,7 @@ type sequenceSpeedRequest struct {
 // NewEventSequenceRegistry loads the sequences in dir. Sequences that reference
 // unknown templates, adapters or schema types are skipped, so those
 // registries must be loaded first.
-func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *schema.Registry, adapters *adapter.Registry) (*EventSequenceRegistry, error) {
+func NewEventSequenceRegistry(dir string, templates *eventtemplate.Store, schemas *schema.Registry, adapters *adapter.Registry) (*EventSequenceRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -275,7 +276,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 		vars[key] = value
 	}
 
-	var rendered RenderedTemplate
+	var rendered eventtemplate.Rendered
 	if step.TemplateRef != "" {
 		tmpl, err := r.templates.Get(step.TemplateRef)
 		if err != nil {
@@ -296,7 +297,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 		}
 		if len(step.Payload) > 0 {
 			defaults := templateDefaults(tmpl)
-			payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, defaults)
+			payload, missing, invalid, err := eventtemplate.Resolve(step.Payload, vars, defaults)
 			if err != nil {
 				return SocketDispatch{}, err
 			}
@@ -305,11 +306,11 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 			rendered.InvalidCasts = invalid
 		}
 	} else {
-		payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, nil)
+		payload, missing, invalid, err := eventtemplate.Resolve(step.Payload, vars, nil)
 		if err != nil {
 			return SocketDispatch{}, err
 		}
-		rendered = RenderedTemplate{
+		rendered = eventtemplate.Rendered{
 			Channel:      strings.TrimSpace(step.Channel),
 			Adapter:      adapter.Normalize(step.Adapter),
 			TypeName:     strings.TrimSpace(step.TypeName),
@@ -322,7 +323,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 		return SocketDispatch{}, fmt.Errorf("missing variables: %s", strings.Join(rendered.Missing, ", "))
 	}
 	if len(rendered.InvalidCasts) > 0 {
-		return SocketDispatch{}, fmt.Errorf("invalid template casts: %s", describeInvalidCasts(rendered.InvalidCasts))
+		return SocketDispatch{}, fmt.Errorf("invalid template casts: %s", eventtemplate.DescribeInvalidCasts(rendered.InvalidCasts))
 	}
 	return SocketDispatch{
 		Channel:  rendered.Channel,
@@ -390,7 +391,7 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 			if !json.Valid(step.Payload) {
 				return fmt.Errorf("step %d payload must be valid JSON", i+1)
 			}
-			if err := validateTemplateCasts(step.Payload); err != nil {
+			if err := eventtemplate.ValidateCasts(step.Payload); err != nil {
 				return fmt.Errorf("step %d %w", i+1, err)
 			}
 		}
@@ -399,11 +400,11 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 				return fmt.Errorf("schema type %q is not loaded", strings.TrimSpace(step.TypeName))
 			}
 		}
-		if _, err := eventTemplateVariablesToStrings(step.VarsOverride); err != nil {
+		if _, err := eventtemplate.VarsFromJSON(step.VarsOverride); err != nil {
 			return err
 		}
 	}
-	if _, err := eventTemplateVariablesToStrings(seq.Vars); err != nil {
+	if _, err := eventtemplate.VarsFromJSON(seq.Vars); err != nil {
 		return err
 	}
 	return nil
@@ -537,7 +538,7 @@ func cloneEventSequenceStep(step EventSequenceStep) EventSequenceStep {
 	return step
 }
 
-func templateDefaults(tmpl EventTemplate) map[string]*string {
+func templateDefaults(tmpl eventtemplate.Template) map[string]*string {
 	defaults := make(map[string]*string)
 	for _, variable := range tmpl.Variables {
 		name := strings.TrimSpace(variable.Name)
@@ -553,7 +554,7 @@ func templateDefaults(tmpl EventTemplate) map[string]*string {
 func sequenceVariablesToStrings(sequenceVars, stepVars map[string]json.RawMessage) (map[string]string, error) {
 	out := make(map[string]string)
 	if len(sequenceVars) > 0 {
-		converted, err := eventTemplateVariablesToStrings(sequenceVars)
+		converted, err := eventtemplate.VarsFromJSON(sequenceVars)
 		if err != nil {
 			return nil, err
 		}
@@ -562,7 +563,7 @@ func sequenceVariablesToStrings(sequenceVars, stepVars map[string]json.RawMessag
 		}
 	}
 	if len(stepVars) > 0 {
-		converted, err := eventTemplateVariablesToStrings(stepVars)
+		converted, err := eventtemplate.VarsFromJSON(stepVars)
 		if err != nil {
 			return nil, err
 		}
@@ -784,7 +785,7 @@ func handleSequencePlayerAction(w http.ResponseWriter, r *http.Request, player *
 		if ok := decodeEventSequenceJSON(w, r, &req, true); !ok {
 			return
 		}
-		vars, varErr := eventTemplateVariablesToStrings(req.Vars)
+		vars, varErr := eventtemplate.VarsFromJSON(req.Vars)
 		if varErr != nil {
 			http.Error(w, varErr.Error(), http.StatusBadRequest)
 			return
