@@ -1,4 +1,4 @@
-package main
+package appdata
 
 import (
 	"os"
@@ -9,9 +9,9 @@ import (
 func TestEnsureDataLayoutCreatesBundleCompatibleDirectories(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "ditto")
 
-	layout, err := EnsureDataLayout(root)
+	layout, err := Ensure(root)
 	if err != nil {
-		t.Fatalf("EnsureDataLayout() error = %v", err)
+		t.Fatalf("Ensure() error = %v", err)
 	}
 
 	wantDirs := []string{

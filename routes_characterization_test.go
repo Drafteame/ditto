@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ditto/internal/appdata"
 	"ditto/internal/golden"
 )
 
@@ -109,7 +110,7 @@ var tempPathPattern = regexp.MustCompile(`/\S*TestRouteTableCharacterization\S*`
 // after their headers.
 func serveCharacterizationRequest(t *testing.T, method, path, remoteAddr, origin string) (int, string) {
 	t.Helper()
-	layout, err := EnsureDataLayout(t.TempDir())
+	layout, err := appdata.Ensure(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

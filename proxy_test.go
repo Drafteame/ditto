@@ -19,6 +19,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/appdata"
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 	"ditto/internal/httpmock"
@@ -27,7 +28,7 @@ import (
 
 func newHTTPLogTestServer(t *testing.T, target string) *Server {
 	t.Helper()
-	layout, err := EnsureDataLayout(t.TempDir())
+	layout, err := appdata.Ensure(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,9 +243,9 @@ func TestProxiedGzipReachesLogAsCleanJSON(t *testing.T) {
 	defer upstream.Close()
 
 	root := t.TempDir()
-	layout, err := EnsureDataLayout(root)
+	layout, err := appdata.Ensure(root)
 	if err != nil {
-		t.Fatalf("EnsureDataLayout: %v", err)
+		t.Fatalf("Ensure: %v", err)
 	}
 	srv, err := NewServer(ServerConfig{
 		Port:     0,
@@ -485,7 +486,7 @@ func TestWebSocketProxyModeRejectsForbiddenOrigin(t *testing.T) {
 		w.WriteHeader(http.StatusSwitchingProtocols)
 	}))
 	defer target.Close()
-	layout, err := EnsureDataLayout(t.TempDir())
+	layout, err := appdata.Ensure(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

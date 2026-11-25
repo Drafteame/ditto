@@ -15,6 +15,7 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
+	"ditto/internal/appdata"
 	"ditto/internal/eventlog"
 	"ditto/internal/httpmock"
 )
@@ -424,7 +425,7 @@ func writeSSELogEvent(w http.ResponseWriter, flusher http.Flusher, event eventlo
 
 // RegisterPortRoutes adds port management and config persistence endpoints.
 // Called after the server is created so the server reference is available.
-func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *ProxyManager, cfgStore *ConfigStore) {
+func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *ProxyManager, cfgStore *appdata.SettingsStore) {
 	// Port check — probe if a port is available
 	mux.HandleFunc("/__ditto__/api/port/check", func(w http.ResponseWriter, r *http.Request) {
 		portStr := r.URL.Query().Get("port")

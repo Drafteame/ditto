@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"ditto/internal/appdata"
 	"ditto/internal/eventlog"
 )
 
 func TestServerRestartSwapsListenerAndShutdownEndsStreams(t *testing.T) {
-	layout, err := EnsureDataLayout(t.TempDir())
+	layout, err := appdata.Ensure(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

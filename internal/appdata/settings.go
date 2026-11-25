@@ -1,4 +1,4 @@
-package main
+package appdata
 
 import (
 	"encoding/json"
@@ -7,44 +7,44 @@ import (
 	"sync"
 )
 
-// Config holds persistent user settings.
-type Config struct {
+// Settings holds persistent user settings.
+type Settings struct {
 	Port       int    `json:"port"`
 	Target     string `json:"target"`
 	LiveTarget string `json:"live_target,omitempty"`
 }
 
-// DefaultConfig returns the default settings.
-func DefaultConfig() Config {
-	return Config{
+// DefaultSettings returns the default settings.
+func DefaultSettings() Settings {
+	return Settings{
 		Port:       8888,
 		Target:     "",
 		LiveTarget: "",
 	}
 }
 
-// ConfigStore manages loading and saving the config file.
-type ConfigStore struct {
+// SettingsStore manages loading and saving the config file.
+type SettingsStore struct {
 	mu       sync.RWMutex
-	config   Config
+	config   Settings
 	filePath string
 }
 
-// NewConfigStore creates a store that reads/writes to the data directory.
-func NewConfigStore() (*ConfigStore, error) {
-	layout, err := DataDir()
+// NewSettingsStore creates a store that reads/writes to the data directory.
+func NewSettingsStore() (*SettingsStore, error) {
+	layout, err := Locate()
 	if err != nil {
 		return nil, fmt.Errorf("resolving data dir: %w", err)
 	}
 
-	cs := &ConfigStore{
-		config:   DefaultConfig(),
+	cs := &SettingsStore{
+		config:   DefaultSettings(),
 		filePath: layout.ConfigPath,
 	}
 
 	// Load existing config if present
 	if data, err := os.ReadFile(cs.filePath); err == nil {
-		var saved Config
+		var saved Settings
 		if err := json.Unmarshal(data, &saved); err == nil {
 			if saved.Port > 0 {
 				cs.config.Port = saved.Port
@@ -58,14 +58,14 @@ func NewConfigStore() (*ConfigStore, error) {
 }
 
 // Get returns the current config.
-func (cs *ConfigStore) Get() Config {
+func (cs *SettingsStore) Get() Settings {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	return cs.config
 }
 
 // SetPort updates the port and saves.
-func (cs *ConfigStore) SetPort(port int) error {
+func (cs *SettingsStore) SetPort(port int) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.config.Port = port
@@ -73,7 +73,7 @@ func (cs *ConfigStore) SetPort(port int) error {
 }
 
 // SetTarget updates the target URL and saves.
-func (cs *ConfigStore) SetTarget(target string) error {
+func (cs *SettingsStore) SetTarget(target string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.config.Target = target
@@ -81,7 +81,7 @@ func (cs *ConfigStore) SetTarget(target string) error {
 }
 
 // SetLiveTarget updates the WebSocket upstream target and saves.
-func (cs *ConfigStore) SetLiveTarget(target string) error {
+func (cs *SettingsStore) SetLiveTarget(target string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.config.LiveTarget = target
@@ -89,14 +89,14 @@ func (cs *ConfigStore) SetLiveTarget(target string) error {
 }
 
 // Reset restores default settings and saves.
-func (cs *ConfigStore) Reset() error {
+func (cs *SettingsStore) Reset() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	cs.config = DefaultConfig()
+	cs.config = DefaultSettings()
 	return cs.save()
 }
 
-func (cs *ConfigStore) save() error {
+func (cs *SettingsStore) save() error {
 	data, err := json.MarshalIndent(cs.config, "", "  ")
 	if err != nil {
 		return err

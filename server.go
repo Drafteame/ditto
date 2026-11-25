@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"ditto/internal/adapter"
+	"ditto/internal/appdata"
 	"ditto/internal/capture"
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
@@ -113,12 +114,12 @@ type ServerConfig struct {
 	Target      string
 	LiveTarget  string
 	MocksDir    string
-	Layout      DataLayout
+	Layout      appdata.Layout
 	HTTPS       bool
 	CertDir     string
 	ServeUI     bool
 	JSONLogs    bool
-	ConfigStore *ConfigStore
+	ConfigStore *appdata.SettingsStore
 }
 
 // Server holds the running server state.
