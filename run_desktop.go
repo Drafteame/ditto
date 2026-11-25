@@ -12,6 +12,8 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+
+	"ditto/internal/browser"
 )
 
 //go:embed all:desktop
@@ -79,5 +81,5 @@ func (a *DittoApp) shutdown(ctx context.Context) {
 // OpenInBrowser opens the dashboard in the default browser.
 func (a *DittoApp) OpenInBrowser() {
 	url := fmt.Sprintf("%s://localhost:%d/__ditto__/", a.scheme, a.port)
-	openBrowser(url)
+	browser.Open(url)
 }

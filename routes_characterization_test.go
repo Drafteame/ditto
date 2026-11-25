@@ -114,11 +114,10 @@ func serveCharacterizationRequest(t *testing.T, method, path, remoteAddr, origin
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServer(ServerConfig{MocksDir: layout.MocksDir, Layout: layout, ServeUI: true})
+	srv, err := NewServer(ServerConfig{MocksDir: layout.MocksDir, Layout: layout, UI: dashboardAssets()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	RegisterPortRoutes(srv.Mux, srv, srv.ProxyMgr, nil)
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ctx, cancel := context.WithCancel(context.Background())

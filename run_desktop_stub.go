@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"log"
+
+	"ditto/internal/browser"
 )
 
 // runDesktop is the fallback when Wails is not available (headless builds).
@@ -21,7 +23,7 @@ func runDesktop(srv *Server, cfg ServerConfig) {
 	printStartup(srv.Store.All(), cfg.Port, cfg.Target, cfg.MocksDir, cfg.HTTPS, srv.CertPath, true)
 
 	dashURL := fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, cfg.Port)
-	openBrowser(dashURL)
+	browser.Open(dashURL)
 
 	waitForSignalAndShutdown(srv)
 }

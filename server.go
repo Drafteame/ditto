@@ -4,17 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
-	"runtime"
-	"strings"
 	"sync"
 	"time"
 
 	"ditto/internal/adapter"
+	"ditto/internal/api"
 	"ditto/internal/appdata"
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
@@ -29,14 +28,15 @@ import (
 
 // ServerConfig holds all the parameters needed to create and run the HTTP server.
 type ServerConfig struct {
-	Port        int
-	Target      string
-	LiveTarget  string
-	MocksDir    string
-	Layout      appdata.Layout
-	HTTPS       bool
-	CertDir     string
-	ServeUI     bool
+	Port       int
+	Target     string
+	LiveTarget string
+	MocksDir   string
+	Layout     appdata.Layout
+	HTTPS      bool
+	CertDir    string
+	// UI holds the dashboard assets; nil serves only the API.
+	UI          fs.FS
 	JSONLogs    bool
 	ConfigStore *appdata.SettingsStore
 }
@@ -55,7 +55,7 @@ type Server struct {
 	Templates  *eventtemplate.Store
 	Sequences  *sequence.Store
 	Player     *sequence.Player
-	Info       ServerInfo
+	Info       api.Info
 	Config     ServerConfig
 	CertPath   string
 	KeyPath    string
@@ -151,7 +151,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	for _, ip := range localIPs() {
 		ipStrings = append(ipStrings, ip.String())
 	}
-	info := ServerInfo{
+	info := api.Info{
 		Port:       cfg.Port,
 		Target:     cfg.Target,
 		LiveTarget: cfg.LiveTarget,
@@ -161,18 +161,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Version:    version,
 	}
 
-	RegisterUI(mux, store, bus, proxyMgr, liveTargets.Target, info, cfg.ServeUI)
-	RegisterSocketRoutes(mux, socketHub, adapters)
-	RegisterChannelModeRoutes(mux, modeRegistry)
-	RegisterLiveTargetRoutes(mux, liveTargets)
-	RegisterRecordingRoutes(mux, recorder)
-	RegisterSchemaRoutes(mux, schemaRegistry)
-	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub)
-	RegisterSequenceRoutes(mux, eventSequences, sequencePlayer, playerBroadcaster)
-
 	mux.Handle("/", &proxy.Handler{Mocks: store, Upstream: proxyMgr, Bus: bus, Hub: socketHub})
 
-	return &Server{
+	srv := &Server{
 		Mux:        mux,
 		Store:      store,
 		Bus:        bus,
@@ -189,7 +180,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Config:     cfg,
 		CertPath:   certPath,
 		KeyPath:    keyPath,
-	}, nil
+	}
+	api.Register(mux, api.Deps{
+		UI: cfg.UI, Info: info, Mocks: store, Bus: bus, Upstream: proxyMgr, Hub: socketHub,
+		LiveTargets: liveTargets, Adapters: adapters, Modes: modeRegistry, Recorder: recorder,
+		Schemas: schemaRegistry, Templates: eventTemplates, Sequences: eventSequences,
+		Player: sequencePlayer, Broadcaster: playerBroadcaster, Listener: srv, Settings: cfg.ConfigStore,
+	})
+	return srv, nil
 }
 
 // Start binds the configured port and serves in the background. It returns
@@ -289,59 +287,4 @@ func (s *Server) Port() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.Config.Port
-}
-
-// CheckPort tests if a port is available. Returns nil if free,
-// or an error with details about what's using it.
-func CheckPort(port int) error {
-	if port < 1024 || port > 65535 {
-		return fmt.Errorf("port must be between 1024 and 65535")
-	}
-
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		process := identifyProcess(port)
-		if process != "" {
-			return fmt.Errorf("port %d is in use by %s", port, process)
-		}
-		return fmt.Errorf("port %d is in use", port)
-	}
-	ln.Close()
-	return nil
-}
-
-// identifyProcess tries to find which process is using a port.
-func identifyProcess(port int) string {
-	if runtime.GOOS == "windows" {
-		return ""
-	}
-	out, err := exec.Command("lsof", "-ti", fmt.Sprintf(":%d", port)).Output()
-	if err != nil || len(out) == 0 {
-		return ""
-	}
-	pid := strings.TrimSpace(strings.Split(string(out), "\n")[0])
-	nameOut, err := exec.Command("ps", "-p", pid, "-o", "comm=").Output()
-	if err != nil {
-		return "PID " + pid
-	}
-	name := strings.TrimSpace(string(nameOut))
-	if name != "" {
-		return fmt.Sprintf("%s (PID %s)", name, pid)
-	}
-	return "PID " + pid
-}
-
-// SuggestPorts returns a list of common alternative ports, skipping any that are in use.
-func SuggestPorts(exclude int) []int {
-	candidates := []int{8888, 8080, 3001, 9000, 9090, 4000}
-	var available []int
-	for _, p := range candidates {
-		if p == exclude {
-			continue
-		}
-		if CheckPort(p) == nil {
-			available = append(available, p)
-		}
-	}
-	return available
 }

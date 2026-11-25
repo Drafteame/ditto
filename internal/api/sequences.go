@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"encoding/json"
@@ -76,7 +76,7 @@ func splitSequencePath(rest string) (id string, action string, ok bool) {
 	return "", "", false
 }
 
-func RegisterSequenceRoutes(mux *http.ServeMux, registry *sequence.Store, player *sequence.Player, broadcaster *sequence.Broadcaster) {
+func registerSequenceRoutes(mux *http.ServeMux, registry *sequence.Store, player *sequence.Player, broadcaster *sequence.Broadcaster) {
 	if registry == nil || player == nil {
 		return
 	}

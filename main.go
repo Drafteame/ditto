@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
-	"runtime"
 	"syscall"
 	"time"
 
@@ -89,7 +87,7 @@ func main() {
 		Layout:      layout,
 		HTTPS:       *https,
 		CertDir:     *certDir,
-		ServeUI:     true,
+		UI:          dashboardAssets(),
 		JSONLogs:    *logFormat == "json",
 		ConfigStore: cfgStore,
 	}
@@ -98,9 +96,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error: %v", err)
 	}
-
-	// Register port/config management routes (needs server reference)
-	RegisterPortRoutes(srv.Mux, srv, srv.ProxyMgr, cfgStore)
 
 	if *headless {
 		runHeadless(srv, cfg)
@@ -136,17 +131,6 @@ func shutdownServer(srv *Server) {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("shutdown: %v", err)
-	}
-}
-
-func openBrowser(url string) {
-	switch runtime.GOOS {
-	case "darwin":
-		exec.Command("open", url).Start()
-	case "linux":
-		exec.Command("xdg-open", url).Start()
-	case "windows":
-		exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 	}
 }
 

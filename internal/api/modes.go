@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"ditto/internal/socket"
 )
 
-func RegisterChannelModeRoutes(mux *http.ServeMux, registry *channelmode.Registry) {
+func registerChannelModeRoutes(mux *http.ServeMux, registry *channelmode.Registry) {
 	if registry == nil {
 		return
 	}

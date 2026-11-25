@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ type socketDispatchRequest struct {
 	TypeName string          `json:"type_name,omitempty"`
 }
 
-func RegisterSocketRoutes(mux *http.ServeMux, hub *socket.Hub, adapters *adapter.Registry) {
+func registerSocketRoutes(mux *http.ServeMux, hub *socket.Hub, adapters *adapter.Registry) {
 	mux.HandleFunc("/__ditto__/socket", hub.ServeHTTP)
 	mux.HandleFunc("/__ditto__/ws", hub.ServeHTTP)
 	mux.HandleFunc("/__ditto__/api/socket/clients", func(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +80,7 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *socket.Hub, adapters *adapter
 	})
 }
 
-func RegisterLiveTargetRoutes(mux *http.ServeMux, manager *socket.LiveTargets) {
+func registerLiveTargetRoutes(mux *http.ServeMux, manager *socket.LiveTargets) {
 	if manager == nil {
 		return
 	}

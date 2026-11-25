@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 	"ditto/internal/socket"
 )
 
-func RegisterRecordingRoutes(mux *http.ServeMux, recorder *recording.Recorder) {
+func registerRecordingRoutes(mux *http.ServeMux, recorder *recording.Recorder) {
 	if recorder == nil {
 		return
 	}

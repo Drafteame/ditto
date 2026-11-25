@@ -268,7 +268,6 @@ func TestWebSocketProxyModeRejectsForbiddenOrigin(t *testing.T) {
 		Target:   target.URL,
 		MocksDir: layout.MocksDir,
 		Layout:   layout,
-		ServeUI:  false,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
