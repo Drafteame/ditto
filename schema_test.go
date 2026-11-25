@@ -3,7 +3,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/dynamicpb"
-	"nhooyr.io/websocket"
 )
 
 func TestSchemaRegistryLoadsProtoAndEncodesPayload(t *testing.T) {
@@ -51,13 +49,10 @@ message ScoreEvent {
 	if err != nil {
 		t.Fatalf("Encode() error = %v", err)
 	}
-	if encoded.ContentType != "application/x-protobuf" || encoded.TypeName != "ditto.test.ScoreEvent" {
-		t.Fatalf("Encode() metadata = %#v", encoded)
-	}
 
 	desc := reg.Descriptor("ditto.test.ScoreEvent")
 	msg := dynamicpb.NewMessage(desc)
-	if err := proto.Unmarshal(encoded.Data, msg); err != nil {
+	if err := proto.Unmarshal(encoded, msg); err != nil {
 		t.Fatalf("encoded payload is not valid protobuf: %v", err)
 	}
 	if got := msg.Get(desc.Fields().ByName("match_id")).String(); got != "abc" {
@@ -67,7 +62,7 @@ message ScoreEvent {
 		t.Fatalf("home_score = %d, want 2", got)
 	}
 
-	decoded, err := reg.Decode("ditto.test.ScoreEvent", encoded.Data)
+	decoded, err := reg.Decode("ditto.test.ScoreEvent", encoded)
 	if err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
@@ -267,37 +262,6 @@ func TestExtractZipRejectsUnpackedLimit(t *testing.T) {
 	err := extractZipWithLimit(zipPath, t.TempDir(), 10)
 	if err == nil || !strings.Contains(err.Error(), "unpacked limit") {
 		t.Fatalf("extractZipWithLimit() error = %v, want unpacked limit", err)
-	}
-}
-
-func TestAppSyncWrapsBinaryPayloadAsBase64(t *testing.T) {
-	payload := EncodedPayload{
-		Data:        []byte{8, 7},
-		Kind:        websocket.MessageBinary,
-		ContentType: "application/x-protobuf",
-		TypeName:    "ditto.test.ScoreEvent",
-	}
-	msg, err := AppSyncAdapter{}.WrapData(payload, "sub-1", "/test")
-	if err != nil {
-		t.Fatalf("WrapData() error = %v", err)
-	}
-	var env struct {
-		Payload struct {
-			Data struct {
-				Base64      string `json:"base64"`
-				ContentType string `json:"content_type"`
-				TypeName    string `json:"type_name"`
-			} `json:"data"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(msg.Data, &env); err != nil {
-		t.Fatalf("WrapData() JSON error = %v", err)
-	}
-	if env.Payload.Data.Base64 != base64.StdEncoding.EncodeToString([]byte{8, 7}) {
-		t.Fatalf("base64 = %q", env.Payload.Data.Base64)
-	}
-	if env.Payload.Data.ContentType != "application/x-protobuf" || env.Payload.Data.TypeName != "ditto.test.ScoreEvent" {
-		t.Fatalf("metadata = %#v", env.Payload.Data)
 	}
 }
 

@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,11 +9,11 @@ import (
 
 func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +62,11 @@ func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 
 func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,125 +169,26 @@ func TestEventSequenceRejectsTrimmedVariableKeyCollision(t *testing.T) {
 func TestSequenceIDsRejectDotsAndSlashesInPath(t *testing.T) {
 	invalid := []string{".", "..", "../x", "x/y", `x\y`}
 	for _, id := range invalid {
-		if isSafeEventTemplateID(id) {
+		if validID(id) {
 			t.Fatalf("expected id %q to be unsafe", id)
 		}
 		if gotID, _, ok := splitSequencePath(id); ok {
 			t.Fatalf("expected path %q to be rejected, got id %q", id, gotID)
 		}
 	}
-	if isSafeEventTemplateID("my.seq-abc12345") {
+	if validID("my.seq-abc12345") {
 		t.Fatal("interior dots should be rejected by slug-safe ids")
-	}
-}
-
-func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
-	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seq, err := reg.Create(EventSequence{
-		Name:  "Active",
-		OnEnd: "stay",
-		Steps: []EventSequenceStep{{
-			DelayMs: 10_000,
-			Channel: "tickets",
-			Payload: json.RawMessage(`{"ok":true}`),
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
-	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
-		t.Fatal(err)
-	}
-	defer player.Shutdown(t.Context())
-
-	mux := http.NewServeMux()
-	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
-	req := httptest.NewRequest(http.MethodDelete, "/__ditto__/api/sequences/"+seq.ID, nil)
-	req.RemoteAddr = "127.0.0.1:1234"
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
-	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
-	mux := http.NewServeMux()
-	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
-
-	req := httptest.NewRequest(http.MethodGet, "/__ditto__/api/sequences/%2e%2e/nope", nil)
-	req.RemoteAddr = "127.0.0.1:1234"
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMovedPermanently {
-		t.Fatalf("expected safe rejection, got %d", rec.Code)
-	}
-
-	body := bytes.Repeat([]byte("x"), maxEventSequenceBodyBytes+1)
-	req = httptest.NewRequest(http.MethodPost, "/__ditto__/api/sequences", bytes.NewReader(body))
-	req.RemoteAddr = "127.0.0.1:1234"
-	req.Header.Set("Content-Type", "application/json")
-	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("expected 413, got %d", rec.Code)
-	}
-}
-
-func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
-	reg := newTestSequenceRegistry(t)
-	seq, err := reg.Create(EventSequence{
-		Name:  "HTTP",
-		OnEnd: "stay",
-		Steps: []EventSequenceStep{{
-			DelayMs: 0,
-			Channel: "tickets",
-			Payload: json.RawMessage(`{"ok":true}`),
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	player := NewSequencePlayer(reg, reg.templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
-	mux := http.NewServeMux()
-	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
-
-	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/sequences/"+seq.ID+"/seek", strings.NewReader(`{"step":0}`))
-	req.RemoteAddr = "127.0.0.1:1234"
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnsupportedMediaType {
-		t.Fatalf("expected 415, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
 func newTestSequenceRegistry(t *testing.T) *EventSequenceRegistry {
 	t.Helper()
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

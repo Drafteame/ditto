@@ -58,6 +58,18 @@ type EncodedPayload struct {
 	TypeName    string
 }
 
+// ProtobufPayload wraps protobuf wire bytes of typeName as a binary socket
+// payload. Value carries the base64 form for adapters that embed it in JSON.
+func ProtobufPayload(typeName string, data []byte) EncodedPayload {
+	return EncodedPayload{
+		Data:        data,
+		Kind:        websocket.MessageBinary,
+		Value:       base64.StdEncoding.EncodeToString(data),
+		ContentType: "application/x-protobuf",
+		TypeName:    typeName,
+	}
+}
+
 type GreetingAdapter interface {
 	GreetsOnConnect() bool
 }
@@ -135,11 +147,11 @@ func (r *SubscriptionRegistry) Clients(channel string) []string {
 type SocketHub struct {
 	registry *SubscriptionRegistry
 	bus      *EventBus
-	jsonLogs bool
 	modes    *ChannelModeRegistry
 	live     *LiveBridge
 	recorder *Recorder
 	schemas  *SchemaRegistry
+	adapters *AdapterRegistry
 	events   *CoalescingPublisher
 
 	mu      sync.RWMutex
@@ -287,7 +299,7 @@ func (h *SocketHub) decodeSocketFrame(kind websocket.MessageType, data []byte, a
 		decoded.PayloadJSON = payload
 		return decoded, ""
 	}
-	return DecodeWireFrame(h.schemas, frameKind(kind), data, adapter)
+	return h.adapters.DecodeFrame(h.schemas, frameKind(kind), data, adapter)
 }
 
 type adapterPayload struct {
@@ -295,59 +307,62 @@ type adapterPayload struct {
 	err     error
 }
 
-type RenderedDispatch struct {
-	Channel  string          `json:"channel"`
-	Adapter  string          `json:"adapter,omitempty"`
-	TypeName string          `json:"type_name,omitempty"`
-	Payload  json.RawMessage `json:"payload"`
-	Source   string          `json:"source,omitempty"`
-	// EncodedPayload is an M4 hook for sequence players that pre-encode a step.
-	EncodedPayload *EncodedPayload            `json:"-"`
-	Missing        []string                   `json:"missing,omitempty"`
-	InvalidCasts   []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
+// SocketDispatch is one event to deliver to a channel's subscribers.
+type SocketDispatch struct {
+	Channel string
+	// Adapter limits delivery to clients using that adapter; empty means all.
+	Adapter string
+	// TypeName selects protobuf encoding; empty sends Payload as JSON.
+	TypeName string
+	Payload  json.RawMessage
+	Source   string
+	// Encoded is a pre-encoded protobuf payload (the sequence player caches
+	// one per step); when set, Payload is not encoded again.
+	Encoded *EncodedPayload
 }
 
-func NewSocketHub(bus *EventBus, jsonLogs bool, modeRegistry *ChannelModeRegistry) *SocketHub {
+// SocketHubConfig holds the hub's collaborators. Bus is required; every other
+// field is optional and its zero value disables the matching feature.
+type SocketHubConfig struct {
+	Bus      *EventBus
+	Modes    *ChannelModeRegistry
+	Schemas  *SchemaRegistry
+	Adapters *AdapterRegistry
+	Recorder *Recorder
+	// LiveTargets enables live/mixed channel forwarding to an upstream.
+	LiveTargets *LiveTargetManager
+}
+
+func NewSocketHub(cfg SocketHubConfig) *SocketHub {
 	hub := &SocketHub{
 		registry: NewSubscriptionRegistry(),
-		bus:      bus,
-		jsonLogs: jsonLogs,
-		modes:    modeRegistry,
-		events:   NewCoalescingPublisher(bus, jsonLogs),
+		bus:      cfg.Bus,
+		modes:    cfg.Modes,
+		recorder: cfg.Recorder,
+		schemas:  cfg.Schemas,
+		adapters: cfg.Adapters,
+		events:   NewCoalescingPublisher(cfg.Bus),
 		clients:  make(map[string]*SocketClient),
 	}
-	if modeRegistry != nil {
-		modeRegistry.OnChange(func(cfg ChannelConfig) {
+	if cfg.LiveTargets != nil {
+		hub.live = NewLiveBridge(cfg.LiveTargets, hub)
+	}
+	if cfg.Modes != nil {
+		cfg.Modes.OnChange(func(change ChannelConfig) {
 			if hub.live == nil {
 				return
 			}
-			if cfg.Mode == ModeLive || cfg.Mode == ModeMixed {
-				hub.attachLiveSubscribers(cfg.Channel)
+			if change.Mode == ModeLive || change.Mode == ModeMixed {
+				hub.attachLiveSubscribers(change.Channel)
 				return
 			}
-			hub.live.DetachChannel(cfg.Channel)
+			hub.live.DetachChannel(change.Channel)
 		})
 	}
 	return hub
 }
 
-func (h *SocketHub) SetLiveBridge(live *LiveBridge) {
-	h.live = live
-}
-
-func (h *SocketHub) SetRecorder(recorder *Recorder) {
-	h.recorder = recorder
-}
-
-func (h *SocketHub) SetSchemas(schemas *SchemaRegistry) {
-	h.schemas = schemas
-}
-
-func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*SchemaRegistry) {
-	var schemas *SchemaRegistry
-	if len(registries) > 0 {
-		schemas = registries[0]
-	}
+func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
 	mux.HandleFunc("/__ditto__/socket", hub.ServeHTTP)
 	mux.HandleFunc("/__ditto__/ws", hub.ServeHTTP)
 	mux.HandleFunc("/__ditto__/api/socket/clients", func(w http.ResponseWriter, r *http.Request) {
@@ -372,7 +387,7 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*Sch
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(AdapterProfileSummaries())
+		json.NewEncoder(w).Encode(hub.adapters.Summaries())
 	})
 	mux.HandleFunc("/__ditto__/api/socket/dispatch", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -395,14 +410,13 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*Sch
 		if len(req.Payload) == 0 {
 			req.Payload = json.RawMessage(`{}`)
 		}
-		rendered := RenderedDispatch{
+		result, err := hub.Dispatch(SocketDispatch{
 			Channel:  req.Channel,
 			Adapter:  req.Adapter,
 			TypeName: req.TypeName,
 			Payload:  req.Payload,
 			Source:   "manual",
-		}
-		result, err := dispatchRendered(hub, schemas, rendered, nil)
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -498,27 +512,17 @@ func hasJSONContentType(r *http.Request) bool {
 	return contentType == "application/json" || strings.HasPrefix(contentType, "application/json;")
 }
 
-type dispatchOverrides struct {
-	Channel string
-	Adapter string
-}
-
-func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered RenderedDispatch, overrides *dispatchOverrides) (SocketDispatchResult, error) {
-	if hub == nil {
+// Dispatch validates d against the channel mode and adapter, encodes it when
+// it names a protobuf type, and fans it out to the channel's subscribers.
+// A mode that suppresses local dispatch is reported in the result, not as an
+// error. Every rejection is logged.
+func (h *SocketHub) Dispatch(d SocketDispatch) (SocketDispatchResult, error) {
+	if h == nil {
 		return SocketDispatchResult{}, fmt.Errorf("socket hub is not available")
 	}
-	channel := strings.TrimSpace(rendered.Channel)
+	channel := strings.TrimSpace(d.Channel)
 	fail := func(reason string, suppressed bool) {
-		hub.logDispatchFailure(channel, rendered.Source, rendered.TypeName, rendered.Payload, reason, suppressed)
-	}
-	adapter := rendered.Adapter
-	if overrides != nil {
-		if strings.TrimSpace(overrides.Channel) != "" {
-			channel = strings.TrimSpace(overrides.Channel)
-		}
-		if strings.TrimSpace(overrides.Adapter) != "" {
-			adapter = overrides.Adapter
-		}
+		h.logDispatchFailure(channel, d.Source, d.TypeName, d.Payload, reason, suppressed)
 	}
 	if channel == "" {
 		err := fmt.Errorf("channel is required")
@@ -530,41 +534,42 @@ func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered Rendered
 		fail(err.Error(), false)
 		return SocketDispatchResult{}, err
 	}
-	if hub.modes != nil && !hub.modes.AllowsLocalDispatch(channel) {
-		mode := hub.modes.Get(channel).Mode
+	if h.modes != nil && !h.modes.AllowsLocalDispatch(channel) {
+		mode := h.modes.Get(channel).Mode
 		msg := fmt.Sprintf("channel mode %s suppressed local dispatch", mode)
 		fail(msg, true)
 		return SocketDispatchResult{Errors: []string{msg}}, nil
 	}
-	adapter = normalizeAdapter(adapter)
-	if _, err := NewProtocolAdapter(adapter); err != nil {
+	adapter := normalizeAdapter(d.Adapter)
+	if _, err := h.adapters.Protocol(adapter); err != nil {
 		fail(err.Error(), false)
 		return SocketDispatchResult{}, err
 	}
-	typeName := strings.TrimSpace(rendered.TypeName)
+	typeName := strings.TrimSpace(d.TypeName)
 	if typeName != "" {
-		if schemas == nil {
+		if h.schemas == nil {
 			err := fmt.Errorf("schema registry is not available")
 			fail(err.Error(), false)
 			return SocketDispatchResult{}, err
 		}
-		encoded := rendered.EncodedPayload
+		encoded := d.Encoded
 		if encoded == nil {
-			next, err := schemas.Encode(typeName, rendered.Payload)
+			data, err := h.schemas.Encode(typeName, d.Payload)
 			if err != nil {
 				wrapped := fmt.Errorf("protobuf encode failed: %w", err)
 				fail(wrapped.Error(), false)
 				return SocketDispatchResult{}, wrapped
 			}
+			next := ProtobufPayload(typeName, data)
 			encoded = &next
 		}
-		return hub.DispatchEncodedWithSourcePayload(channel, *encoded, adapter, rendered.Source, rendered.Payload), nil
+		return h.dispatchEncoded(channel, *encoded, adapter, d.Source, d.Payload), nil
 	}
-	payload := rendered.Payload
+	payload := d.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
-	return hub.DispatchWithSource(channel, payload, adapter, rendered.Source), nil
+	return h.dispatchJSON(channel, payload, adapter, d.Source), nil
 }
 
 func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload json.RawMessage, reason string, suppressed bool) {
@@ -582,7 +587,7 @@ func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload
 	if len(payload) > 0 {
 		preview, metadata := captureLogPayload(payload, int64(len(payload)), "application/json", "", nil)
 		event.RequestBody, event.RequestPayload = preview, metadata
-		decoded, decodeErr := DecodeWireFrame(h.schemas, "text", payload, "raw")
+		decoded, decodeErr := h.adapters.DecodeFrame(h.schemas, "text", payload, "raw")
 		if decoded != nil {
 			event.TypeName, event.Alias = decoded.TypeName, decoded.Alias
 			event.DecodedPayload, event.DecodedTruncated = boundedSocketJSON(decoded.PayloadJSON)
@@ -672,7 +677,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if adapterName == "" {
 		adapterName = "raw"
 	}
-	adapter, err := NewProtocolAdapter(adapterName)
+	adapter, err := h.adapters.Protocol(adapterName)
 	if err != nil {
 		http.Error(capture, err.Error(), http.StatusBadRequest)
 		logHandshakeFailure(err)
@@ -785,17 +790,17 @@ func socketCloseDetails(err error) (int, string) {
 	return -1, err.Error()
 }
 
-func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFilter string) SocketDispatchResult {
-	return h.DispatchWithSource(channel, payload, adapterFilter, "")
-}
-
-func (h *SocketHub) DispatchWithSource(channel string, payload json.RawMessage, adapterFilter, source string) SocketDispatchResult {
+// dispatchJSON fans a JSON payload out without mode or adapter validation;
+// Dispatch is the validating entry point.
+func (h *SocketHub) dispatchJSON(channel string, payload json.RawMessage, adapterFilter, source string) SocketDispatchResult {
 	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{Payload: payload}, func(client *SocketClient) (EncodedPayload, error) {
 		return client.protocol.EncodePayload(payload)
 	})
 }
 
-func (h *SocketHub) DispatchEncodedWithSourcePayload(channel string, payload EncodedPayload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
+// dispatchEncoded fans out a pre-encoded payload. logicalPayload is the JSON
+// it was encoded from, used only for logging.
+func (h *SocketHub) dispatchEncoded(channel string, payload EncodedPayload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
 	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{TypeName: payload.TypeName, Payload: logicalPayload,
 		RawData: payload.Data, RawKind: payload.Kind, RawContentType: payload.ContentType}, func(client *SocketClient) (EncodedPayload, error) {
 		return payload, nil
@@ -1462,17 +1467,6 @@ func appSyncErrorPayload(raw json.RawMessage) any {
 	return map[string]any{
 		"errors": []map[string]string{{"message": message}},
 	}
-}
-
-func NewProtocolAdapter(name string) (ProtocolAdapter, error) {
-	adapterName := normalizeAdapter(name)
-	if adapterName == "" {
-		adapterName = "raw"
-	}
-	if profile, ok := adapterProfile(adapterName); ok {
-		return NewProfileAdapter(profile)
-	}
-	return newBuiltinProtocolAdapter(adapterName)
 }
 
 func newBuiltinProtocolAdapter(name string) (ProtocolAdapter, error) {

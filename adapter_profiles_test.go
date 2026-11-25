@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,10 +234,7 @@ func TestProfileAdapterWrapDataDoesNotEvaluateJSONVarsForBinaryPayload(t *testin
 	}
 }
 
-func TestLoadAdapterProfilesRegistersValidFilesAndSkipsInvalidFiles(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-
+func TestAdapterRegistryLoadRegistersValidFilesAndSkipsInvalidFiles(t *testing.T) {
 	var logs bytes.Buffer
 	oldOutput := log.Writer()
 	log.SetOutput(&logs)
@@ -265,14 +260,15 @@ func TestLoadAdapterProfilesRegistersValidFilesAndSkipsInvalidFiles(t *testing.T
 		Envelope:        testProfileEnvelope(),
 	})
 
-	if err := LoadAdapterProfiles(dir); err != nil {
-		t.Fatalf("LoadAdapterProfiles() error = %v", err)
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(dir); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
-	if _, err := NewProtocolAdapter("custom-profile"); err != nil {
+	if _, err := adapters.Protocol("custom-profile"); err != nil {
 		t.Fatalf("custom profile was not registered: %v", err)
 	}
 	for _, name := range []string{"bad-version", "missing-name"} {
-		if _, ok := adapterProfile(name); ok {
+		if _, ok := adapters.Profile(name); ok {
 			t.Fatalf("invalid profile %q was registered", name)
 		}
 	}
@@ -365,171 +361,6 @@ func TestReadAdapterProfileRejectsOversizedFile(t *testing.T) {
 	}
 }
 
-func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-
-	dir := t.TempDir()
-	if err := LoadAdapterProfiles(dir); err != nil {
-		t.Fatalf("LoadAdapterProfiles() error = %v", err)
-	}
-	protocol, err := NewProtocolAdapter("appsync-draftea")
-	if err != nil {
-		t.Fatalf("NewProtocolAdapter(appsync-draftea) error = %v", err)
-	}
-	hub := NewSocketHub(NewEventBus(), false, nil)
-	client := &SocketClient{
-		id:            "appsync-draftea-1",
-		adapter:       "appsync-draftea",
-		protocol:      protocol,
-		control:       make(chan EncodedServerMessage, 1),
-		send:          make(chan EncodedServerMessage, 1),
-		done:          make(chan struct{}),
-		subscriptions: map[string]string{"/test": "sub-1"},
-	}
-	hub.addClient(client)
-	hub.registry.Subscribe("/test", client.id)
-
-	encodedPayload := EncodedPayload{
-		Data:     []byte{1, 2, 3},
-		Kind:     websocket.MessageBinary,
-		TypeName: "appsync.recovery.Recovery",
-	}
-	result, err := dispatchRendered(hub, &SchemaRegistry{}, RenderedDispatch{
-		Channel:        "/test",
-		Adapter:        "appsync-draftea",
-		TypeName:       "appsync.recovery.Recovery",
-		Payload:        json.RawMessage(`{"recoveryId":"r1"}`),
-		EncodedPayload: &encodedPayload,
-	}, nil)
-	if err != nil {
-		t.Fatalf("dispatchRendered() error = %v", err)
-	}
-	if result.Delivered != 1 {
-		t.Fatalf("delivered = %d, want 1; errors=%v", result.Delivered, result.Errors)
-	}
-
-	select {
-	case msg := <-client.send:
-		env, inner := decodeProfileEnvelope(t, msg.Data)
-		if env.ID != "sub-1" || env.Type != "data" {
-			t.Fatalf("outer = %#v, want Draftea data envelope", env)
-		}
-		if inner.T != "recovery" || inner.E != base64.StdEncoding.EncodeToString(encodedPayload.Data) {
-			t.Fatalf("inner = %#v, want recovery base64 envelope", inner)
-		}
-	default:
-		t.Fatalf("client did not receive dispatch frame")
-	}
-}
-
-func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-
-	dir := t.TempDir()
-	if err := LoadAdapterProfiles(dir); err != nil {
-		t.Fatalf("LoadAdapterProfiles() error = %v", err)
-	}
-	protocol, err := NewProtocolAdapter("relay-draftea")
-	if err != nil {
-		t.Fatalf("NewProtocolAdapter(relay-draftea) error = %v", err)
-	}
-	if !adapterGreetsOnConnect(protocol) {
-		t.Fatalf("relay-draftea does not greet on connect")
-	}
-	if len(protocol.Subprotocols()) != 0 {
-		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
-	}
-
-	hub := NewSocketHub(NewEventBus(), false, nil)
-	client := &SocketClient{
-		id:            "relay-draftea-1",
-		adapter:       "relay-draftea",
-		protocol:      protocol,
-		control:       make(chan EncodedServerMessage, 1),
-		send:          make(chan EncodedServerMessage, 1),
-		done:          make(chan struct{}),
-		subscriptions: map[string]string{"/osb/sport/league/*": "/osb/sport/league/*"},
-	}
-	hub.addClient(client)
-	hub.registry.Subscribe("/osb/sport/league/*", client.id)
-
-	encodedPayload := EncodedPayload{
-		Data:     []byte{1, 2, 3},
-		Kind:     websocket.MessageBinary,
-		TypeName: "appsync.betinfo.BetEventDto",
-	}
-	result, err := dispatchRendered(hub, &SchemaRegistry{}, RenderedDispatch{
-		Channel:        "/osb/sport/league/*",
-		Adapter:        "relay-draftea",
-		TypeName:       "appsync.betinfo.BetEventDto",
-		Payload:        json.RawMessage(`{"id":"bet-1"}`),
-		EncodedPayload: &encodedPayload,
-	}, nil)
-	if err != nil {
-		t.Fatalf("dispatchRendered() error = %v", err)
-	}
-	if result.Delivered != 1 {
-		t.Fatalf("delivered = %d, want 1; errors=%v", result.Delivered, result.Errors)
-	}
-
-	select {
-	case msg := <-client.send:
-		var env struct {
-			Type    string `json:"type"`
-			Channel string `json:"channel"`
-			Event   string `json:"event"`
-		}
-		if err := json.Unmarshal(msg.Data, &env); err != nil {
-			t.Fatalf("outer JSON error: %v; data=%s", err, msg.Data)
-		}
-		if env.Type != "data" || env.Channel != "/osb/sport/league/*" {
-			t.Fatalf("outer = %#v, want relay data envelope", env)
-		}
-		var inner struct {
-			T string `json:"t"`
-			E string `json:"e"`
-		}
-		if err := json.Unmarshal([]byte(env.Event), &inner); err != nil {
-			t.Fatalf("inner JSON error: %v; event=%s", err, env.Event)
-		}
-		if inner.T != "betInfo" || inner.E != base64.StdEncoding.EncodeToString(encodedPayload.Data) {
-			t.Fatalf("inner = %#v, want betInfo base64 envelope", inner)
-		}
-	default:
-		t.Fatalf("client did not receive dispatch frame")
-	}
-}
-
-func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-	setAdapterProfiles(map[string]AdapterProfile{
-		"custom-profile": testAdapterProfile("custom-profile", map[string]string{
-			"appsync.recovery.Recovery": "recovery",
-		}),
-	})
-
-	mux := http.NewServeMux()
-	RegisterSocketRoutes(mux, NewSocketHub(NewEventBus(), false, nil))
-	req := httptest.NewRequest(http.MethodGet, "/__ditto__/api/socket/adapter-profiles", nil)
-	req.RemoteAddr = "127.0.0.1:55555"
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != 200 {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var got []AdapterProfileSummary
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("response JSON error = %v", err)
-	}
-	if len(got) != 1 || got[0].Name != "custom-profile" || got[0].TypeAliases["appsync.recovery.Recovery"] != "recovery" {
-		t.Fatalf("profiles response = %#v", got)
-	}
-}
-
 func newTestProfileAdapter(t *testing.T, aliases map[string]string) ProfileAdapter {
 	t.Helper()
 	adapter, err := NewProfileAdapter(testAdapterProfile("custom-profile", aliases))
@@ -598,10 +429,253 @@ func writeProfileFile(t *testing.T, dir, name string, profile AdapterProfile) {
 	}
 }
 
-func preserveAdapterProfiles() func() {
-	// Adapter profile tests mutate a package-global registry; keep them serial.
-	snapshot := snapshotAdapterProfiles()
-	return func() {
-		setAdapterProfiles(snapshot)
+func TestAppSyncWrapsBinaryPayloadAsBase64(t *testing.T) {
+	payload := EncodedPayload{
+		Data:        []byte{8, 7},
+		Kind:        websocket.MessageBinary,
+		ContentType: "application/x-protobuf",
+		TypeName:    "ditto.test.ScoreEvent",
+	}
+	msg, err := AppSyncAdapter{}.WrapData(payload, "sub-1", "/test")
+	if err != nil {
+		t.Fatalf("WrapData() error = %v", err)
+	}
+	var env struct {
+		Payload struct {
+			Data struct {
+				Base64      string `json:"base64"`
+				ContentType string `json:"content_type"`
+				TypeName    string `json:"type_name"`
+			} `json:"data"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(msg.Data, &env); err != nil {
+		t.Fatalf("WrapData() JSON error = %v", err)
+	}
+	if env.Payload.Data.Base64 != base64.StdEncoding.EncodeToString([]byte{8, 7}) {
+		t.Fatalf("base64 = %q", env.Payload.Data.Base64)
+	}
+	if env.Payload.Data.ContentType != "application/x-protobuf" || env.Payload.Data.TypeName != "ditto.test.ScoreEvent" {
+		t.Fatalf("metadata = %#v", env.Payload.Data)
+	}
+}
+
+func TestDecodeFrameReadsRelayEnvelope(t *testing.T) {
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(t.TempDir()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	frame := []byte(`{"type":"data","channel":"/osb/s/l/*","event":"{\"t\":\"betInfo\",\"e\":\"AQID\"}"}`)
+	decoded, decodeErr := adapters.DecodeFrame(nil, "text", frame, "relay-draftea")
+	if decodeErr != "" {
+		t.Fatalf("DecodeFrame() error = %s", decodeErr)
+	}
+	if decoded == nil || decoded.Alias != "betInfo" {
+		t.Fatalf("decoded = %#v, want alias betInfo", decoded)
+	}
+}
+
+func TestAppSyncDecoderKeepsBuiltInAliasWhenSchemaMissing(t *testing.T) {
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	decoded, decodeErr := rec.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, []byte(`{
+		"type":"data",
+		"payload":{"data":{"t":"example.Event","e":"AAAA"}}
+	}`))
+	if decodeErr != "" {
+		t.Fatalf("decodeErr = %q, want empty fallback", decodeErr)
+	}
+	if decoded == nil || decoded.Alias != "example.Event" || decoded.TypeName != "" {
+		t.Fatalf("decoded = %#v, want alias-only fallback", decoded)
+	}
+}
+
+func TestAppSyncDecoderReportsMissingPayload(t *testing.T) {
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	decoded, decodeErr := rec.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, []byte(`{
+		"type":"data",
+		"payload":{"data":{"t":"example.Event"}}
+	}`))
+	if decoded != nil || decodeErr != "appsync payload missing" {
+		t.Fatalf("decoded=%#v decodeErr=%q, want missing payload error", decoded, decodeErr)
+	}
+}
+
+func TestAppSyncDecoderTreatsControlFramesAsBenign(t *testing.T) {
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	// AppSync sends keep-alives and subscription-lifecycle frames that carry
+	// no payload; they must not be reported as decode errors.
+	for _, typ := range []string{"ka", "connection_ack", "subscribe", "subscribe_success", "complete"} {
+		decoded, decodeErr := rec.decodeAppSyncProfile(
+			AdapterProfile{BaseAdapter: "appsync"},
+			[]byte(`{"type":"`+typ+`"}`),
+		)
+		if decodeErr != "" {
+			t.Fatalf("type %q: decodeErr = %q, want empty (control frame)", typ, decodeErr)
+		}
+		if decoded == nil || decoded.Alias != typ || decoded.TypeName != "" || decoded.PayloadJSON != nil {
+			t.Fatalf("type %q: decoded = %#v, want control frame labelled by type", typ, decoded)
+		}
+	}
+}
+
+func TestRawAdapterSubscribeAndDispatchPayload(t *testing.T) {
+	adapter := RawAdapter{}
+
+	msg, err := adapter.ParseClientMessage([]byte(`{"type":"subscribe","id":"sub-1","channel":"/scores"}`))
+	if err != nil {
+		t.Fatalf("ParseClientMessage() error = %v", err)
+	}
+	if msg.Type != "subscribe" || msg.Channel != "/scores" || msg.SubscriptionID != "sub-1" {
+		t.Fatalf("ParseClientMessage() = %#v, want subscribe /scores sub-1", msg)
+	}
+
+	payload := json.RawMessage(`{"score":7}`)
+	encoded, err := adapter.EncodeServerMessage(ServerMsg{Type: "data", Channel: "/scores", Payload: payload})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage() error = %v", err)
+	}
+	if string(encoded.Data) != string(payload) {
+		t.Fatalf("EncodeServerMessage() = %s, want %s", encoded.Data, payload)
+	}
+}
+
+func TestAppSyncAdapterEnvelope(t *testing.T) {
+	adapter := AppSyncAdapter{}
+
+	msg, err := adapter.ParseClientMessage([]byte(`{"type":"start","id":"sub-1","payload":{"channel":"/scores"}}`))
+	if err != nil {
+		t.Fatalf("ParseClientMessage() error = %v", err)
+	}
+	if msg.Type != "subscribe" || msg.Channel != "/scores" || msg.SubscriptionID != "sub-1" {
+		t.Fatalf("ParseClientMessage() = %#v, want subscribe /scores sub-1", msg)
+	}
+
+	encoded, err := adapter.EncodeServerMessage(ServerMsg{
+		Type:    "data",
+		ID:      "sub-1",
+		Channel: "/scores",
+		Payload: json.RawMessage(`{"score":7}`),
+	})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage() error = %v", err)
+	}
+
+	var env struct {
+		Type    string `json:"type"`
+		ID      string `json:"id"`
+		Payload struct {
+			Data map[string]any `json:"data"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(encoded.Data, &env); err != nil {
+		t.Fatalf("encoded AppSync message is invalid JSON: %v", err)
+	}
+	if env.Type != "data" || env.ID != "sub-1" || env.Payload.Data["score"].(float64) != 7 {
+		t.Fatalf("encoded AppSync message = %s", encoded.Data)
+	}
+}
+
+func TestRelayAdapterControlFrames(t *testing.T) {
+	adapter := RelayAdapter{}
+
+	if !adapter.GreetsOnConnect() {
+		t.Fatalf("GreetsOnConnect() = false, want true")
+	}
+	if len(adapter.Subprotocols()) != 0 {
+		t.Fatalf("Subprotocols() = %v, want none", adapter.Subprotocols())
+	}
+
+	msg, err := adapter.ParseClientMessage([]byte(`{"type":"subscribe","id":"/osb/s/l/*","channel":"/osb/s/l/*","authorization":{"Authorization":"Basic token"}}`))
+	if err != nil {
+		t.Fatalf("ParseClientMessage() error = %v", err)
+	}
+	if msg.Type != "subscribe" || msg.Channel != "/osb/s/l/*" || msg.SubscriptionID != "/osb/s/l/*" {
+		t.Fatalf("ParseClientMessage() = %#v, want subscribe /osb/s/l/*", msg)
+	}
+
+	ack, err := adapter.EncodeServerMessage(ServerMsg{Type: "connection_ack"})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage(connection_ack) error = %v", err)
+	}
+	if string(ack.Data) != `{"type":"connection_ack"}` {
+		t.Fatalf("connection_ack = %s", ack.Data)
+	}
+
+	subAck, err := adapter.EncodeServerMessage(ServerMsg{Type: "subscribe_ack", ID: "/scores", Channel: "/scores"})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage(subscribe_ack) error = %v", err)
+	}
+	var subEnv struct {
+		Type    string `json:"type"`
+		Channel string `json:"channel"`
+	}
+	if err := json.Unmarshal(subAck.Data, &subEnv); err != nil {
+		t.Fatalf("subscribe ack is invalid JSON: %v", err)
+	}
+	if subEnv.Type != "subscribe_success" || subEnv.Channel != "/scores" {
+		t.Fatalf("subscribe ack = %s, want subscribe_success with channel", subAck.Data)
+	}
+
+	data, err := adapter.EncodeServerMessage(ServerMsg{Type: "data", Channel: "/scores", Payload: json.RawMessage(`{"score":7}`)})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage(data) error = %v", err)
+	}
+	var dataEnv struct {
+		Type    string         `json:"type"`
+		Channel string         `json:"channel"`
+		Event   map[string]any `json:"event"`
+	}
+	if err := json.Unmarshal(data.Data, &dataEnv); err != nil {
+		t.Fatalf("data frame is invalid JSON: %v", err)
+	}
+	if dataEnv.Type != "data" || dataEnv.Channel != "/scores" || dataEnv.Event["score"].(float64) != 7 {
+		t.Fatalf("data frame = %s", data.Data)
+	}
+}
+
+func TestAppSyncAdapterErrorPayloadUsesJSONString(t *testing.T) {
+	adapter := AppSyncAdapter{}
+
+	encoded, err := adapter.EncodeServerMessage(ServerMsg{
+		Type:    "error",
+		ID:      "sub-1",
+		Payload: json.RawMessage(`"plain error"`),
+	})
+	if err != nil {
+		t.Fatalf("EncodeServerMessage() error = %v", err)
+	}
+
+	var env struct {
+		Type    string `json:"type"`
+		ID      string `json:"id"`
+		Payload struct {
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(encoded.Data, &env); err != nil {
+		t.Fatalf("encoded AppSync error is invalid JSON: %v", err)
+	}
+	if env.Type != "error" || env.ID != "sub-1" || len(env.Payload.Errors) != 1 || env.Payload.Errors[0].Message != "plain error" {
+		t.Fatalf("encoded AppSync error = %s", encoded.Data)
+	}
+}
+
+func TestProtobufPayloadDescribesBinaryProtobuf(t *testing.T) {
+	got := ProtobufPayload("ditto.test.Item", []byte{0x0a, 0x01, 'x'})
+	if got.Kind != websocket.MessageBinary || got.ContentType != "application/x-protobuf" ||
+		got.TypeName != "ditto.test.Item" || got.Value != "CgF4" {
+		t.Fatalf("ProtobufPayload() = %#v", got)
 	}
 }

@@ -145,7 +145,6 @@ func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type SequencePlayer struct {
 	reg         *EventSequenceRegistry
-	templates   *EventTemplateRegistry
 	schemas     *SchemaRegistry
 	hub         *SocketHub
 	broadcaster *PlayerBroadcaster
@@ -155,16 +154,27 @@ type SequencePlayer struct {
 	runners map[string]*sequenceRunner
 }
 
-func NewSequencePlayer(reg *EventSequenceRegistry, templates *EventTemplateRegistry, schemas *SchemaRegistry, hub *SocketHub, broadcaster *PlayerBroadcaster, clock Clock) *SequencePlayer {
+// SequencePlayerConfig holds the player's collaborators. Sequences, Hub and
+// Broadcaster are required; Schemas is needed only for protobuf steps and a
+// nil Clock uses the system clock.
+type SequencePlayerConfig struct {
+	Sequences   *EventSequenceRegistry
+	Schemas     *SchemaRegistry
+	Hub         *SocketHub
+	Broadcaster *PlayerBroadcaster
+	Clock       Clock
+}
+
+func NewSequencePlayer(cfg SequencePlayerConfig) *SequencePlayer {
+	clock := cfg.Clock
 	if clock == nil {
 		clock = systemClock
 	}
 	return &SequencePlayer{
-		reg:         reg,
-		templates:   templates,
-		schemas:     schemas,
-		hub:         hub,
-		broadcaster: broadcaster,
+		reg:         cfg.Sequences,
+		schemas:     cfg.Schemas,
+		hub:         cfg.Hub,
+		broadcaster: cfg.Broadcaster,
 		clock:       clock,
 		runners:     make(map[string]*sequenceRunner),
 	}
@@ -173,7 +183,7 @@ func NewSequencePlayer(reg *EventSequenceRegistry, templates *EventTemplateRegis
 func (p *SequencePlayer) Play(id string, opts PlayOptions) (PlayerState, error) {
 	// TODO: M7 — support fire-and-forget runs for HTTP triggers so concurrent
 	// trigger hits can launch independent snapshots of the same sequence ID.
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return PlayerState{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	opts = normalizePlayOptions(opts)
@@ -299,7 +309,7 @@ func (p *SequencePlayer) Shutdown(ctx context.Context) error {
 }
 
 func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	p.mu.Lock()
@@ -326,7 +336,7 @@ func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error 
 }
 
 func (p *SequencePlayer) runner(id string) (*sequenceRunner, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return nil, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	p.mu.RLock()
@@ -654,17 +664,17 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 	}
 	index := state.CurrentStep
 	step := r.seq.Steps[index]
-	rendered, err := r.player.reg.ResolveStep(r.seq, step, r.vars, index)
+	dispatch, err := r.player.reg.ResolveStep(r.seq, step, r.vars, index)
 	if err != nil {
 		r.fail(err)
 		return
 	}
-	rendered, err = r.prepareRenderedStep(step, rendered)
+	dispatch, err = r.encodeStep(step, dispatch)
 	if err != nil {
 		r.fail(err)
 		return
 	}
-	result, err := dispatchRendered(r.player.hub, r.player.schemas, rendered, nil)
+	result, err := r.player.hub.Dispatch(dispatch)
 	if err != nil {
 		r.fail(err)
 		return
@@ -677,27 +687,30 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 	r.publishStep(step.ID, index, summary)
 }
 
-func (r *sequenceRunner) prepareRenderedStep(step EventSequenceStep, rendered RenderedDispatch) (RenderedDispatch, error) {
-	typeName := strings.TrimSpace(rendered.TypeName)
+// encodeStep pre-encodes a protobuf step, reusing the cached bytes while the
+// step's type and payload are unchanged.
+func (r *sequenceRunner) encodeStep(step EventSequenceStep, dispatch SocketDispatch) (SocketDispatch, error) {
+	typeName := strings.TrimSpace(dispatch.TypeName)
 	if typeName == "" {
-		return rendered, nil
+		return dispatch, nil
 	}
 	if r.player.schemas == nil {
-		return rendered, fmt.Errorf("schema registry is not available")
+		return dispatch, fmt.Errorf("schema registry is not available")
 	}
-	hash := sha256.Sum256([]byte(typeName + "\x00" + string(rendered.Payload)))
+	hash := sha256.Sum256([]byte(typeName + "\x00" + string(dispatch.Payload)))
 	if cached, ok := r.cache[step.ID]; ok && cached.payloadHash == hash {
 		encoded := cached.encoded
-		rendered.EncodedPayload = &encoded
-		return rendered, nil
+		dispatch.Encoded = &encoded
+		return dispatch, nil
 	}
-	encoded, err := r.player.schemas.Encode(typeName, rendered.Payload)
+	data, err := r.player.schemas.Encode(typeName, dispatch.Payload)
 	if err != nil {
-		return rendered, fmt.Errorf("protobuf encode failed: %w", err)
+		return dispatch, fmt.Errorf("protobuf encode failed: %w", err)
 	}
+	encoded := ProtobufPayload(typeName, data)
 	r.cache[step.ID] = stepCacheEntry{payloadHash: hash, encoded: encoded}
-	rendered.EncodedPayload = &encoded
-	return rendered, nil
+	dispatch.Encoded = &encoded
+	return dispatch, nil
 }
 
 func (r *sequenceRunner) fail(err error) {

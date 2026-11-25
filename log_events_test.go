@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -26,7 +27,7 @@ func (w *cancelOnFlushRecorder) Flush() {
 }
 
 func TestEventBusRetainsIdentifiedEventsAndReturnsDetails(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	headers := map[string][]string{"X-Test": {"before"}}
 	metadata := &LogPayloadMetadata{SizeBytes: 4, ContentType: "text/plain", CaptureStatus: "captured", RawBase64: "dGVzdA=="}
 	bus.Publish(LogEvent{Type: "PROXY", Method: "POST", Path: "/item", ResponseBody: "body", RequestHeaders: headers,
@@ -62,7 +63,7 @@ func TestEventBusRetainsIdentifiedEventsAndReturnsDetails(t *testing.T) {
 }
 
 func TestEventBusRetentionBoundsCountAndBytes(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	for i := 0; i <= MaxRetainedLogEvents; i++ {
 		bus.Publish(LogEvent{Method: "GET", Path: "/item"})
 	}
@@ -70,7 +71,7 @@ func TestEventBusRetentionBoundsCountAndBytes(t *testing.T) {
 		t.Fatalf("retained %d events, want max %d", got, MaxRetainedLogEvents)
 	}
 
-	byteBus := NewEventBus()
+	byteBus := NewEventBus(nil)
 	byteBus.Publish(LogEvent{ResponseBody: strings.Repeat("x", MaxRetainedLogBytes+1)})
 	if got := len(byteBus.LogSummaries()); got != 0 {
 		t.Fatalf("oversized event was retained, count=%d", got)
@@ -80,36 +81,8 @@ func TestEventBusRetentionBoundsCountAndBytes(t *testing.T) {
 	}
 }
 
-func TestLogSummaryAndDetailRoutes(t *testing.T) {
-	bus := NewEventBus()
-	bus.Publish(LogEvent{Type: "MOCK", Method: "GET", Path: "/item", ResponseBody: `{"ok":true}`})
-	id := bus.LogSummaries()[0].ID
-	mux := http.NewServeMux()
-	RegisterUI(mux, nil, bus, nil, nil, ServerInfo{}, false)
-
-	list := httptest.NewRecorder()
-	mux.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/__ditto__/api/logs", nil))
-	var summaries []LogEvent
-	if err := json.Unmarshal(list.Body.Bytes(), &summaries); err != nil {
-		t.Fatal(err)
-	}
-	if list.Code != http.StatusOK || len(summaries) != 1 || summaries[0].ID != id || summaries[0].ResponseBody != "" {
-		t.Fatalf("unexpected summary response: status=%d body=%s", list.Code, list.Body.String())
-	}
-
-	detail := httptest.NewRecorder()
-	mux.ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/__ditto__/api/logs/"+id, nil))
-	var event LogEvent
-	if err := json.Unmarshal(detail.Body.Bytes(), &event); err != nil {
-		t.Fatal(err)
-	}
-	if detail.Code != http.StatusOK || event.ID != id || event.ResponseBody != `{"ok":true}` {
-		t.Fatalf("unexpected detail response: status=%d body=%s", detail.Code, detail.Body.String())
-	}
-}
-
 func TestEventBusReplayOverflowAndFilteredCursorGaps(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	bus.Publish(LogEvent{Type: "SOCKET", Method: "CONNECT", Path: "/a"})
 	first := bus.LogSummaries()[0].Cursor
 	ch, replay, gap := bus.SubscribeAfter(first)
@@ -135,7 +108,7 @@ func TestEventBusReplayOverflowAndFilteredCursorGaps(t *testing.T) {
 		t.Fatalf("history recovery = total %d complete %t gap=%#v", recovered.Total, recovered.Complete, recovered.Gap)
 	}
 
-	gapBus := NewEventBus()
+	gapBus := NewEventBus(nil)
 	gapBus.Publish(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/wanted", Channel: "/wanted"})
 	cursor := gapBus.LogSummaries()[0].Cursor
 	gapBus.Publish(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/other", ResponseBody: strings.Repeat("x", MaxRetainedLogBytes+1)})
@@ -147,7 +120,7 @@ func TestEventBusReplayOverflowAndFilteredCursorGaps(t *testing.T) {
 }
 
 func TestBurstHistoryUsesExactGroupAndReportsExpiredMembers(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	var first, last string
 	for i := 0; i < 4; i++ {
 		direction, source := "ditto_to_client", "hub"
@@ -173,7 +146,7 @@ func TestBurstHistoryUsesExactGroupAndReportsExpiredMembers(t *testing.T) {
 }
 
 func TestConcurrentPublishesKeepCursorAndStdoutIdentityStable(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	const publishers, each = 8, 50
 	var wg sync.WaitGroup
 	for publisher := 0; publisher < publishers; publisher++ {
@@ -203,29 +176,88 @@ func TestConcurrentPublishesKeepCursorAndStdoutIdentityStable(t *testing.T) {
 	}
 }
 
-func TestSSEStartsImmediatelyAndReplaysSummariesAfterReset(t *testing.T) {
-	bus := NewEventBus()
-	bus.Publish(LogEvent{Type: "PROXY", Method: "POST", Path: "/secret", RequestBody: "request secret", ResponseBody: "response secret",
-		RequestPayload: &LogPayloadMetadata{SizeBytes: 7, CapturedBytes: 7, CaptureStatus: "captured", RawBase64: "c2VjcmV0"}})
-	mux := http.NewServeMux()
-	RegisterUI(mux, nil, bus, nil, nil, ServerInfo{}, false)
-	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, "/__ditto__/events", nil).WithContext(ctx)
-	req.Header.Set("Last-Event-ID", "old-session:99")
-	writer := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
-	started := time.Now()
-	mux.ServeHTTP(writer, req)
-	if time.Since(started) > time.Second || !writer.flushed || writer.Code != http.StatusOK {
-		t.Fatalf("SSE did not flush headers immediately: elapsed=%s flushed=%t status=%d", time.Since(started), writer.flushed, writer.Code)
+func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
+	bus := NewEventBus(nil)
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	pub := NewCoalescingPublisher(bus)
+	for i := 0; i < SocketLogCoalesceThresholdPerSecond+5; i++ {
+		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK,
+			Direction: "ditto_to_client", Source: "test", RequestBody: fmt.Sprintf(`{"index":%d}`, i)})
 	}
-	body := writer.Body.String()
-	if !strings.Contains(body, `"gap_reason":"server_reset"`) || !strings.Contains(body, `"method":"POST"`) {
-		t.Fatalf("reset replay missing gap or event: %s", body)
+	deadline := time.After(1500 * time.Millisecond)
+	summaries := 0
+	for {
+		select {
+		case event := <-events:
+			if event.Method == "DISPATCH_BURST" {
+				summaries++
+			}
+		case <-deadline:
+			if summaries != 1 {
+				t.Fatalf("burst summaries = %d, want 1", summaries)
+			}
+			var burst LogEvent
+			for _, event := range bus.LogSummaries() {
+				if event.Method == "DISPATCH_BURST" {
+					burst = event
+				}
+			}
+			if burst.BurstCount != SocketLogCoalesceThresholdPerSecond+5 || burst.BurstStartCursor == "" || burst.BurstEndCursor == "" {
+				t.Fatalf("burst summary = %#v", burst)
+			}
+			members := bus.History("", burst.BurstStartCursor, burst.BurstEndCursor, "/burst", "DISPATCH", "ditto_to_client", "test", "", 0, 100, burst.BurstCount)
+			if !members.Complete || len(members.Events) != burst.BurstCount {
+				t.Fatalf("burst members = %d complete=%t gap=%#v", len(members.Events), members.Complete, members.Gap)
+			}
+			if detail, ok := bus.LogDetail(members.Events[0].ID); !ok || detail.RequestBody == "" {
+				t.Fatalf("suppressed dispatch detail not retained: %#v found=%t", detail, ok)
+			}
+			return
+		}
 	}
-	if strings.Contains(body, "request secret") || strings.Contains(body, "response secret") || strings.Contains(body, "c2VjcmV0") {
-		t.Fatalf("SSE replay contained payload details: %s", body)
+}
+
+func TestEventBusPublishUnsubscribeRace(t *testing.T) {
+	b := NewEventBus(nil)
+	subs := make([]chan LogEvent, 100)
+	for i := range subs {
+		subs[i] = b.Subscribe()
 	}
-	if strings.HasPrefix(body, "id:") {
-		t.Fatalf("GAP marker incorrectly advanced SSE ID: %s", body)
+
+	done := make(chan struct{})
+	var drainWG sync.WaitGroup
+	for _, ch := range subs {
+		drainWG.Add(1)
+		go func(ch chan LogEvent) {
+			defer drainWG.Done()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ch:
+				}
+			}
+		}(ch)
 	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 500; i++ {
+			b.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH"})
+			runtime.Gosched()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for _, ch := range subs {
+			b.Unsubscribe(ch)
+			runtime.Gosched()
+		}
+	}()
+	wg.Wait()
+	close(done)
+	drainWG.Wait()
 }

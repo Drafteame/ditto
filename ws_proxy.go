@@ -408,7 +408,7 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 			h.logClientDelivery(client, msg, "dropped", fmt.Errorf("client queue full or disconnected"))
 		}
 	}
-	decoded, decodeErr := DecodeWireFrame(h.schemas, frameKind(typ), data, adapterName)
+	decoded, decodeErr := h.adapters.DecodeFrame(h.schemas, frameKind(typ), data, adapterName)
 	body := buildDispatchLogBodyWithID(result, decoded, decodeErr, dispatchID)
 	event := LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
 		Source: "live", DispatchID: dispatchID, Queued: result.Queued, ResponseBody: body, ConnectionID: connectionID, Target: target,
@@ -451,19 +451,15 @@ func errorText(err error) string {
 	return err.Error()
 }
 
-// ProxyWebSocket tunnels complete messages through nhooyr's streaming Reader
-// and Writer APIs. The logger retains only a bounded prefix of each message.
-func (pm *ProxyManager) ProxyWebSocket(w http.ResponseWriter, r *http.Request, hub *SocketHub) bool {
-	pm.mu.RLock()
-	proxy, target := pm.proxy, pm.target
-	pm.mu.RUnlock()
-	if proxy == nil || target == "" {
-		return false
-	}
+// Tunnel relays the WebSocket upgrade r to the HTTP target through direct
+// (the reverse proxy's director, which rewrites the URL and headers) and
+// pipes complete messages both ways with nhooyr's streaming Reader and Writer
+// APIs. It logs the handshake, the close and a bounded prefix of each message.
+func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string, direct func(*http.Request)) {
 	upstreamReq := r.Clone(r.Context())
 	upstreamReq.URL = cloneURL(r.URL)
 	upstreamReq.Header = extractUpstreamHeaders(r.Header)
-	proxy.Director(upstreamReq)
+	direct(upstreamReq)
 	u := upstreamReq.URL
 	if u.Scheme == "http" {
 		u.Scheme = "ws"
@@ -472,11 +468,11 @@ func (pm *ProxyManager) ProxyWebSocket(w http.ResponseWriter, r *http.Request, h
 	}
 	if u.Scheme != "ws" && u.Scheme != "wss" {
 		http.Error(w, "invalid websocket target", http.StatusBadGateway)
-		return true
+		return
 	}
 	protocols := websocketProtocols(r.Header)
 	started := time.Now()
-	connectionID := fmt.Sprintf("proxy-ws-%d", hub.nextID.Add(1))
+	connectionID := fmt.Sprintf("proxy-ws-%d", h.nextID.Add(1))
 	requestURL := socketRequestURL(r, r.RequestURI)
 	adapter := normalizeAdapter(r.URL.Query().Get("adapter"))
 	if adapter == "" {
@@ -499,15 +495,15 @@ func (pm *ProxyManager) ProxyWebSocket(w http.ResponseWriter, r *http.Request, h
 			if responseCaptureTransport.responseError != "" {
 				event.Error += "; response body capture: " + responseCaptureTransport.responseError
 			}
-			hub.events.Publish(event)
+			h.events.Publish(event)
 		} else {
 			http.Error(w, http.StatusText(status), status)
-			hub.events.Publish(LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL, Host: r.Host,
+			h.events.Publish(LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 				RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: status, DurationMs: time.Since(started).Milliseconds(),
 				Source: "websocket-proxy", Error: err.Error(), Target: target, ConnectionID: connectionID, ClientID: connectionID,
 				RequestHeaders: r.Header.Clone()})
 		}
-		return true
+		return
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	copyResponseHeaders(w.Header(), response.Header)
@@ -516,22 +512,22 @@ func (pm *ProxyManager) ProxyWebSocket(w http.ResponseWriter, r *http.Request, h
 		CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{conn.Subprotocol()}, OriginPatterns: []string{"*"}})
 	if acceptErr != nil {
 		_ = conn.Close(websocket.StatusInternalError, "client handshake failed")
-		hub.events.Publish(LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL,
+		h.events.Publish(LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL,
 			Status: capture.statusCode, DurationMs: time.Since(started).Milliseconds(), Source: "websocket-proxy", Error: acceptErr.Error(),
 			Target: target, ConnectionID: connectionID, RequestHeaders: r.Header.Clone(), ResponseHeaders: capture.responseHeaders()})
-		return true
+		return
 	}
 	conn.SetReadLimit(-1)
 	clientConn.SetReadLimit(-1)
-	hub.events.Publish(LogEvent{Type: "SOCKET", Method: "CONNECT", Path: r.RequestURI, URL: requestURL, Host: r.Host,
+	h.events.Publish(LogEvent{Type: "SOCKET", Method: "CONNECT", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: http.StatusSwitchingProtocols, DurationMs: time.Since(started).Milliseconds(),
 		Source: "websocket-proxy", Target: target, ConnectionID: connectionID, ClientID: connectionID, Adapter: adapter, Mode: "proxy",
 		Subprotocol: conn.Subprotocol(), RequestHeaders: r.Header.Clone(), ResponseHeaders: capture.responseHeaders()})
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	errCh := make(chan error, 2)
-	go tunnelWebSocketMessages(ctx, clientConn, conn, hub, r, target, connectionID, adapter, conn.Subprotocol(), "client_to_upstream", errCh)
-	go tunnelWebSocketMessages(ctx, conn, clientConn, hub, r, target, connectionID, adapter, conn.Subprotocol(), "upstream_to_client", errCh)
+	go tunnelWebSocketMessages(ctx, clientConn, conn, h, r, target, connectionID, adapter, conn.Subprotocol(), "client_to_upstream", errCh)
+	go tunnelWebSocketMessages(ctx, conn, clientConn, h, r, target, connectionID, adapter, conn.Subprotocol(), "upstream_to_client", errCh)
 	firstErr := <-errCh
 	closeCode, closeReason := socketCloseDetails(firstErr)
 	if closeCode < 0 {
@@ -541,11 +537,10 @@ func (pm *ProxyManager) ProxyWebSocket(w http.ResponseWriter, r *http.Request, h
 	_ = conn.Close(websocket.StatusCode(closeCode), closeReason)
 	cancel()
 	<-errCh
-	hub.events.Publish(LogEvent{Type: "SOCKET", Method: "CLOSE", Path: r.RequestURI, URL: requestURL, Host: r.Host,
+	h.events.Publish(LogEvent{Type: "SOCKET", Method: "CLOSE", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: closeCode, DurationMs: time.Since(started).Milliseconds(),
 		Source: "websocket-proxy", Target: target, ConnectionID: connectionID, ClientID: connectionID,
 		Subprotocol: conn.Subprotocol(), CloseCode: closeCode, CloseReason: closeReason, Error: errorText(firstErr)})
-	return true
 }
 
 type boundedLogWriter struct {

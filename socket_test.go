@@ -1,13 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,8 +16,6 @@ import (
 
 	"nhooyr.io/websocket"
 )
-
-var captureStdoutMu sync.Mutex
 
 func TestSubscriptionRegistryTracksClientsByChannel(t *testing.T) {
 	registry := NewSubscriptionRegistry()
@@ -48,123 +47,8 @@ func TestSubscriptionRegistryTracksClientsByChannel(t *testing.T) {
 	}
 }
 
-func TestRawAdapterSubscribeAndDispatchPayload(t *testing.T) {
-	adapter := RawAdapter{}
-
-	msg, err := adapter.ParseClientMessage([]byte(`{"type":"subscribe","id":"sub-1","channel":"/scores"}`))
-	if err != nil {
-		t.Fatalf("ParseClientMessage() error = %v", err)
-	}
-	if msg.Type != "subscribe" || msg.Channel != "/scores" || msg.SubscriptionID != "sub-1" {
-		t.Fatalf("ParseClientMessage() = %#v, want subscribe /scores sub-1", msg)
-	}
-
-	payload := json.RawMessage(`{"score":7}`)
-	encoded, err := adapter.EncodeServerMessage(ServerMsg{Type: "data", Channel: "/scores", Payload: payload})
-	if err != nil {
-		t.Fatalf("EncodeServerMessage() error = %v", err)
-	}
-	if string(encoded.Data) != string(payload) {
-		t.Fatalf("EncodeServerMessage() = %s, want %s", encoded.Data, payload)
-	}
-}
-
-func TestAppSyncAdapterEnvelope(t *testing.T) {
-	adapter := AppSyncAdapter{}
-
-	msg, err := adapter.ParseClientMessage([]byte(`{"type":"start","id":"sub-1","payload":{"channel":"/scores"}}`))
-	if err != nil {
-		t.Fatalf("ParseClientMessage() error = %v", err)
-	}
-	if msg.Type != "subscribe" || msg.Channel != "/scores" || msg.SubscriptionID != "sub-1" {
-		t.Fatalf("ParseClientMessage() = %#v, want subscribe /scores sub-1", msg)
-	}
-
-	encoded, err := adapter.EncodeServerMessage(ServerMsg{
-		Type:    "data",
-		ID:      "sub-1",
-		Channel: "/scores",
-		Payload: json.RawMessage(`{"score":7}`),
-	})
-	if err != nil {
-		t.Fatalf("EncodeServerMessage() error = %v", err)
-	}
-
-	var env struct {
-		Type    string `json:"type"`
-		ID      string `json:"id"`
-		Payload struct {
-			Data map[string]any `json:"data"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(encoded.Data, &env); err != nil {
-		t.Fatalf("encoded AppSync message is invalid JSON: %v", err)
-	}
-	if env.Type != "data" || env.ID != "sub-1" || env.Payload.Data["score"].(float64) != 7 {
-		t.Fatalf("encoded AppSync message = %s", encoded.Data)
-	}
-}
-
-func TestRelayAdapterControlFrames(t *testing.T) {
-	adapter := RelayAdapter{}
-
-	if !adapter.GreetsOnConnect() {
-		t.Fatalf("GreetsOnConnect() = false, want true")
-	}
-	if len(adapter.Subprotocols()) != 0 {
-		t.Fatalf("Subprotocols() = %v, want none", adapter.Subprotocols())
-	}
-
-	msg, err := adapter.ParseClientMessage([]byte(`{"type":"subscribe","id":"/osb/s/l/*","channel":"/osb/s/l/*","authorization":{"Authorization":"Basic token"}}`))
-	if err != nil {
-		t.Fatalf("ParseClientMessage() error = %v", err)
-	}
-	if msg.Type != "subscribe" || msg.Channel != "/osb/s/l/*" || msg.SubscriptionID != "/osb/s/l/*" {
-		t.Fatalf("ParseClientMessage() = %#v, want subscribe /osb/s/l/*", msg)
-	}
-
-	ack, err := adapter.EncodeServerMessage(ServerMsg{Type: "connection_ack"})
-	if err != nil {
-		t.Fatalf("EncodeServerMessage(connection_ack) error = %v", err)
-	}
-	if string(ack.Data) != `{"type":"connection_ack"}` {
-		t.Fatalf("connection_ack = %s", ack.Data)
-	}
-
-	subAck, err := adapter.EncodeServerMessage(ServerMsg{Type: "subscribe_ack", ID: "/scores", Channel: "/scores"})
-	if err != nil {
-		t.Fatalf("EncodeServerMessage(subscribe_ack) error = %v", err)
-	}
-	var subEnv struct {
-		Type    string `json:"type"`
-		Channel string `json:"channel"`
-	}
-	if err := json.Unmarshal(subAck.Data, &subEnv); err != nil {
-		t.Fatalf("subscribe ack is invalid JSON: %v", err)
-	}
-	if subEnv.Type != "subscribe_success" || subEnv.Channel != "/scores" {
-		t.Fatalf("subscribe ack = %s, want subscribe_success with channel", subAck.Data)
-	}
-
-	data, err := adapter.EncodeServerMessage(ServerMsg{Type: "data", Channel: "/scores", Payload: json.RawMessage(`{"score":7}`)})
-	if err != nil {
-		t.Fatalf("EncodeServerMessage(data) error = %v", err)
-	}
-	var dataEnv struct {
-		Type    string         `json:"type"`
-		Channel string         `json:"channel"`
-		Event   map[string]any `json:"event"`
-	}
-	if err := json.Unmarshal(data.Data, &dataEnv); err != nil {
-		t.Fatalf("data frame is invalid JSON: %v", err)
-	}
-	if dataEnv.Type != "data" || dataEnv.Channel != "/scores" || dataEnv.Event["score"].(float64) != 7 {
-		t.Fatalf("data frame = %s", data.Data)
-	}
-}
-
 func TestRelayAdapterAcksConnectionWithoutInit(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -203,7 +87,7 @@ func TestRelayAdapterAcksConnectionWithoutInit(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), ""); result.Delivered != 1 {
+	if result := hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "", ""); result.Delivered != 1 {
 		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
 	}
 
@@ -216,37 +100,8 @@ func TestRelayAdapterAcksConnectionWithoutInit(t *testing.T) {
 	}
 }
 
-func TestAppSyncAdapterErrorPayloadUsesJSONString(t *testing.T) {
-	adapter := AppSyncAdapter{}
-
-	encoded, err := adapter.EncodeServerMessage(ServerMsg{
-		Type:    "error",
-		ID:      "sub-1",
-		Payload: json.RawMessage(`"plain error"`),
-	})
-	if err != nil {
-		t.Fatalf("EncodeServerMessage() error = %v", err)
-	}
-
-	var env struct {
-		Type    string `json:"type"`
-		ID      string `json:"id"`
-		Payload struct {
-			Errors []struct {
-				Message string `json:"message"`
-			} `json:"errors"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(encoded.Data, &env); err != nil {
-		t.Fatalf("encoded AppSync error is invalid JSON: %v", err)
-	}
-	if env.Type != "error" || env.ID != "sub-1" || len(env.Payload.Errors) != 1 || env.Payload.Errors[0].Message != "plain error" {
-		t.Fatalf("encoded AppSync error = %s", encoded.Data)
-	}
-}
-
 func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if IsWebSocketRequest(r) {
@@ -286,7 +141,7 @@ func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+	result := hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "", "")
 	if result.Delivered != 1 {
 		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
 	}
@@ -301,7 +156,7 @@ func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 }
 
 func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hub.ServeHTTP)
 	server := httptest.NewServer(mux)
@@ -326,7 +181,7 @@ func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 200; i++ {
-			hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+			hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "", "")
 		}
 	}()
 
@@ -335,7 +190,7 @@ func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
 }
 
 func TestSocketHubDispatchAdapterFilter(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	rawClient := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -359,7 +214,7 @@ func TestSocketHubDispatchAdapterFilter(t *testing.T) {
 	hub.registry.Subscribe("/scores", rawClient.id)
 	hub.registry.Subscribe("/scores", appSyncClient.id)
 
-	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "appsync")
+	result := hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "appsync", "")
 	if result.Delivered != 1 {
 		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
 	}
@@ -391,36 +246,14 @@ func addRawTestSubscriber(hub *SocketHub, channel string) *SocketClient {
 	return client
 }
 
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	captureStdoutMu.Lock()
-	defer captureStdoutMu.Unlock()
-	old := os.Stdout
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe(): %v", err)
-	}
-	os.Stdout = writer
-	defer func() { os.Stdout = old }()
-	fn()
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close stdout writer: %v", err)
-	}
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read stdout: %v", err)
-	}
-	return string(data)
-}
-
 func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	hub := NewSocketHub(bus, false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	addRawTestSubscriber(hub, "/log")
 
-	hub.Dispatch("/log", json.RawMessage(`{"score":7}`), "")
+	hub.dispatchJSON("/log", json.RawMessage(`{"score":7}`), "", "")
 
 	event := waitForSocketMethod(t, events, "DISPATCH", "/log", time.Second)
 	var body DispatchLogBody
@@ -440,14 +273,14 @@ func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
 }
 
 func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	hub := NewSocketHub(bus, false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	addRawTestSubscriber(hub, "/large")
 
 	large := json.RawMessage(`{"data":"` + strings.Repeat("x", dispatchPayloadMaxBytes+128) + `"}`)
-	hub.Dispatch("/large", large, "")
+	hub.dispatchJSON("/large", large, "", "")
 
 	event := waitForSocketMethod(t, events, "DISPATCH", "/large", time.Second)
 	var body DispatchLogBody
@@ -487,13 +320,12 @@ func TestDispatchLogBodyTruncatesUTF8PayloadsAsValidJSONString(t *testing.T) {
 }
 
 func TestDispatchLogIncludesDecodedPayloadWithoutSSESubscribers(t *testing.T) {
-	bus := NewEventBus()
-	hub := NewSocketHub(bus, true, nil)
+	var out bytes.Buffer
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(NewRequestLogger(&out, true))})
 	addRawTestSubscriber(hub, "/decoded")
 
-	output := captureStdout(t, func() {
-		hub.Dispatch("/decoded", json.RawMessage(`{"score":7}`), "")
-	})
+	hub.dispatchJSON("/decoded", json.RawMessage(`{"score":7}`), "", "")
+	output := out.String()
 	var event LogEvent
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		if line == "" {
@@ -520,23 +352,6 @@ func TestDispatchLogIncludesDecodedPayloadWithoutSSESubscribers(t *testing.T) {
 	}
 	if payload["score"] != 7 {
 		t.Fatalf("payload = %#v, want score 7", payload)
-	}
-}
-
-func TestSocketAPIRejectsCrossOriginTextPlainDispatch(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
-	mux := http.NewServeMux()
-	RegisterSocketRoutes(mux, hub)
-
-	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/socket/dispatch", strings.NewReader(`{"channel":"/scores","payload":{}}`))
-	req.Header.Set("Origin", "https://evil.example")
-	req.Header.Set("Content-Type", "text/plain")
-	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("dispatch status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 
@@ -606,7 +421,7 @@ func TestSocketOriginPolicy(t *testing.T) {
 }
 
 func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -629,7 +444,7 @@ func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
 }
 
 func TestSocketHubAllowsLocalhostCrossPortHandshake(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -702,7 +517,7 @@ func TestShouldProxyWebSocket(t *testing.T) {
 }
 
 func TestSocketHubSubscribeMissingChannelSendsError(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -728,8 +543,8 @@ func TestSocketHubSubscribeMissingChannelSendsError(t *testing.T) {
 }
 
 func TestEnqueueControlPublishesErrorWhenClientClosed(t *testing.T) {
-	bus := NewEventBus()
-	hub := NewSocketHub(bus, false, nil)
+	bus := NewEventBus(nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 
@@ -782,7 +597,7 @@ func TestSocketClientEnqueueRejectsAfterClose(t *testing.T) {
 }
 
 func TestSocketClientDropCounterInSnapshot(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	client := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -803,50 +618,8 @@ func TestSocketClientDropCounterInSnapshot(t *testing.T) {
 	}
 }
 
-func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
-	bus := NewEventBus()
-	events := bus.Subscribe()
-	defer bus.Unsubscribe(events)
-	pub := NewCoalescingPublisher(bus, false)
-	for i := 0; i < SocketLogCoalesceThresholdPerSecond+5; i++ {
-		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK,
-			Direction: "ditto_to_client", Source: "test", RequestBody: fmt.Sprintf(`{"index":%d}`, i)})
-	}
-	deadline := time.After(1500 * time.Millisecond)
-	summaries := 0
-	for {
-		select {
-		case event := <-events:
-			if event.Method == "DISPATCH_BURST" {
-				summaries++
-			}
-		case <-deadline:
-			if summaries != 1 {
-				t.Fatalf("burst summaries = %d, want 1", summaries)
-			}
-			var burst LogEvent
-			for _, event := range bus.LogSummaries() {
-				if event.Method == "DISPATCH_BURST" {
-					burst = event
-				}
-			}
-			if burst.BurstCount != SocketLogCoalesceThresholdPerSecond+5 || burst.BurstStartCursor == "" || burst.BurstEndCursor == "" {
-				t.Fatalf("burst summary = %#v", burst)
-			}
-			members := bus.History("", burst.BurstStartCursor, burst.BurstEndCursor, "/burst", "DISPATCH", "ditto_to_client", "test", "", 0, 100, burst.BurstCount)
-			if !members.Complete || len(members.Events) != burst.BurstCount {
-				t.Fatalf("burst members = %d complete=%t gap=%#v", len(members.Events), members.Complete, members.Gap)
-			}
-			if detail, ok := bus.LogDetail(members.Events[0].ID); !ok || detail.RequestBody == "" {
-				t.Fatalf("suppressed dispatch detail not retained: %#v found=%t", detail, ok)
-			}
-			return
-		}
-	}
-}
-
 func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	client := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -869,7 +642,7 @@ func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
 }
 
 func TestDispatchEncodesPayloadOncePerAdapter(t *testing.T) {
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	adapter := &countingAdapter{}
 	clientA := &SocketClient{
 		id:            "client-a",
@@ -894,7 +667,7 @@ func TestDispatchEncodesPayloadOncePerAdapter(t *testing.T) {
 	hub.registry.Subscribe("/scores", clientA.id)
 	hub.registry.Subscribe("/scores", clientB.id)
 
-	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+	result := hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "", "")
 	if result.Delivered != 2 {
 		t.Fatalf("Dispatch() delivered %d clients, want 2", result.Delivered)
 	}
@@ -930,4 +703,313 @@ func (a *countingAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
 
 func (a *countingAdapter) Subprotocols() []string {
 	return nil
+}
+
+func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T) {
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(t.TempDir()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	protocol, err := adapters.Protocol("appsync-draftea")
+	if err != nil {
+		t.Fatalf("Protocol(appsync-draftea) error = %v", err)
+	}
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Schemas: &SchemaRegistry{}, Adapters: adapters})
+	client := &SocketClient{
+		id:            "appsync-draftea-1",
+		adapter:       "appsync-draftea",
+		protocol:      protocol,
+		control:       make(chan EncodedServerMessage, 1),
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{"/test": "sub-1"},
+	}
+	hub.addClient(client)
+	hub.registry.Subscribe("/test", client.id)
+
+	encodedPayload := EncodedPayload{
+		Data:     []byte{1, 2, 3},
+		Kind:     websocket.MessageBinary,
+		TypeName: "appsync.recovery.Recovery",
+	}
+	result, err := hub.Dispatch(SocketDispatch{
+		Channel:  "/test",
+		Adapter:  "appsync-draftea",
+		TypeName: "appsync.recovery.Recovery",
+		Payload:  json.RawMessage(`{"recoveryId":"r1"}`),
+		Encoded:  &encodedPayload,
+	})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	if result.Delivered != 1 {
+		t.Fatalf("delivered = %d, want 1; errors=%v", result.Delivered, result.Errors)
+	}
+
+	select {
+	case msg := <-client.send:
+		env, inner := decodeProfileEnvelope(t, msg.Data)
+		if env.ID != "sub-1" || env.Type != "data" {
+			t.Fatalf("outer = %#v, want Draftea data envelope", env)
+		}
+		if inner.T != "recovery" || inner.E != base64.StdEncoding.EncodeToString(encodedPayload.Data) {
+			t.Fatalf("inner = %#v, want recovery base64 envelope", inner)
+		}
+	default:
+		t.Fatalf("client did not receive dispatch frame")
+	}
+}
+
+func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(t.TempDir()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	protocol, err := adapters.Protocol("relay-draftea")
+	if err != nil {
+		t.Fatalf("Protocol(relay-draftea) error = %v", err)
+	}
+	if !adapterGreetsOnConnect(protocol) {
+		t.Fatalf("relay-draftea does not greet on connect")
+	}
+	if len(protocol.Subprotocols()) != 0 {
+		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
+	}
+
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Schemas: &SchemaRegistry{}, Adapters: adapters})
+	client := &SocketClient{
+		id:            "relay-draftea-1",
+		adapter:       "relay-draftea",
+		protocol:      protocol,
+		control:       make(chan EncodedServerMessage, 1),
+		send:          make(chan EncodedServerMessage, 1),
+		done:          make(chan struct{}),
+		subscriptions: map[string]string{"/osb/sport/league/*": "/osb/sport/league/*"},
+	}
+	hub.addClient(client)
+	hub.registry.Subscribe("/osb/sport/league/*", client.id)
+
+	encodedPayload := EncodedPayload{
+		Data:     []byte{1, 2, 3},
+		Kind:     websocket.MessageBinary,
+		TypeName: "appsync.betinfo.BetEventDto",
+	}
+	result, err := hub.Dispatch(SocketDispatch{
+		Channel:  "/osb/sport/league/*",
+		Adapter:  "relay-draftea",
+		TypeName: "appsync.betinfo.BetEventDto",
+		Payload:  json.RawMessage(`{"id":"bet-1"}`),
+		Encoded:  &encodedPayload,
+	})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	if result.Delivered != 1 {
+		t.Fatalf("delivered = %d, want 1; errors=%v", result.Delivered, result.Errors)
+	}
+
+	select {
+	case msg := <-client.send:
+		var env struct {
+			Type    string `json:"type"`
+			Channel string `json:"channel"`
+			Event   string `json:"event"`
+		}
+		if err := json.Unmarshal(msg.Data, &env); err != nil {
+			t.Fatalf("outer JSON error: %v; data=%s", err, msg.Data)
+		}
+		if env.Type != "data" || env.Channel != "/osb/sport/league/*" {
+			t.Fatalf("outer = %#v, want relay data envelope", env)
+		}
+		var inner struct {
+			T string `json:"t"`
+			E string `json:"e"`
+		}
+		if err := json.Unmarshal([]byte(env.Event), &inner); err != nil {
+			t.Fatalf("inner JSON error: %v; event=%s", err, env.Event)
+		}
+		if inner.T != "betInfo" || inner.E != base64.StdEncoding.EncodeToString(encodedPayload.Data) {
+			t.Fatalf("inner = %#v, want betInfo base64 envelope", inner)
+		}
+	default:
+		t.Fatalf("client did not receive dispatch frame")
+	}
+}
+
+func TestHubDispatchSuppressedByMode(t *testing.T) {
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Modes: reg})
+	for _, mode := range []ChannelMode{ModeLive, ModeRecord} {
+		if err := reg.Set(ChannelConfig{Channel: "/blocked", Mode: mode}); err != nil {
+			t.Fatalf("Set(%s) error = %v", mode, err)
+		}
+		result, err := hub.Dispatch(SocketDispatch{
+			Channel: "/blocked",
+			Payload: json.RawMessage(`{"ok":true}`),
+		})
+		if err != nil {
+			t.Fatalf("Dispatch(%s) fatal error = %v", mode, err)
+		}
+		if len(result.Errors) != 1 {
+			t.Fatalf("Dispatch(%s) errors = %#v, want suppression", mode, result.Errors)
+		}
+	}
+	for _, mode := range []ChannelMode{ModeMock, ModeMixed} {
+		if err := reg.Set(ChannelConfig{Channel: "/allowed", Mode: mode}); err != nil {
+			t.Fatalf("Set(%s) error = %v", mode, err)
+		}
+		result, err := hub.Dispatch(SocketDispatch{
+			Channel: "/allowed",
+			Payload: json.RawMessage(`{"ok":true}`),
+		})
+		if err != nil {
+			t.Fatalf("Dispatch(%s) error = %v", mode, err)
+		}
+		if len(result.Errors) != 0 {
+			t.Fatalf("Dispatch(%s) errors = %#v, want none", mode, result.Errors)
+		}
+	}
+}
+
+func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
+	bus := NewEventBus(nil)
+	events := bus.Subscribe()
+	defer bus.Unsubscribe(events)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	if err := modes.Set(ChannelConfig{Channel: "/burst-record", Mode: ModeRecord}); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir(), Modes: modes, Bus: bus})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
+	manifest, err := rec.Start("Burst Recording", "")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	for i := 0; i < 200; i++ {
+		hub.forwardFromUpstream("/burst-record", websocket.MessageText, []byte(`{"n":1}`))
+	}
+	if got := waitForBurstSummary(t, events, "/burst-record"); got != 200 {
+		t.Fatalf("burst total_frames = %d, want 200", got)
+	}
+	if _, err := rec.Stop(manifest.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	frames, err := rec.Frames(manifest.ID, "/burst-record", 0, 500)
+	if err != nil {
+		t.Fatalf("Frames() error = %v", err)
+	}
+	if len(frames) != 200 {
+		t.Fatalf("frames len = %d, want 200", len(frames))
+	}
+}
+
+func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.T) {
+	root := t.TempDir()
+	writeProto(t, filepath.Join(root, "events"), "event.proto", `syntax = "proto3"; package ditto.frame; message Event { string message = 1; }`)
+	schemas, err := NewSchemaRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := schemas.Encode("ditto.frame.Event", json.RawMessage(`{"message":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := ProtobufPayload("ditto.frame.Event", data)
+	envelope, err := json.Marshal(map[string]any{"type": "data", "payload": map[string]any{"data": map[string]any{
+		"base64": base64.StdEncoding.EncodeToString(encoded.Data), "content_type": encoded.ContentType, "type_name": encoded.TypeName,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bus := NewEventBus(nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
+	hub.schemas = schemas
+	hub.logSocketFrame(LogEvent{Status: 200, Adapter: "appsync"}, envelope, websocket.MessageText, encoded.TypeName)
+	detail, ok := bus.LogDetail(bus.LogSummaries()[0].ID)
+	if !ok {
+		t.Fatal("text frame was not retained")
+	}
+	if detail.Error != "" || detail.DecodeError != "" || !strings.Contains(detail.DecodedPayload, `"message":"hello"`) {
+		t.Fatalf("text envelope log = %#v, want decoded JSON without errors", detail)
+	}
+
+	bus = NewEventBus(nil)
+	hub = NewSocketHub(SocketHubConfig{Bus: bus})
+	hub.logSocketFrame(LogEvent{Status: 200, DeliveryState: "written"}, []byte{0xff, 0x01}, websocket.MessageBinary, "")
+	detail, ok = bus.LogDetail(bus.LogSummaries()[0].ID)
+	if !ok {
+		t.Fatal("binary frame was not retained")
+	}
+	if detail.Status != 200 || detail.DeliveryState != "written" || detail.Error != "" || detail.DecodeError == "" {
+		t.Fatalf("binary frame log = %#v, want successful transport plus decode limitation", detail)
+	}
+}
+
+func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
+	bus := NewEventBus(nil)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
+	if err != nil {
+		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+	}
+	if err := modes.Set(ChannelConfig{Channel: "/mixed", Mode: ModeMixed}); err != nil {
+		t.Fatalf("Set mixed mode: %v", err)
+	}
+	recDir := t.TempDir()
+	rec, err := NewRecorder(RecorderConfig{Dir: recDir, Modes: modes, Bus: bus})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
+	client := &SocketClient{
+		id:            "raw-1",
+		adapter:       "raw",
+		protocol:      RawAdapter{},
+		send:          make(chan EncodedServerMessage, 4),
+		done:          make(chan struct{}),
+		connected:     time.Now(),
+		subscriptions: map[string]string{"/mixed": "sub-1"},
+	}
+	hub.addClient(client)
+	hub.registry.Subscribe("/mixed", client.id)
+
+	manifest, err := rec.Start("Mixed Local", "")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	payload := json.RawMessage(`{"local":true}`)
+	result, err := hub.Dispatch(SocketDispatch{Channel: "/mixed", Payload: payload})
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	if result.Delivered != 1 {
+		t.Fatalf("delivered = %d, want 1", result.Delivered)
+	}
+	if _, err := rec.Stop(manifest.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	frames, err := rec.Frames(manifest.ID, "/mixed", 0, 10)
+	if err != nil {
+		t.Fatalf("Frames() error = %v", err)
+	}
+	if len(frames) != 1 || frames[0].Direction != "local" {
+		t.Fatalf("frames = %#v, want one local frame", frames)
+	}
+	raw, err := base64.StdEncoding.DecodeString(frames[0].RawB64)
+	if err != nil {
+		t.Fatalf("raw_b64 invalid: %v", err)
+	}
+	if string(raw) != string(payload) {
+		t.Fatalf("recorded raw = %s, want wrapped payload %s", raw, payload)
+	}
 }

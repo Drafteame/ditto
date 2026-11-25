@@ -9,8 +9,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -71,6 +73,17 @@ func (pm *ProxyManager) SetTarget(target string) error {
 	return nil
 }
 
+// Director returns the current reverse proxy's request director and target
+// as one snapshot, or a nil director when no target is configured.
+func (pm *ProxyManager) Director() (func(*http.Request), string) {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if pm.proxy == nil || pm.target == "" {
+		return nil, ""
+	}
+	return pm.proxy.Director, pm.target
+}
+
 func (pm *ProxyManager) Target() string {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -120,7 +133,6 @@ type Server struct {
 	SocketHub  *SocketHub
 	Modes      *ChannelModeRegistry
 	Recorder   *Recorder
-	Live       *LiveBridge
 	LiveTarget *LiveTargetManager
 	Schemas    *SchemaRegistry
 	Templates  *EventTemplateRegistry
@@ -131,8 +143,10 @@ type Server struct {
 	CertPath   string
 	KeyPath    string
 
-	mu       sync.Mutex
-	listener net.Listener
+	mu         sync.Mutex
+	http       *http.Server
+	listener   net.Listener
+	cancelBase context.CancelFunc
 }
 
 // NewServer creates and configures the HTTP server with all routes.
@@ -164,42 +178,42 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to load mocks: %w", err)
 	}
 
-	bus := NewEventBus()
+	bus := NewEventBus(NewRequestLogger(os.Stdout, cfg.JSONLogs))
 	proxyMgr := NewProxyManager(cfg.Target)
-	jsonLogs := cfg.JSONLogs
-	modeRegistry, err := NewChannelModeRegistry(cfg.Layout.ChannelModesDir, bus, jsonLogs)
+	modeRegistry, err := NewChannelModeRegistry(cfg.Layout.ChannelModesDir, bus)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load channel mode registry: %w", err)
 	}
-	socketHub := NewSocketHub(bus, jsonLogs, modeRegistry)
-	descriptorsDir := cfg.Layout.DescriptorsDir
-	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
+	// Load order matters: templates skip entries whose adapter or schema type
+	// is unknown, and sequences skip entries whose template is unknown.
+	schemaRegistry, err := NewSchemaRegistry(cfg.Layout.DescriptorsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)
 	}
-	socketHub.SetSchemas(schemaRegistry)
-	if err := LoadAdapterProfiles(cfg.Layout.AdapterProfilesDir); err != nil {
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(cfg.Layout.AdapterProfilesDir); err != nil {
 		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
 	}
-	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir, schemaRegistry)
+	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir, schemaRegistry, adapters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event template registry: %w", err)
 	}
-	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry)
+	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry, adapters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
 	}
-	recorder, err := NewRecorder(cfg.Layout.RecordingsDir, schemaRegistry, modeRegistry, bus, jsonLogs)
+	recorder, err := NewRecorder(RecorderConfig{Dir: cfg.Layout.RecordingsDir, Schemas: schemaRegistry,
+		Adapters: adapters, Modes: modeRegistry, Bus: bus})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load recorder: %w", err)
 	}
-	modeRegistry.OnChange(recorder.HandleModeChange)
-	socketHub.SetRecorder(recorder)
 	liveTargets := NewLiveTargetManager(cfg.LiveTarget, cfg.ConfigStore)
-	liveBridge := NewLiveBridge(liveTargets, socketHub)
-	socketHub.SetLiveBridge(liveBridge)
+	socketHub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modeRegistry, Schemas: schemaRegistry,
+		Adapters: adapters, Recorder: recorder, LiveTargets: liveTargets})
+	// Registered after the hub's own listener to keep the original call order.
+	modeRegistry.OnChange(recorder.HandleModeChange)
 	playerBroadcaster := NewPlayerBroadcaster()
-	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster, nil)
+	sequencePlayer := NewSequencePlayer(SequencePlayerConfig{Sequences: eventSequences, Schemas: schemaRegistry, Hub: socketHub, Broadcaster: playerBroadcaster})
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
@@ -227,12 +241,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	RegisterUI(mux, store, bus, proxyMgr, liveTargets.Target, info, cfg.ServeUI)
-	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
+	RegisterSocketRoutes(mux, socketHub)
 	RegisterChannelModeRoutes(mux, modeRegistry)
 	RegisterLiveTargetRoutes(mux, liveTargets)
 	RegisterRecordingRoutes(mux, recorder)
 	RegisterSchemaRoutes(mux, schemaRegistry)
-	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub, schemaRegistry)
+	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub)
 	RegisterSequenceRoutes(mux, eventSequences, sequencePlayer, playerBroadcaster)
 
 	// Main proxy/mock handler
@@ -245,9 +259,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				http.Error(w, "origin not allowed", http.StatusForbidden)
 				return
 			}
-			if shouldProxyWebSocket(r) && proxyMgr.Target() != "" {
-				proxyMgr.ProxyWebSocket(w, r, socketHub)
-				return
+			if shouldProxyWebSocket(r) {
+				if direct, target := proxyMgr.Director(); direct != nil {
+					socketHub.Tunnel(w, r, target, direct)
+					return
+				}
 			}
 			socketHub.ServeHTTP(w, r)
 			return
@@ -301,7 +317,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			event.Type, event.Method, event.Path, event.Status = "MISS", r.Method, requestPath, http.StatusBadRequest
 			event.DurationMs, event.ResponseBody, event.ResponsePayload = time.Since(start).Milliseconds(), responseBody, responsePayload
 			event.ResponseHeaders, event.Error = capture.responseHeaders(), reqReadErr.Error()
-			publishLogEvent(jsonLogs, bus, event)
+			bus.Publish(event)
 			return
 		}
 
@@ -332,7 +348,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				event.SequenceStep = resolved.SequenceStep
 				event.SequenceLen = resolved.SequenceLen
 			}
-			publishLogEvent(jsonLogs, bus, event)
+			bus.Publish(event)
 			return
 		}
 
@@ -351,7 +367,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			if capture.writeErr != nil {
 				event.Error = capture.writeErr.Error()
 			}
-			publishLogEvent(jsonLogs, bus, event)
+			bus.Publish(event)
 			return
 		}
 
@@ -371,7 +387,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if reqReadErr != nil {
 			event.Error = "request body: " + reqReadErr.Error()
 		}
-		publishLogEvent(jsonLogs, bus, event)
+		bus.Publish(event)
 	})
 
 	return &Server{
@@ -382,7 +398,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		SocketHub:  socketHub,
 		Modes:      modeRegistry,
 		Recorder:   recorder,
-		Live:       liveBridge,
 		LiveTarget: liveTargets,
 		Schemas:    schemaRegistry,
 		Templates:  eventTemplates,
@@ -395,78 +410,102 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}, nil
 }
 
-// ListenAndServe starts the HTTP server (blocking).
-func (s *Server) ListenAndServe() error {
-	addr := fmt.Sprintf("0.0.0.0:%d", s.Config.Port)
-
-	ln, err := net.Listen("tcp", addr)
+// Start binds the configured port and serves in the background. It returns
+// once the port is bound, or the bind error.
+func (s *Server) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.http == nil {
+		baseCtx, cancel := context.WithCancel(context.Background())
+		s.cancelBase = cancel
+		s.http = &http.Server{
+			Handler:           s.Mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			// Cancelled on Shutdown so streaming (SSE) handlers return.
+			BaseContext: func(net.Listener) context.Context { return baseCtx },
+		}
+	}
+	ln, err := listen(s.Config.Port)
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
 	s.listener = ln
-	s.mu.Unlock()
+	go s.serve(s.http, ln)
+	return nil
+}
 
+func listen(port int) (net.Listener, error) {
+	return net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+}
+
+func (s *Server) serve(srv *http.Server, ln net.Listener) {
+	var err error
 	if s.Config.HTTPS {
-		return http.ServeTLS(ln, s.Mux, s.CertPath, s.KeyPath)
+		err = srv.ServeTLS(ln, s.CertPath, s.KeyPath)
+	} else {
+		err = srv.Serve(ln)
 	}
-	return http.Serve(ln, s.Mux)
+	// Restart closes the old listener on purpose; Shutdown closes the server.
+	if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		log.Printf("server on %s stopped: %v", ln.Addr(), err)
+	}
 }
 
-// ListenAndServeAsync starts the HTTP server in a goroutine and returns
-// once the server is ready to accept connections.
-func (s *Server) ListenAndServeAsync() error {
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- s.ListenAndServe()
-	}()
-
-	// Wait for the server to start (or fail)
-	for i := 0; i < 50; i++ {
-		select {
-		case err := <-errCh:
-			return err
-		default:
-		}
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/__ditto__/api/mocks", s.Config.Port))
-		if err == nil {
-			resp.Body.Close()
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("server failed to start within 5s")
-}
-
-// Stop closes the listener, freeing the port.
-func (s *Server) Stop() error {
+// Restart moves the server to newPort. The new port is bound before the old
+// listener closes, so a failed bind leaves the server on its current port,
+// and connections already open (SSE streams, WebSockets) stay up. Running
+// sequence players are stopped, as they always were on a port change.
+func (s *Server) Restart(newPort int) error {
+	s.stopPlayers()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.Player != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = s.Player.Shutdown(ctx)
-		cancel()
+	if s.http == nil {
+		return fmt.Errorf("server is not running")
 	}
-	if s.listener != nil {
-		err := s.listener.Close()
-		s.listener = nil
+	ln, err := listen(newPort)
+	if err != nil {
 		return err
+	}
+	old := s.listener
+	s.listener = ln
+	s.Config.Port = newPort
+	s.Info.Port = newPort
+	go s.serve(s.http, ln)
+	if old != nil {
+		_ = old.Close()
 	}
 	return nil
 }
 
-// Restart stops the server and starts it on a new port.
-func (s *Server) Restart(newPort int) error {
-	s.Stop()
-	time.Sleep(500 * time.Millisecond)
-	s.Config.Port = newPort
-	s.Info.Port = newPort
-	return s.ListenAndServeAsync()
+// Shutdown stops sequence players, ends streaming handlers and stops the
+// server, waiting for in-flight requests until ctx is done. Hijacked
+// WebSocket connections are not waited for.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopPlayers()
+	s.mu.Lock()
+	srv, cancel := s.http, s.cancelBase
+	s.listener = nil
+	s.mu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	cancel()
+	return srv.Shutdown(ctx)
+}
+
+func (s *Server) stopPlayers() {
+	if s.Player == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = s.Player.Shutdown(ctx)
 }
 
 // Port returns the current port.
 func (s *Server) Port() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.Config.Port
 }
 
@@ -871,20 +910,33 @@ func parseRequestForm(body []byte, contentType string, inputIncomplete bool) (ma
 	return nil, nil, false
 }
 
-// logRequest writes a single request log line.
-func logRequest(jsonMode bool, e LogEvent) {
-	logRequestTo(os.Stdout, jsonMode, e)
+// RequestLogger writes one line per log event in the --log-format: a short
+// human-readable line, or the event as a JSON object. A nil *RequestLogger
+// discards events.
+type RequestLogger struct {
+	mu   sync.Mutex
+	w    io.Writer
+	json bool
 }
 
-func logRequestTo(w io.Writer, jsonMode bool, e LogEvent) {
-	if jsonMode {
+func NewRequestLogger(w io.Writer, json bool) *RequestLogger {
+	return &RequestLogger{w: w, json: json}
+}
+
+func (l *RequestLogger) Log(e LogEvent) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.json {
 		data, err := json.Marshal(e)
 		if err != nil {
 			return
 		}
-		fmt.Fprintln(w, string(data))
+		fmt.Fprintln(l.w, string(data))
 		return
 	}
-	fmt.Fprintf(w, "%s %s %-6s %s %s → %d (%dms)\n",
+	fmt.Fprintf(l.w, "%s %s %-6s %s %s → %d (%dms)\n",
 		e.Timestamp, e.ID, e.Type, e.Method, e.Path, e.Status, e.DurationMs)
 }

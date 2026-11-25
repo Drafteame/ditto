@@ -47,11 +47,11 @@ func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	bus := NewEventBus()
-	hub := NewSocketHub(bus, false, nil)
+	bus := NewEventBus(nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	proxy := NewProxyManager(upstream.URL + "/base?from=target")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !proxy.ProxyWebSocket(w, r, hub) {
+		if !tunnelThrough(proxy, hub, w, r) {
 			http.NotFound(w, r)
 		}
 	}))
@@ -135,11 +135,11 @@ func TestDirectWebSocketProxyReplaysFullUpstreamRejectionBody(t *testing.T) {
 		_, _ = io.WriteString(w, body)
 	}))
 	defer upstream.Close()
-	bus := NewEventBus()
-	hub := NewSocketHub(bus, false, nil)
+	bus := NewEventBus(nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	proxy := NewProxyManager(upstream.URL)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxy.ProxyWebSocket(w, r, hub)
+		tunnelThrough(proxy, hub, w, r)
 	}))
 	defer server.Close()
 
@@ -184,9 +184,9 @@ func TestDirectWebSocketProxyPreservesUpstreamCloseCodeAndReason(t *testing.T) {
 		_ = conn.Close(websocket.StatusPolicyViolation, "blocked by upstream")
 	}))
 	defer upstream.Close()
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	proxy := NewProxyManager(upstream.URL)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxy.ProxyWebSocket(w, r, hub) }))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { tunnelThrough(proxy, hub, w, r) }))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -226,14 +226,12 @@ func TestLiveBridgeLogsQueuedWrittenAndUpstreamFanoutWithCorrelatedIDs(t *testin
 		}
 	}))
 	defer upstream.Close()
-	bus := NewEventBus()
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
+	bus := NewEventBus(nil)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := NewSocketHub(bus, false, modes)
-	bridge := NewLiveBridge(NewLiveTargetManager(httpToWS(upstream.URL), nil), hub)
-	hub.SetLiveBridge(bridge)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, LiveTargets: NewLiveTargetManager(httpToWS(upstream.URL), nil)})
 	if err := modes.Set(ChannelConfig{Channel: "/live", Mode: ModeLive}); err != nil {
 		t.Fatal(err)
 	}
@@ -310,14 +308,15 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := schemas.Encode("ditto.test.Item", json.RawMessage(`{"name":"without-subscriber"}`))
+	data, err := schemas.Encode("ditto.test.Item", json.RawMessage(`{"name":"without-subscriber"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bus := NewEventBus()
-	hub := NewSocketHub(bus, false, nil)
+	encoded := ProtobufPayload("ditto.test.Item", data)
+	bus := NewEventBus(nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.schemas = schemas
-	result := hub.DispatchEncodedWithSourcePayload("/proto", encoded, "", "manual", json.RawMessage(`{"name":"without-subscriber"}`))
+	result := hub.dispatchEncoded("/proto", encoded, "", "manual", json.RawMessage(`{"name":"without-subscriber"}`))
 	if result.Queued != 0 || result.Delivered != 0 {
 		t.Fatalf("dispatch result = %#v, want no recipients", result)
 	}
@@ -340,15 +339,15 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 		t.Fatalf("decoded payload = %s", detail.DecodedPayload)
 	}
 
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatal(err)
 	}
-	suppressedHub := NewSocketHub(bus, false, modes)
+	suppressedHub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes})
 	if err := modes.Set(ChannelConfig{Channel: "/suppressed", Mode: ModeLive}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = dispatchRendered(suppressedHub, nil, RenderedDispatch{Channel: "/suppressed", Source: "sequence", Payload: json.RawMessage(`{"visible":true}`)}, nil)
+	_, err = suppressedHub.Dispatch(SocketDispatch{Channel: "/suppressed", Source: "sequence", Payload: json.RawMessage(`{"visible":true}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,15 +367,15 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 }
 
 func TestDispatchLogsPerClientQueueDrop(t *testing.T) {
-	bus := NewEventBus()
-	hub := NewSocketHub(bus, false, nil)
+	bus := NewEventBus(nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	client := testSocketClient("full")
 	client.url, client.host, client.remoteAddr, client.protocolName = "ws://client.test/socket", "client.test", "127.0.0.1:5555", "HTTP/1.1"
 	client.addSubscription("/drop", "sub-1")
 	client.send <- EncodedServerMessage{Kind: websocket.MessageText, Data: []byte("already queued")}
 	hub.addClient(client)
 	hub.registry.Subscribe("/drop", client.id)
-	result := hub.Dispatch("/drop", json.RawMessage(`{"drop":true}`), "")
+	result := hub.dispatchJSON("/drop", json.RawMessage(`{"drop":true}`), "", "")
 	if result.Delivered != 0 || len(result.Dropped) != 1 {
 		t.Fatalf("dispatch result = %#v", result)
 	}
@@ -390,4 +389,14 @@ func TestDispatchLogsPerClientQueueDrop(t *testing.T) {
 		}
 	}
 	t.Fatal("dropped client frame was not retained")
+}
+
+// tunnelThrough tunnels r to proxy's target, reporting false when no target is set.
+func tunnelThrough(proxy *ProxyManager, hub *SocketHub, w http.ResponseWriter, r *http.Request) bool {
+	direct, target := proxy.Director()
+	if direct == nil {
+		return false
+	}
+	hub.Tunnel(w, r, target, direct)
+	return true
 }

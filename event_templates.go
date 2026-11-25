@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,6 +61,7 @@ type EventTemplateRegistry struct {
 	dir       string
 	templates map[string]EventTemplate
 	schemas   *SchemaRegistry
+	adapters  *AdapterRegistry
 }
 
 type eventTemplatesResponse struct {
@@ -82,7 +81,10 @@ type eventTemplateDispatchResponse struct {
 	InvalidCasts     []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
 }
 
-func NewEventTemplateRegistry(dir string, schemas *SchemaRegistry) (*EventTemplateRegistry, error) {
+// NewEventTemplateRegistry loads the templates in dir. Templates that name an
+// adapter or schema type unknown to adapters or schemas are skipped, so both
+// must be loaded first.
+func NewEventTemplateRegistry(dir string, schemas *SchemaRegistry, adapters *AdapterRegistry) (*EventTemplateRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -94,6 +96,7 @@ func NewEventTemplateRegistry(dir string, schemas *SchemaRegistry) (*EventTempla
 		dir:       absDir,
 		templates: make(map[string]EventTemplate),
 		schemas:   schemas,
+		adapters:  adapters,
 	}
 	if err := reg.Load(); err != nil {
 		return nil, err
@@ -115,7 +118,7 @@ func (r *EventTemplateRegistry) Load() error {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !isSafeEventTemplateID(id) {
+		if !validID(id) {
 			log.Printf("event template %s skipped: unsafe id", entry.Name())
 			continue
 		}
@@ -135,11 +138,11 @@ func (r *EventTemplateRegistry) Load() error {
 		fileID := tmpl.ID
 		tmpl = normalizeEventTemplate(tmpl)
 		tmpl.ID = fileID
-		if tmpl.ID != id || !isSafeEventTemplateID(tmpl.ID) {
+		if tmpl.ID != id || !validID(tmpl.ID) {
 			log.Printf("event template %s skipped: id mismatch", entry.Name())
 			continue
 		}
-		if err := validateEventTemplate(tmpl, r.schemas); err != nil {
+		if err := validateEventTemplate(tmpl, r.schemas, r.adapters); err != nil {
 			log.Printf("event template %s skipped: %v", entry.Name(), err)
 			continue
 		}
@@ -167,7 +170,7 @@ func (r *EventTemplateRegistry) Templates() []EventTemplate {
 }
 
 func (r *EventTemplateRegistry) Get(id string) (EventTemplate, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return EventTemplate{}, fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	r.mu.RLock()
@@ -179,13 +182,13 @@ func (r *EventTemplateRegistry) Get(id string) (EventTemplate, error) {
 	return cloneEventTemplate(tmpl), nil
 }
 
-func (r *EventTemplateRegistry) Create(tmpl EventTemplate, schemas *SchemaRegistry) (EventTemplate, error) {
+func (r *EventTemplateRegistry) Create(tmpl EventTemplate) (EventTemplate, error) {
 	tmpl = normalizeEventTemplate(tmpl)
 	now := time.Now().UTC()
 	tmpl.ID = ""
 	tmpl.CreatedAt = now
 	tmpl.UpdatedAt = now
-	if err := validateEventTemplate(tmpl, schemas); err != nil {
+	if err := validateEventTemplate(tmpl, r.schemas, r.adapters); err != nil {
 		return EventTemplate{}, err
 	}
 
@@ -206,12 +209,12 @@ func (r *EventTemplateRegistry) Create(tmpl EventTemplate, schemas *SchemaRegist
 	return cloneEventTemplate(tmpl), nil
 }
 
-func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate, schemas *SchemaRegistry) (EventTemplate, error) {
-	if !isSafeEventTemplateID(id) {
+func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate) (EventTemplate, error) {
+	if !validID(id) {
 		return EventTemplate{}, fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	tmpl = normalizeEventTemplate(tmpl)
-	if err := validateEventTemplate(tmpl, schemas); err != nil {
+	if err := validateEventTemplate(tmpl, r.schemas, r.adapters); err != nil {
 		return EventTemplate{}, err
 	}
 
@@ -235,7 +238,7 @@ func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate, schemas *S
 }
 
 func (r *EventTemplateRegistry) Delete(id string) error {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	r.mu.Lock()
@@ -250,10 +253,22 @@ func (r *EventTemplateRegistry) Delete(id string) error {
 	return nil
 }
 
-func (r *EventTemplateRegistry) Render(id string, vars map[string]string) (RenderedDispatch, error) {
+// RenderedTemplate is a template with its variables substituted. Missing and
+// InvalidCasts report variables that could not be resolved; callers must not
+// dispatch a render that has either.
+type RenderedTemplate struct {
+	Channel      string
+	Adapter      string
+	TypeName     string
+	Payload      json.RawMessage
+	Missing      []string
+	InvalidCasts []EventTemplateInvalidCast
+}
+
+func (r *EventTemplateRegistry) Render(id string, vars map[string]string) (RenderedTemplate, error) {
 	tmpl, err := r.Get(id)
 	if err != nil {
-		return RenderedDispatch{}, err
+		return RenderedTemplate{}, err
 	}
 	defaults := make(map[string]*string)
 	for _, variable := range tmpl.Variables {
@@ -267,16 +282,15 @@ func (r *EventTemplateRegistry) Render(id string, vars map[string]string) (Rende
 	}
 	payload, missing, invalidCasts, err := resolveTemplateDetailed(tmpl.Payload, vars, defaults)
 	if err != nil {
-		return RenderedDispatch{}, err
+		return RenderedTemplate{}, err
 	}
-	return RenderedDispatch{
+	return RenderedTemplate{
 		Channel:      strings.TrimSpace(tmpl.Channel),
 		Adapter:      tmpl.Adapter,
 		TypeName:     tmpl.TypeName,
 		Payload:      payload,
 		Missing:      missing,
 		InvalidCasts: invalidCasts,
-		Source:       "template:" + tmpl.ID,
 	}, nil
 }
 
@@ -292,33 +306,7 @@ func (r *EventTemplateRegistry) nextIDLocked(name string) string {
 }
 
 func (r *EventTemplateRegistry) writeLocked(tmpl EventTemplate, overwrite bool) error {
-	data, err := json.MarshalIndent(tmpl, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := r.pathForIDLocked(tmpl.ID)
-	tmp := path + ".tmp"
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	if !overwrite {
-		if _, err := os.Stat(path); err == nil {
-			return os.ErrExist
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
+	return writeJSONFile(r.pathForIDLocked(tmpl.ID), tmpl, overwrite)
 }
 
 func (r *EventTemplateRegistry) pathForIDLocked(id string) string {
@@ -513,7 +501,7 @@ func newTemplateUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegistry, hub *SocketHub, schemas *SchemaRegistry) {
+func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegistry, hub *SocketHub) {
 	if registry == nil {
 		return
 	}
@@ -535,7 +523,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegi
 			if ok := decodeEventTemplateJSON(w, r, &tmpl, false); !ok {
 				return
 			}
-			created, err := registry.Create(tmpl, schemas)
+			created, err := registry.Create(tmpl)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -559,7 +547,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegi
 			return
 		}
 		if action == "dispatch" {
-			handleEventTemplateDispatch(w, r, registry, hub, schemas, id)
+			handleEventTemplateDispatch(w, r, registry, hub, id)
 			return
 		}
 		switch r.Method {
@@ -580,7 +568,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegi
 			if ok := decodeEventTemplateJSON(w, r, &tmpl, false); !ok {
 				return
 			}
-			updated, err := registry.Update(id, tmpl, schemas)
+			updated, err := registry.Update(id, tmpl)
 			if err != nil {
 				status := http.StatusBadRequest
 				if errors.Is(err, ErrEventTemplateNotFound) {
@@ -603,7 +591,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegi
 	})
 }
 
-func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registry *EventTemplateRegistry, hub *SocketHub, schemas *SchemaRegistry, id string) {
+func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registry *EventTemplateRegistry, hub *SocketHub, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -640,10 +628,20 @@ func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registr
 		})
 		return
 	}
-	result, err := dispatchRendered(hub, schemas, rendered, &dispatchOverrides{
-		Channel: req.ChannelOverride,
-		Adapter: req.AdapterOverride,
-	})
+	dispatch := SocketDispatch{
+		Channel:  rendered.Channel,
+		Adapter:  rendered.Adapter,
+		TypeName: rendered.TypeName,
+		Payload:  rendered.Payload,
+		Source:   "template:" + id,
+	}
+	if override := strings.TrimSpace(req.ChannelOverride); override != "" {
+		dispatch.Channel = override
+	}
+	if strings.TrimSpace(req.AdapterOverride) != "" {
+		dispatch.Adapter = req.AdapterOverride
+	}
+	result, err := hub.Dispatch(dispatch)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -704,16 +702,16 @@ func describeInvalidCasts(casts []EventTemplateInvalidCast) string {
 
 func splitEventTemplatePath(rest string) (id string, action string, ok bool) {
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) == 1 && isSafeEventTemplateID(parts[0]) {
+	if len(parts) == 1 && validID(parts[0]) {
 		return parts[0], "", true
 	}
-	if len(parts) == 2 && parts[1] == "dispatch" && isSafeEventTemplateID(parts[0]) {
+	if len(parts) == 2 && parts[1] == "dispatch" && validID(parts[0]) {
 		return parts[0], parts[1], true
 	}
 	return "", "", false
 }
 
-func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry) error {
+func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry, adapters *AdapterRegistry) error {
 	if tmpl.Version != 1 {
 		return fmt.Errorf("unsupported event template version %d", tmpl.Version)
 	}
@@ -731,7 +729,7 @@ func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry) error {
 		return fmt.Errorf("channel variables are not supported")
 	}
 	adapter := normalizeAdapter(tmpl.Adapter)
-	if _, err := NewProtocolAdapter(adapter); err != nil {
+	if _, err := adapters.Protocol(adapter); err != nil {
 		return err
 	}
 	if len(tmpl.Payload) == 0 {
@@ -869,30 +867,7 @@ func normalizeEventTemplate(tmpl EventTemplate) EventTemplate {
 }
 
 func eventTemplateID(name string, attempt int) string {
-	base := sanitizePackName(name)
-	if base == "" {
-		base = "event-template"
-	}
-	runes := []rune(base)
-	if len(runes) > 48 {
-		base = strings.Trim(string(runes[:48]), "-")
-	}
-	input := name
-	if attempt > 0 {
-		input = fmt.Sprintf("%s\n%d", name, attempt)
-	}
-	sum := sha256.Sum256([]byte(input))
-	return fmt.Sprintf("%s-%s", base, hex.EncodeToString(sum[:])[:8])
-}
-
-func isSafeEventTemplateID(id string) bool {
-	id = strings.TrimSpace(id)
-	return id != "" &&
-		id != "." &&
-		id != ".." &&
-		!strings.Contains(id, "/") &&
-		!strings.Contains(id, string(os.PathSeparator)) &&
-		id == sanitizePackName(id)
+	return hashedID(name, "event-template", nameAttempt(name, attempt))
 }
 
 func cloneEventTemplate(tmpl EventTemplate) EventTemplate {

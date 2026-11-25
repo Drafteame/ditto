@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -115,19 +114,6 @@ const (
 	MaxRetainedLogBytes  = 32 << 20
 )
 
-var nextLogEventID atomic.Uint64
-
-// prepareLogEvent is only used when no EventBus is configured.
-func prepareLogEvent(event LogEvent) LogEvent {
-	if event.ID == "" {
-		event.ID = fmt.Sprintf("log-local-%d", nextLogEventID.Add(1))
-	}
-	if _, err := time.Parse(time.RFC3339Nano, event.Timestamp); err != nil {
-		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
-	}
-	return event
-}
-
 func cloneLogEvent(event LogEvent) LogEvent {
 	cloneHeaders := func(src map[string][]string) map[string][]string {
 		if src == nil {
@@ -204,14 +190,18 @@ type EventBus struct {
 	retainedBytes  int
 	session        string
 	nextSeq        uint64
+	log            *RequestLogger
 }
 
-func NewEventBus() *EventBus {
+// NewEventBus returns a bus that also writes every published event to log.
+// A nil log disables the request log.
+func NewEventBus(log *RequestLogger) *EventBus {
 	var random [12]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		copy(random[:], []byte(fmt.Sprintf("%012x", time.Now().UnixNano())))
 	}
-	return &EventBus{clients: make(map[chan LogEvent]struct{}), summaryClients: make(map[chan LogEvent]struct{}), session: hex.EncodeToString(random[:])}
+	return &EventBus{clients: make(map[chan LogEvent]struct{}), summaryClients: make(map[chan LogEvent]struct{}),
+		session: hex.EncodeToString(random[:]), log: log}
 }
 
 func (b *EventBus) Subscribe() chan LogEvent {
@@ -231,8 +221,10 @@ func (b *EventBus) Unsubscribe(ch chan LogEvent) {
 	b.mu.Unlock()
 }
 
+// Publish assigns the event its ID, timestamp and cursor, retains it, sends
+// it to subscribers and writes it to the request log.
 func (b *EventBus) Publish(event LogEvent) {
-	b.publishWithSummary(event, true)
+	b.log.Log(b.publishWithSummary(event, true))
 }
 
 func (b *EventBus) publishWithSummary(event LogEvent, send bool) LogEvent {
@@ -482,17 +474,6 @@ func (b *EventBus) LogDetail(id string) (LogEvent, bool) {
 		}
 	}
 	return LogEvent{}, false
-}
-
-// publishLogEvent assigns identity once, then shares that event with stdout and
-// the retained/SSE bus. The event bus preserves IDs already assigned here.
-func publishLogEvent(jsonMode bool, bus *EventBus, event LogEvent) {
-	if bus != nil {
-		event = bus.publishWithSummary(event, true)
-	} else {
-		event = prepareLogEvent(event)
-	}
-	logRequest(jsonMode, event)
 }
 
 // ServerInfo holds metadata shown in the UI footer and connect panel.
@@ -949,7 +930,8 @@ func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *ProxyManager,
 				})
 				return
 			}
-			// Respond first, then restart async (closing the listener kills in-flight requests)
+			// Respond before restarting; this connection survives the
+			// listener swap, so the client still reads the response.
 			if cfgStore != nil {
 				cfgStore.SetPort(req.Port)
 			}
@@ -960,12 +942,9 @@ func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *ProxyManager,
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			go func() {
-				time.Sleep(200 * time.Millisecond)
-				if err := srv.Restart(req.Port); err != nil {
-					log.Printf("Failed to restart on port %d: %v", req.Port, err)
-				}
-			}()
+			if err := srv.Restart(req.Port); err != nil {
+				log.Printf("Failed to restart on port %d: %v", req.Port, err)
+			}
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -54,6 +54,7 @@ type EventSequenceRegistry struct {
 	sequences map[string]EventSequence
 	templates *EventTemplateRegistry
 	schemas   *SchemaRegistry
+	adapters  *AdapterRegistry
 }
 
 type eventSequencesResponse struct {
@@ -74,7 +75,10 @@ type sequenceSpeedRequest struct {
 	Speed float64 `json:"speed"`
 }
 
-func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *SchemaRegistry) (*EventSequenceRegistry, error) {
+// NewEventSequenceRegistry loads the sequences in dir. Sequences that reference
+// unknown templates, adapters or schema types are skipped, so those
+// registries must be loaded first.
+func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *SchemaRegistry, adapters *AdapterRegistry) (*EventSequenceRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -87,6 +91,7 @@ func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, sche
 		sequences: make(map[string]EventSequence),
 		templates: templates,
 		schemas:   schemas,
+		adapters:  adapters,
 	}
 	if err := reg.Load(); err != nil {
 		return nil, err
@@ -108,7 +113,7 @@ func (r *EventSequenceRegistry) Load() error {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !isSafeEventTemplateID(id) {
+		if !validID(id) {
 			log.Printf("event sequence %s skipped: unsafe id", entry.Name())
 			continue
 		}
@@ -132,7 +137,7 @@ func (r *EventSequenceRegistry) Load() error {
 		}
 		seq = normalizeEventSequence(seq)
 		seq.ID = fileID
-		if seq.ID != id || !isSafeEventTemplateID(seq.ID) {
+		if seq.ID != id || !validID(seq.ID) {
 			log.Printf("event sequence %s skipped: id mismatch", entry.Name())
 			continue
 		}
@@ -163,7 +168,7 @@ func (r *EventSequenceRegistry) Sequences() []EventSequence {
 }
 
 func (r *EventSequenceRegistry) Get(id string) (EventSequence, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	r.mu.RLock()
@@ -207,7 +212,7 @@ func (r *EventSequenceRegistry) Create(seq EventSequence) (EventSequence, error)
 }
 
 func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSequence, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
@@ -239,7 +244,7 @@ func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSeque
 }
 
 func (r *EventSequenceRegistry) Delete(id string) error {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	r.mu.Lock()
@@ -254,23 +259,27 @@ func (r *EventSequenceRegistry) Delete(id string) error {
 	return nil
 }
 
-func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenceStep, runtimeVars map[string]string, index int) (RenderedDispatch, error) {
+// ResolveStep renders step with the sequence, step and runtime variables
+// (later ones win) and returns it ready to dispatch. A step that references a
+// template starts from the template's render and applies the step overrides.
+func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenceStep, runtimeVars map[string]string, index int) (SocketDispatch, error) {
 	vars, err := sequenceVariablesToStrings(seq.Vars, step.VarsOverride)
 	if err != nil {
-		return RenderedDispatch{}, err
+		return SocketDispatch{}, err
 	}
 	for key, value := range runtimeVars {
 		vars[key] = value
 	}
 
+	var rendered RenderedTemplate
 	if step.TemplateRef != "" {
 		tmpl, err := r.templates.Get(step.TemplateRef)
 		if err != nil {
-			return RenderedDispatch{}, err
+			return SocketDispatch{}, err
 		}
-		rendered, err := r.templates.Render(step.TemplateRef, vars)
+		rendered, err = r.templates.Render(step.TemplateRef, vars)
 		if err != nil {
-			return RenderedDispatch{}, err
+			return SocketDispatch{}, err
 		}
 		if strings.TrimSpace(step.Channel) != "" {
 			rendered.Channel = strings.TrimSpace(step.Channel)
@@ -285,40 +294,39 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 			defaults := templateDefaults(tmpl)
 			payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, defaults)
 			if err != nil {
-				return RenderedDispatch{}, err
+				return SocketDispatch{}, err
 			}
 			rendered.Payload = payload
 			rendered.Missing = missing
 			rendered.InvalidCasts = invalid
 		}
-		rendered.Source = fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID)
-		return validateRenderedSequenceStep(rendered)
+	} else {
+		payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, nil)
+		if err != nil {
+			return SocketDispatch{}, err
+		}
+		rendered = RenderedTemplate{
+			Channel:      strings.TrimSpace(step.Channel),
+			Adapter:      normalizeAdapter(step.Adapter),
+			TypeName:     strings.TrimSpace(step.TypeName),
+			Payload:      payload,
+			Missing:      missing,
+			InvalidCasts: invalid,
+		}
 	}
-
-	payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, nil)
-	if err != nil {
-		return RenderedDispatch{}, err
-	}
-	rendered := RenderedDispatch{
-		Channel:      strings.TrimSpace(step.Channel),
-		Adapter:      normalizeAdapter(step.Adapter),
-		TypeName:     strings.TrimSpace(step.TypeName),
-		Payload:      payload,
-		Missing:      missing,
-		InvalidCasts: invalid,
-		Source:       fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID),
-	}
-	return validateRenderedSequenceStep(rendered)
-}
-
-func validateRenderedSequenceStep(rendered RenderedDispatch) (RenderedDispatch, error) {
 	if len(rendered.Missing) > 0 {
-		return rendered, fmt.Errorf("missing variables: %s", strings.Join(rendered.Missing, ", "))
+		return SocketDispatch{}, fmt.Errorf("missing variables: %s", strings.Join(rendered.Missing, ", "))
 	}
 	if len(rendered.InvalidCasts) > 0 {
-		return rendered, fmt.Errorf("invalid template casts: %s", describeInvalidCasts(rendered.InvalidCasts))
+		return SocketDispatch{}, fmt.Errorf("invalid template casts: %s", describeInvalidCasts(rendered.InvalidCasts))
 	}
-	return rendered, nil
+	return SocketDispatch{
+		Channel:  rendered.Channel,
+		Adapter:  rendered.Adapter,
+		TypeName: rendered.TypeName,
+		Payload:  rendered.Payload,
+		Source:   fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID),
+	}, nil
 }
 
 func (r *EventSequenceRegistry) validate(seq EventSequence) error {
@@ -336,7 +344,7 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 	}
 	seen := make(map[string]struct{}, len(seq.Steps))
 	for i, step := range seq.Steps {
-		if !isSafeEventTemplateID(step.ID) {
+		if !validID(step.ID) {
 			return fmt.Errorf("step %d has unsafe id", i+1)
 		}
 		if _, ok := seen[step.ID]; ok {
@@ -371,7 +379,7 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 			// TODO: M7 — support channel templating for triggers.
 			return fmt.Errorf("step %d channel variables are not supported", i+1)
 		}
-		if _, err := NewProtocolAdapter(step.Adapter); err != nil {
+		if _, err := r.adapters.Protocol(step.Adapter); err != nil {
 			return err
 		}
 		if len(step.Payload) > 0 {
@@ -409,33 +417,7 @@ func (r *EventSequenceRegistry) nextIDLocked(name string) string {
 }
 
 func (r *EventSequenceRegistry) writeLocked(seq EventSequence, overwrite bool) error {
-	data, err := json.MarshalIndent(seq, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := r.pathForIDLocked(seq.ID)
-	tmp := path + ".tmp"
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	if !overwrite {
-		if _, err := os.Stat(path); err == nil {
-			return os.ErrExist
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
+	return writeJSONFile(r.pathForIDLocked(seq.ID), seq, overwrite)
 }
 
 func (r *EventSequenceRegistry) pathForIDLocked(id string) string {
@@ -486,7 +468,7 @@ func assignSequenceStepIDs(seq *EventSequence) {
 	for i := range seq.Steps {
 		id := strings.TrimSpace(seq.Steps[i].ID)
 		if id != "" {
-			if _, ok := seen[id]; !ok && isSafeEventTemplateID(id) {
+			if _, ok := seen[id]; !ok && validID(id) {
 				seen[id] = struct{}{}
 				continue
 			}
@@ -503,20 +485,7 @@ func assignSequenceStepIDs(seq *EventSequence) {
 }
 
 func eventSequenceID(name string, attempt int) string {
-	base := sanitizePackName(name)
-	if base == "" {
-		base = "event-sequence"
-	}
-	runes := []rune(base)
-	if len(runes) > 48 {
-		base = strings.Trim(string(runes[:48]), "-")
-	}
-	input := name
-	if attempt > 0 {
-		input = fmt.Sprintf("%s\n%d", name, attempt)
-	}
-	sum := sha256.Sum256([]byte(input))
-	return fmt.Sprintf("%s-%s", base, hex.EncodeToString(sum[:])[:8])
+	return hashedID(name, "event-sequence", nameAttempt(name, attempt))
 }
 
 func eventSequenceStepID(name string, step EventSequenceStep, index int, attempt int) string {
@@ -659,10 +628,10 @@ func decodeEventSequenceJSON(w http.ResponseWriter, r *http.Request, dst any, al
 
 func splitSequencePath(rest string) (id string, action string, ok bool) {
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) == 1 && isSafeEventTemplateID(parts[0]) {
+	if len(parts) == 1 && validID(parts[0]) {
 		return parts[0], "", true
 	}
-	if len(parts) == 2 && isSafeEventTemplateID(parts[0]) {
+	if len(parts) == 2 && validID(parts[0]) {
 		switch parts[1] {
 		case "play", "pause", "stop", "seek", "speed":
 			return parts[0], parts[1], true

@@ -93,9 +93,9 @@ type Recorder struct {
 	mu       sync.Mutex
 	dir      string
 	schemas  *SchemaRegistry
+	adapters *AdapterRegistry
 	modes    *ChannelModeRegistry
 	bus      *EventBus
-	jsonLogs bool
 	active   *recordingSession
 	options  RecorderOptions
 }
@@ -131,19 +131,27 @@ type rateLimiter struct {
 	count int
 }
 
-func NewRecorder(dir string, schemas *SchemaRegistry, modes *ChannelModeRegistry, bus *EventBus, jsonLogs bool) (*Recorder, error) {
-	return NewRecorderWithOptions(dir, schemas, modes, bus, jsonLogs, RecorderOptions{})
+// RecorderConfig holds the recorder's collaborators. Dir is required; the
+// other fields are optional.
+type RecorderConfig struct {
+	Dir      string
+	Schemas  *SchemaRegistry
+	Adapters *AdapterRegistry
+	Modes    *ChannelModeRegistry
+	Bus      *EventBus
+	// Options tunes queueing and flushing; zero fields use the defaults.
+	Options RecorderOptions
 }
 
-func NewRecorderWithOptions(dir string, schemas *SchemaRegistry, modes *ChannelModeRegistry, bus *EventBus, jsonLogs bool, options RecorderOptions) (*Recorder, error) {
-	if strings.TrimSpace(dir) == "" {
+func NewRecorder(cfg RecorderConfig) (*Recorder, error) {
+	if strings.TrimSpace(cfg.Dir) == "" {
 		return nil, fmt.Errorf("recordings dir is required")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
 		return nil, err
 	}
-	options = normalizeRecorderOptions(options)
-	r := &Recorder{dir: dir, schemas: schemas, modes: modes, bus: bus, jsonLogs: jsonLogs, options: options}
+	r := &Recorder{dir: cfg.Dir, schemas: cfg.Schemas, adapters: cfg.Adapters, modes: cfg.Modes, bus: cfg.Bus,
+		options: normalizeRecorderOptions(cfg.Options)}
 	if err := r.recoverInterrupted(); err != nil {
 		return nil, err
 	}
@@ -357,14 +365,14 @@ func (r *Recorder) List() ([]RecordingManifest, error) {
 }
 
 func (r *Recorder) Manifest(id string) (RecordingManifest, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return RecordingManifest{}, fmt.Errorf("invalid recording id")
 	}
 	return readRecordingManifest(filepath.Join(r.dir, id))
 }
 
 func (r *Recorder) Delete(id string) error {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return fmt.Errorf("invalid recording id")
 	}
 	if active := r.ActiveID(); active == id {
@@ -378,7 +386,7 @@ func (r *Recorder) Delete(id string) error {
 }
 
 func (r *Recorder) Frames(id, channel string, offset, limit int) ([]RecordedFrame, error) {
-	if !isSafeEventTemplateID(id) {
+	if !validID(id) {
 		return nil, fmt.Errorf("invalid recording id")
 	}
 	if offset < 0 {
@@ -456,14 +464,16 @@ func (r *Recorder) recoverInterrupted() error {
 func (r *Recorder) decodeFrame(channel, kind string, data []byte, adapter string) (*DecodedFrame, string) {
 	// See docs/adr/0004-recording-decoder-strategy.md: M5 records raw frames
 	// first and treats decoder output as optional metadata.
-	return DecodeWireFrame(r.schemas, kind, data, adapter)
+	return r.adapters.DecodeFrame(r.schemas, kind, data, adapter)
 }
 
 func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*DecodedFrame, string) {
 	return decodeAppSyncEnvelope(r.schemas, profile, data)
 }
 
-func DecodeWireFrame(schemas *SchemaRegistry, kind string, data []byte, adapter string) (*DecodedFrame, string) {
+// DecodeFrame decodes a text frame's envelope for the named adapter so logs
+// and recordings can show the logical payload. Binary frames are not decoded.
+func (r *AdapterRegistry) DecodeFrame(schemas *SchemaRegistry, kind string, data []byte, adapter string) (*DecodedFrame, string) {
 	if kind == "binary" {
 		return nil, "binary frame has no envelope decoder"
 	}
@@ -471,7 +481,7 @@ func DecodeWireFrame(schemas *SchemaRegistry, kind string, data []byte, adapter 
 	if profileName == "" {
 		profileName = "raw"
 	}
-	if profile, ok := adapterProfile(profileName); ok && hasEnvelopeDecoder(profile.BaseAdapter) {
+	if profile, ok := r.Profile(profileName); ok && hasEnvelopeDecoder(profile.BaseAdapter) {
 		return decodeAppSyncEnvelope(schemas, profile, data)
 	}
 	if hasEnvelopeDecoder(profileName) {
@@ -854,7 +864,7 @@ func readRecordingManifest(dir string) (RecordingManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return RecordingManifest{}, err
 	}
-	if manifest.Version != 1 || !isSafeEventTemplateID(manifest.ID) {
+	if manifest.Version != 1 || !validID(manifest.ID) {
 		return RecordingManifest{}, fmt.Errorf("invalid recording manifest")
 	}
 	if manifest.Channels == nil {
@@ -885,7 +895,7 @@ func writeRecordingManifest(dir string, manifest RecordingManifest) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(filepath.Join(dir, "manifest.json"), data, 0o644)
+	return writeFileAtomic(filepath.Join(dir, "manifest.json"), data, 0o644)
 }
 
 func (r *Recorder) publish(method, path string, status int, body string) {
@@ -899,24 +909,15 @@ func (r *Recorder) publish(method, path string, status int, body string) {
 		Status:       status,
 		ResponseBody: body,
 	}
-	publishLogEvent(r.jsonLogs, r.bus, event)
+	r.bus.Publish(event)
 }
 
 func recordingID(name string, at time.Time) string {
-	base := sanitizePackName(name)
-	if base == "" {
-		base = "recording"
-	}
-	runes := []rune(base)
-	if len(runes) > 48 {
-		base = strings.Trim(string(runes[:48]), "-")
-	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\n%s", name, at.Format(time.RFC3339Nano))))
-	return fmt.Sprintf("%s-%s", base, hex.EncodeToString(sum[:])[:8])
+	return hashedID(name, "recording", fmt.Sprintf("%s\n%s", name, at.Format(time.RFC3339Nano)))
 }
 
 func channelFileName(channel string) string {
-	base := sanitizePackName(channel)
+	base := slug(channel)
 	if base == "" {
 		base = "channel"
 	}
@@ -1007,7 +1008,7 @@ func RegisterRecordingRoutes(mux *http.ServeMux, recorder *Recorder) {
 		}
 		rel := strings.Trim(strings.TrimPrefix(r.URL.Path, "/__ditto__/api/recordings/"), "/")
 		parts := strings.Split(rel, "/")
-		if len(parts) == 0 || !isSafeEventTemplateID(parts[0]) {
+		if len(parts) == 0 || !validID(parts[0]) {
 			http.NotFound(w, r)
 			return
 		}

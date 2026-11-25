@@ -68,10 +68,13 @@ type adapterTemplateValue struct {
 	raw   bool
 }
 
-var adapterProfileRegistry = struct {
-	sync.RWMutex
+// AdapterRegistry resolves socket adapter names to the built-in protocol
+// adapters or to adapter profiles loaded from disk. The zero value, and a nil
+// *AdapterRegistry, know only the built-in adapters.
+type AdapterRegistry struct {
+	mu       sync.RWMutex
 	profiles map[string]AdapterProfile
-}{profiles: make(map[string]AdapterProfile)}
+}
 
 func ValidateAdapterProfile(profile AdapterProfile) error {
 	if profile.ManifestVersion != 1 {
@@ -328,7 +331,7 @@ func SeedDefaultAdapterProfiles(dir string) error {
 		if err != nil {
 			return err
 		}
-		if err := atomicWriteFile(target, data, 0o644); err != nil {
+		if err := writeFileAtomic(target, data, 0o644); err != nil {
 			return err
 		}
 		seeded[entry.Name()] = true
@@ -393,33 +396,7 @@ func writeSeededAdapterProfiles(dir string, seeded map[string]bool) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return atomicWriteFile(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
-}
-
-func atomicWriteFile(path string, data []byte, perm fs.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return writeFileAtomic(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
 }
 
 func readEmbeddedAdapterProfile(path string) ([]byte, error) {
@@ -451,7 +428,10 @@ func readAdapterProfileFile(path string) ([]byte, error) {
 	return readLimitedAdapterProfile(file)
 }
 
-func LoadAdapterProfiles(dir string) error {
+// Load seeds the bundled default profiles into dir, then replaces the
+// registry's profiles with the valid ones found there. Invalid or duplicate
+// files are skipped with a log line.
+func (r *AdapterRegistry) Load(dir string) error {
 	if err := SeedDefaultAdapterProfiles(dir); err != nil {
 		return err
 	}
@@ -476,7 +456,7 @@ func LoadAdapterProfiles(dir string) error {
 		}
 		profiles[profile.Name] = profile
 	}
-	setAdapterProfiles(profiles)
+	r.setProfiles(profiles)
 	return nil
 }
 
@@ -495,8 +475,9 @@ func readAdapterProfile(path string) (AdapterProfile, error) {
 	return cloneAdapterProfile(profile), nil
 }
 
-func AdapterProfileSummaries() []AdapterProfileSummary {
-	profiles := snapshotAdapterProfiles()
+// Summaries lists the loaded profiles sorted by name.
+func (r *AdapterRegistry) Summaries() []AdapterProfileSummary {
+	profiles := r.snapshot()
 	summaries := make([]AdapterProfileSummary, 0, len(profiles))
 	for _, profile := range profiles {
 		typeAliases := cloneStringMap(profile.TypeAliases)
@@ -520,31 +501,51 @@ func AdapterProfileSummaries() []AdapterProfileSummary {
 	return summaries
 }
 
-func setAdapterProfiles(profiles map[string]AdapterProfile) {
+// Profile returns a copy of the named profile.
+func (r *AdapterRegistry) Profile(name string) (AdapterProfile, bool) {
+	if r == nil {
+		return AdapterProfile{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	profile, ok := r.profiles[normalizeAdapter(name)]
+	return cloneAdapterProfile(profile), ok
+}
+
+// Protocol returns the adapter for name: a loaded profile if one matches,
+// otherwise a built-in adapter. An empty name selects the raw adapter.
+func (r *AdapterRegistry) Protocol(name string) (ProtocolAdapter, error) {
+	adapterName := normalizeAdapter(name)
+	if adapterName == "" {
+		adapterName = "raw"
+	}
+	if profile, ok := r.Profile(adapterName); ok {
+		return NewProfileAdapter(profile)
+	}
+	return newBuiltinProtocolAdapter(adapterName)
+}
+
+func (r *AdapterRegistry) setProfiles(profiles map[string]AdapterProfile) {
 	next := make(map[string]AdapterProfile, len(profiles))
 	for name, profile := range profiles {
 		next[normalizeAdapter(name)] = cloneAdapterProfile(profile)
 	}
-	adapterProfileRegistry.Lock()
-	adapterProfileRegistry.profiles = next
-	adapterProfileRegistry.Unlock()
+	r.mu.Lock()
+	r.profiles = next
+	r.mu.Unlock()
 }
 
-func snapshotAdapterProfiles() map[string]AdapterProfile {
-	adapterProfileRegistry.RLock()
-	defer adapterProfileRegistry.RUnlock()
-	profiles := make(map[string]AdapterProfile, len(adapterProfileRegistry.profiles))
-	for name, profile := range adapterProfileRegistry.profiles {
+func (r *AdapterRegistry) snapshot() map[string]AdapterProfile {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	profiles := make(map[string]AdapterProfile, len(r.profiles))
+	for name, profile := range r.profiles {
 		profiles[name] = cloneAdapterProfile(profile)
 	}
 	return profiles
-}
-
-func adapterProfile(name string) (AdapterProfile, bool) {
-	adapterProfileRegistry.RLock()
-	defer adapterProfileRegistry.RUnlock()
-	profile, ok := adapterProfileRegistry.profiles[normalizeAdapter(name)]
-	return cloneAdapterProfile(profile), ok
 }
 
 func cloneAdapterProfile(profile AdapterProfile) AdapterProfile {

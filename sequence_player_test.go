@@ -18,11 +18,11 @@ import (
 
 func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
@@ -75,11 +75,11 @@ func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 
 func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -116,11 +116,11 @@ func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 
 func TestSequencePlayerTerminalControlsReturnErrors(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestSequencePlayerTerminalControlsReturnErrors(t *testing.T) {
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -163,46 +163,46 @@ func TestSequenceRunnerCachesEncodedPayloadByStepAndPayload(t *testing.T) {
 		cache:  make(map[string]stepCacheEntry),
 	}
 	step := EventSequenceStep{ID: "step-cache"}
-	rendered := RenderedDispatch{
+	rendered := SocketDispatch{
 		TypeName: "ditto.cache.Event",
 		Payload:  json.RawMessage(`{"id":"a"}`),
 	}
-	first, err := runner.prepareRenderedStep(step, rendered)
+	first, err := runner.encodeStep(step, rendered)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.EncodedPayload == nil || len(runner.cache) != 1 {
+	if first.Encoded == nil || len(runner.cache) != 1 {
 		t.Fatal("expected first encode to populate cache")
 	}
 	entry := runner.cache[step.ID]
 	entry.encoded.Data = []byte("cached")
 	runner.cache[step.ID] = entry
-	second, err := runner.prepareRenderedStep(step, rendered)
+	second, err := runner.encodeStep(step, rendered)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.EncodedPayload == nil || string(second.EncodedPayload.Data) != "cached" {
-		t.Fatalf("expected cached payload, got %#v", second.EncodedPayload)
+	if second.Encoded == nil || string(second.Encoded.Data) != "cached" {
+		t.Fatalf("expected cached payload, got %#v", second.Encoded)
 	}
-	third, err := runner.prepareRenderedStep(step, RenderedDispatch{
+	third, err := runner.encodeStep(step, SocketDispatch{
 		TypeName: "ditto.cache.Event",
 		Payload:  json.RawMessage(`{"id":"b"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(third.EncodedPayload.Data) == "cached" {
+	if string(third.Encoded.Data) == "cached" {
 		t.Fatal("expected payload change to invalidate cache")
 	}
 }
 
 func TestSequencePlayerRejectsZeroStepSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestSequencePlayerRejectsZeroStepSnapshot(t *testing.T) {
 		Steps:   []EventSequenceStep{},
 	}
 	reg.mu.Unlock()
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
 	if _, err := player.Play("empty-00000000", PlayOptions{}); err == nil {
 		t.Fatal("expected zero-step sequence to be rejected")
 	}
@@ -223,11 +223,11 @@ func TestSequencePlayerRejectsZeroStepSnapshot(t *testing.T) {
 
 func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
@@ -278,11 +278,11 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 
 func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -333,11 +333,11 @@ func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 
 func TestSequencePlayerSpeedZeroDuringWaitDispatchesImmediately(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestSequencePlayerSpeedZeroDuringWaitDispatchesImmediately(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -369,11 +369,11 @@ func TestSequencePlayerSpeedZeroDuringWaitDispatchesImmediately(t *testing.T) {
 
 func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -415,11 +415,11 @@ func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 
 func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -458,11 +458,11 @@ func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
 
 func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +480,7 @@ func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -498,11 +498,11 @@ func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
 
 func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +520,7 @@ func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -535,11 +535,11 @@ func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 
 func TestSequencePlayerEmitsWaitingEventBeforeStep(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,7 +557,7 @@ func TestSequencePlayerEmitsWaitingEventBeforeStep(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -577,7 +577,7 @@ func TestSequencePlayerEmitsWaitingEventBeforeStep(t *testing.T) {
 
 func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,11 +585,11 @@ func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 		Name:    "Gone",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"ok":true}`),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +606,7 @@ func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -622,11 +622,11 @@ func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 
 func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +653,7 @@ func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T)
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(okSeq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
@@ -689,11 +689,11 @@ func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T)
 
 func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -707,7 +707,7 @@ func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
 	defer player.Shutdown(t.Context())
 
 	var wg sync.WaitGroup
@@ -735,11 +735,11 @@ func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
 func TestSequencePlayerShutdownPublishesStoppedAndReleasesRunner(t *testing.T) {
 	before := runtime.NumGoroutine()
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,7 +756,7 @@ func TestSequencePlayerShutdownPublishesStoppedAndReleasesRunner(t *testing.T) {
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}), Broadcaster: broadcaster})
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -772,11 +772,11 @@ func TestSequencePlayerShutdownPublishesStoppedAndReleasesRunner(t *testing.T) {
 
 func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,7 +791,7 @@ func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hub.ServeHTTP)
 	server := httptest.NewServer(mux)
@@ -816,7 +816,7 @@ func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	player := NewSequencePlayer(reg, templates, nil, hub, NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: hub, Broadcaster: NewPlayerBroadcaster()})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -863,50 +863,6 @@ func TestPlayerBroadcasterPublishUnsubscribeRace(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 500; i++ {
 			b.Publish(PlayerEvent{Type: "step"})
-			runtime.Gosched()
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for _, ch := range subs {
-			b.Unsubscribe(ch)
-			runtime.Gosched()
-		}
-	}()
-	wg.Wait()
-	close(done)
-	drainWG.Wait()
-}
-
-func TestEventBusPublishUnsubscribeRace(t *testing.T) {
-	b := NewEventBus()
-	subs := make([]chan LogEvent, 100)
-	for i := range subs {
-		subs[i] = b.Subscribe()
-	}
-
-	done := make(chan struct{})
-	var drainWG sync.WaitGroup
-	for _, ch := range subs {
-		drainWG.Add(1)
-		go func(ch chan LogEvent) {
-			defer drainWG.Done()
-			for {
-				select {
-				case <-done:
-					return
-				case <-ch:
-				}
-			}
-		}(ch)
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 500; i++ {
-			b.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH"})
 			runtime.Gosched()
 		}
 	}()
