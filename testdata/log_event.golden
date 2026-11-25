@@ -1,0 +1,111 @@
+{
+  "id": "",
+  "timestamp": "",
+  "type": "",
+  "method": "",
+  "path": "",
+  "status": 0,
+  "duration_ms": 0,
+  "mock_index": 0
+}
+{
+  "id": "ID",
+  "timestamp": "Timestamp",
+  "type": "Type",
+  "method": "Method",
+  "path": "Path",
+  "status": 6,
+  "duration_ms": 10,
+  "cursor": "Cursor",
+  "not_retained": true,
+  "stream_gap": true,
+  "gap_reason": "GapReason",
+  "gap_from_cursor": "GapFromCursor",
+  "gap_to_cursor": "GapToCursor",
+  "response_body": "ResponseBody",
+  "request_body": "RequestBody",
+  "request_payload": {
+    "size_bytes": 9,
+    "captured_bytes": 13,
+    "content_type": "ContentType",
+    "encoding": "Encoding",
+    "capture_status": "CaptureStatus",
+    "raw_base64": "RawBase64",
+    "error": "Error"
+  },
+  "response_payload": {
+    "size_bytes": 9,
+    "captured_bytes": 13,
+    "content_type": "ContentType",
+    "encoding": "Encoding",
+    "capture_status": "CaptureStatus",
+    "raw_base64": "RawBase64",
+    "error": "Error"
+  },
+  "source": "Source",
+  "error": "Error",
+  "request_headers": {
+    "RequestHeaders-key": [
+      "RequestHeaders"
+    ]
+  },
+  "response_headers": {
+    "ResponseHeaders-key": [
+      "ResponseHeaders"
+    ]
+  },
+  "request_form_fields": {
+    "RequestFormFields-key": [
+      "RequestFormFields"
+    ]
+  },
+  "request_files": [
+    {
+      "name": "Name",
+      "content_type": "ContentType",
+      "size_bytes": 9,
+      "captured_bytes": 13,
+      "capture_status": "CaptureStatus"
+    }
+  ],
+  "request_forms_truncated": true,
+  "url": "URL",
+  "host": "Host",
+  "remote_addr": "RemoteAddr",
+  "protocol": "Protocol",
+  "direction": "Direction",
+  "connection_id": "ConnectionID",
+  "client_id": "ClientID",
+  "subscription_id": "SubscriptionID",
+  "channel": "Channel",
+  "dispatch_id": "DispatchID",
+  "delivery_state": "DeliveryState",
+  "frame_kind": "FrameKind",
+  "control_type": "ControlType",
+  "type_name": "TypeName",
+  "alias": "Alias",
+  "decode_error": "DecodeError",
+  "decoded_payload": "DecodedPayload",
+  "decoded_truncated": true,
+  "close_code": 9,
+  "close_reason": "CloseReason",
+  "queued": 6,
+  "dropped": 7,
+  "errors": 6,
+  "written": 7,
+  "burst_id": "BurstID",
+  "burst_method": "BurstMethod",
+  "burst_count": 10,
+  "burst_direction": "BurstDirection",
+  "burst_source": "BurstSource",
+  "burst_start_cursor": "BurstStartCursor",
+  "burst_end_cursor": "BurstEndCursor",
+  "burst_window_ms": 13,
+  "adapter": "Adapter",
+  "subprotocol": "Subprotocol",
+  "mode": "Mode",
+  "target": "Target",
+  "mock_index": 9,
+  "sequence_step": 12,
+  "sequence_len": 11
+}
