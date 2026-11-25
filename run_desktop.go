@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 
 	"github.com/wailsapp/wails/v2"
@@ -82,5 +83,7 @@ func (a *DittoApp) shutdown(ctx context.Context) {
 // OpenInBrowser opens the dashboard in the default browser.
 func (a *DittoApp) OpenInBrowser() {
 	url := fmt.Sprintf("%s://localhost:%d/__ditto__/", a.scheme, a.port)
-	browser.Open(url)
+	if err := browser.Open(url); err != nil {
+		slog.Warn("opening the dashboard failed", "url", url, "err", err)
+	}
 }

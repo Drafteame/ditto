@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 
 	"ditto/internal/browser"
 	"ditto/internal/server"
@@ -24,7 +25,9 @@ func runDesktop(srv *server.Server, cfg server.Config) {
 	printStartup(srv.Store.All(), cfg.Port, cfg.Target, cfg.MocksDir, cfg.HTTPS, srv.CertPath, true)
 
 	dashURL := fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, cfg.Port)
-	browser.Open(dashURL)
+	if err := browser.Open(dashURL); err != nil {
+		slog.Warn("opening the dashboard failed", "url", dashURL, "err", err)
+	}
 
 	waitForSignalAndShutdown(srv)
 }

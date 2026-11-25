@@ -21,7 +21,6 @@ func (a *API) streamLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Accel-Buffering", "no")
 	since := r.URL.Query().Get("since")
 	if lastEventID := r.Header.Get("Last-Event-ID"); lastEventID != "" {

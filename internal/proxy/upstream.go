@@ -15,62 +15,72 @@ import (
 // Upstream is the HTTP backend that unmatched requests are proxied to. Its
 // target can change at runtime.
 type Upstream struct {
-	mu     sync.RWMutex
-	proxy  *httputil.ReverseProxy
-	target string
+	mu        sync.RWMutex
+	proxy     *httputil.ReverseProxy
+	target    string
+	targetURL *url.URL
 }
 
 // NewUpstream returns an upstream for target, or with no target when it is
 // empty.
-func NewUpstream(target string) *Upstream {
+func NewUpstream(target string) (*Upstream, error) {
 	u := &Upstream{}
 	if target != "" {
-		u.SetTarget(target)
+		if err := u.SetTarget(target); err != nil {
+			return nil, err
+		}
 	}
-	return u
+	return u, nil
 }
 
-// SetTarget replaces the target. Proxied requests ask the target for
-// uncompressed bodies so the log can show them.
+// SetTarget replaces the target.
 func (u *Upstream) SetTarget(target string) error {
 	targetURL, err := url.Parse(target)
 	if err != nil {
 		return fmt.Errorf("invalid target URL: %w", err)
 	}
 
-	rp := httputil.NewSingleHostReverseProxy(targetURL)
-	originalDirector := rp.Director
-	rp.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = targetURL.Host
-		// Ask upstream for plain bytes. ReverseProxy streams the response
-		// through untouched, so a compressed body would reach the log and
-		// "Save as mock" as binary garbage.
-		req.Header.Set("Accept-Encoding", "identity")
-	}
-	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		if cw, ok := w.(*capture.Writer); ok {
-			cw.SetProxyError(err.Error())
-		}
-		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+	rp := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			// Keep the client's X-Forwarded-For chain and append its address.
+			pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+			pr.SetXForwarded()
+			route(pr.Out, targetURL)
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if cw, ok := w.(*capture.Writer); ok {
+				cw.SetProxyError(err.Error())
+			}
+			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+		},
 	}
 
 	u.mu.Lock()
-	u.proxy = rp
-	u.target = target
+	u.proxy, u.target, u.targetURL = rp, target, targetURL
 	u.mu.Unlock()
 	return nil
 }
 
-// Director returns the current reverse proxy's request director and target
-// as one snapshot, or a nil director when no target is configured.
-func (u *Upstream) Director() (func(*http.Request), string) {
+// route points out at target, joining target's base path and query with the
+// request's, and asks for an uncompressed body: ReverseProxy streams the
+// response through untouched, so a compressed body would reach the log and
+// "Save as mock" as binary.
+func route(out *http.Request, target *url.URL) {
+	(&httputil.ProxyRequest{Out: out}).SetURL(target)
+	out.Header.Set("Accept-Encoding", "identity")
+}
+
+// Router returns a function that points an outgoing request at the current
+// target, and that target, taken as one snapshot; the function is nil when
+// no target is set. The WebSocket tunnel uses it to dial the target.
+func (u *Upstream) Router() (func(out *http.Request), string) {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
-	if u.proxy == nil || u.target == "" {
+	if u.targetURL == nil || u.target == "" {
 		return nil, ""
 	}
-	return u.proxy.Director, u.target
+	targetURL := u.targetURL
+	return func(out *http.Request) { route(out, targetURL) }, u.target
 }
 
 // Target returns the current target URL, or "".

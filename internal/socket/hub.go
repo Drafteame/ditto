@@ -19,7 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"ditto/internal/adapter"
 	"ditto/internal/capture"
@@ -645,7 +645,8 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: closeCode, DurationMs: time.Since(client.connected).Milliseconds(),
 		Source: "socket-hub", ConnectionID: connectionID, ClientID: connectionID, Adapter: adapterName,
 		Subprotocol: client.subprotocol, CloseCode: closeCode, CloseReason: closeReason}
-	if readErr != nil && websocket.CloseStatus(readErr) == -1 && !errors.Is(readErr, context.Canceled) {
+	// readLoop only returns once reading fails.
+	if websocket.CloseStatus(readErr) == -1 && !errors.Is(readErr, context.Canceled) {
 		closeEvent.Error = readErr.Error()
 	}
 	if writeErr != nil && !errors.Is(writeErr, context.Canceled) {

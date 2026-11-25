@@ -4,10 +4,10 @@ go 1.26
 
 require (
 	github.com/bufbuild/protocompile v0.14.1
+	github.com/coder/websocket v1.8.15
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/wailsapp/wails/v2 v2.12.0
 	google.golang.org/protobuf v1.36.11
-	nhooyr.io/websocket v1.8.17
 )
 
 require (

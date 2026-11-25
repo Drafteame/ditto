@@ -284,7 +284,10 @@ func (s *Store) Update(id string, mock Mock) ([]string, error) {
 		if s.indexLocked(mock.Source) >= 0 {
 			return nil, fmt.Errorf("a mock named %q already exists", mock.Source)
 		}
-		os.Remove(filepath.Join(s.dir, current.Source))
+		oldPath := filepath.Join(s.dir, current.Source)
+		if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("renaming %s: %w", current.Source, err)
+		}
 	}
 
 	if err := writeMockFile(s.dir, mock); err != nil {

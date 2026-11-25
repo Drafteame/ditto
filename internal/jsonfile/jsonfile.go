@@ -24,7 +24,7 @@ func WriteAtomic(path string, data []byte, perm fs.FileMode) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }() // gone already after a successful rename
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return err

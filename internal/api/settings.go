@@ -132,12 +132,15 @@ func (a *API) qrCode(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("X-Ditto-QR-URL", dashURL)
-	w.Write(png)
+	_, _ = w.Write(png)
 }
 
 // openDashboard opens the dashboard in the system browser.
 func (a *API) openDashboard(w http.ResponseWriter, r *http.Request) {
-	browser.Open(a.dashboardURL("localhost"))
+	if err := browser.Open(a.dashboardURL("localhost")); err != nil {
+		http.Error(w, "opening the browser failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -154,7 +157,10 @@ func (a *API) openURL(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "url must start with http:// or https://", http.StatusBadRequest)
 		return
 	}
-	browser.Open(req.URL)
+	if err := browser.Open(req.URL); err != nil {
+		http.Error(w, "opening the browser failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 

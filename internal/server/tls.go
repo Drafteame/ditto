@@ -73,38 +73,39 @@ func generateCert(certPath, keyPath string) error {
 
 	// Add the machine's local IPs to the cert so physical devices on the
 	// same Wi-Fi network can validate it.
-	for _, ip := range localIPs() {
-		template.IPAddresses = append(template.IPAddresses, ip)
-	}
+	template.IPAddresses = append(template.IPAddresses, localIPs()...)
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
 		return fmt.Errorf("creating certificate: %w", err)
 	}
 
-	certFile, err := os.Create(certPath)
-	if err != nil {
-		return fmt.Errorf("opening cert file: %w", err)
-	}
-	defer certFile.Close()
-	if err := pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+	if err := writePEM(certPath, 0o644, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
 		return fmt.Errorf("writing cert: %w", err)
 	}
-
-	keyFile, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("opening key file: %w", err)
-	}
-	defer keyFile.Close()
 	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
 		return fmt.Errorf("marshaling key: %w", err)
 	}
-	if err := pem.Encode(keyFile, &pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}); err != nil {
+	if err := writePEM(keyPath, 0o600, &pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}); err != nil {
 		return fmt.Errorf("writing key: %w", err)
 	}
 
 	return nil
+}
+
+// writePEM writes block to path. A failed close is a failed write: the
+// data may not have reached the disk.
+func writePEM(path string, perm os.FileMode, block *pem.Block) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if err := pem.Encode(f, block); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func localIPs() []net.IP {

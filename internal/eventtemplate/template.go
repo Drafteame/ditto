@@ -633,7 +633,7 @@ func validateTemplateCastsInValue(value any) error {
 			if !isSupportedTemplateCast(kind) {
 				return fmt.Errorf("unsupported template cast %q", kind)
 			}
-			if !(len(matches) == 1 && match[0] == 0 && match[1] == len(typed)) {
+			if len(matches) != 1 || match[0] != 0 || match[1] != len(typed) {
 				name := typed[match[4]:match[5]]
 				return fmt.Errorf("typed template cast %q for %q must occupy the whole string", kind, name)
 			}

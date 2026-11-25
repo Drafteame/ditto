@@ -23,7 +23,7 @@ func checkPort(port int) error {
 		}
 		return fmt.Errorf("port %d is in use", port)
 	}
-	ln.Close()
+	_ = ln.Close()
 	return nil
 }
 

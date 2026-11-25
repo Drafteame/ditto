@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"ditto/internal/jsonfile"
 )
@@ -412,7 +412,7 @@ func readEmbeddedAdapterProfile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only
 	return readLimitedAdapterProfile(file)
 }
 
@@ -432,7 +432,7 @@ func readAdapterProfileFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only
 	return readLimitedAdapterProfile(file)
 }
 

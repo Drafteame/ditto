@@ -2,9 +2,9 @@
 // the REST endpoints for mocks, sockets, templates, sequences, recordings,
 // schemas and settings, and the SSE log streams.
 //
-// Every /__ditto__/api/ endpoint is restricted to local or same-origin
-// callers (see socket.OriginAllowed); a wrong method gets 405 with an Allow
-// header.
+// Every /__ditto__/api/ endpoint and the /__ditto__/events log stream are
+// restricted to local or same-origin callers (see socket.OriginAllowed); a
+// wrong method on the API gets 405 with an Allow header.
 package api
 
 import (
@@ -81,7 +81,9 @@ func Register(mux *http.ServeMux, d Deps) {
 	if a.UI != nil {
 		mux.Handle("/__ditto__/", http.StripPrefix("/__ditto__/", http.FileServerFS(a.UI)))
 	}
-	mux.HandleFunc("GET /__ditto__/events", a.streamLogs)
+	// The log stream carries every request and response body, so it gets
+	// the same origin check as the API.
+	mux.Handle("GET /__ditto__/events", localOnly(http.HandlerFunc(a.streamLogs)))
 	if a.Hub != nil {
 		mux.Handle("/__ditto__/socket", a.Hub)
 		mux.Handle("/__ditto__/ws", a.Hub)

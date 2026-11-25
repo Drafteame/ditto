@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"ditto/internal/eventlog"
 	"ditto/internal/eventtemplate"

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
@@ -28,7 +28,10 @@ func TestProxyAsksUpstreamForIdentityEncoding(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	pm := NewUpstream(upstream.URL)
+	pm, err := NewUpstream(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cw := capture.NewWriter(httptest.NewRecorder())
 	req := httptest.NewRequest("GET", "/api/thing", nil)
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
@@ -72,7 +75,10 @@ func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
 
 	bus := eventlog.NewBus(nil)
 	hub := socket.NewHub(socket.Config{Bus: bus})
-	rp := NewUpstream(upstream.URL + "/base?from=target")
+	rp, err := NewUpstream(upstream.URL + "/base?from=target")
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !tunnelThrough(rp, hub, w, r) {
 			http.NotFound(w, r)
@@ -160,7 +166,10 @@ func TestDirectWebSocketProxyReplaysFullUpstreamRejectionBody(t *testing.T) {
 	defer upstream.Close()
 	bus := eventlog.NewBus(nil)
 	hub := socket.NewHub(socket.Config{Bus: bus})
-	rp := NewUpstream(upstream.URL)
+	rp, err := NewUpstream(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tunnelThrough(rp, hub, w, r)
 	}))
@@ -208,7 +217,10 @@ func TestDirectWebSocketProxyPreservesUpstreamCloseCodeAndReason(t *testing.T) {
 	}))
 	defer upstream.Close()
 	hub := socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)})
-	rp := NewUpstream(upstream.URL)
+	rp, err := NewUpstream(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { tunnelThrough(rp, hub, w, r) }))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -232,7 +244,7 @@ func TestDirectWebSocketProxyPreservesUpstreamCloseCodeAndReason(t *testing.T) {
 
 // tunnelThrough tunnels r to proxy's target, reporting false when no target is set.
 func tunnelThrough(rp *Upstream, hub *socket.Hub, w http.ResponseWriter, r *http.Request) bool {
-	direct, target := rp.Director()
+	direct, target := rp.Router()
 	if direct == nil {
 		return false
 	}

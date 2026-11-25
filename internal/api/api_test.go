@@ -369,7 +369,7 @@ func TestSSEStartsImmediatelyAndReplaysSummariesAfterReset(t *testing.T) {
 	mux := http.NewServeMux()
 	Register(mux, Deps{Bus: bus})
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, "/__ditto__/events", nil).WithContext(ctx)
+	req := localRequest(http.MethodGet, "/__ditto__/events").WithContext(ctx)
 	req.Header.Set("Last-Event-ID", "old-session:99")
 	writer := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
 	started := time.Now()
