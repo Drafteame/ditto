@@ -96,7 +96,6 @@ type Recorder struct {
 	adapters *AdapterRegistry
 	modes    *ChannelModeRegistry
 	bus      *EventBus
-	jsonLogs bool
 	active   *recordingSession
 	options  RecorderOptions
 }
@@ -140,7 +139,6 @@ type RecorderConfig struct {
 	Adapters *AdapterRegistry
 	Modes    *ChannelModeRegistry
 	Bus      *EventBus
-	JSONLogs bool
 	// Options tunes queueing and flushing; zero fields use the defaults.
 	Options RecorderOptions
 }
@@ -153,7 +151,7 @@ func NewRecorder(cfg RecorderConfig) (*Recorder, error) {
 		return nil, err
 	}
 	r := &Recorder{dir: cfg.Dir, schemas: cfg.Schemas, adapters: cfg.Adapters, modes: cfg.Modes, bus: cfg.Bus,
-		jsonLogs: cfg.JSONLogs, options: normalizeRecorderOptions(cfg.Options)}
+		options: normalizeRecorderOptions(cfg.Options)}
 	if err := r.recoverInterrupted(); err != nil {
 		return nil, err
 	}
@@ -911,7 +909,7 @@ func (r *Recorder) publish(method, path string, status int, body string) {
 		Status:       status,
 		ResponseBody: body,
 	}
-	publishLogEvent(r.jsonLogs, r.bus, event)
+	r.bus.Publish(event)
 }
 
 func recordingID(name string, at time.Time) string {

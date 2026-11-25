@@ -163,10 +163,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to load mocks: %w", err)
 	}
 
-	bus := NewEventBus()
+	bus := NewEventBus(NewRequestLogger(os.Stdout, cfg.JSONLogs))
 	proxyMgr := NewProxyManager(cfg.Target)
-	jsonLogs := cfg.JSONLogs
-	modeRegistry, err := NewChannelModeRegistry(cfg.Layout.ChannelModesDir, bus, jsonLogs)
+	modeRegistry, err := NewChannelModeRegistry(cfg.Layout.ChannelModesDir, bus)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load channel mode registry: %w", err)
 	}
@@ -189,12 +188,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
 	}
 	recorder, err := NewRecorder(RecorderConfig{Dir: cfg.Layout.RecordingsDir, Schemas: schemaRegistry,
-		Adapters: adapters, Modes: modeRegistry, Bus: bus, JSONLogs: jsonLogs})
+		Adapters: adapters, Modes: modeRegistry, Bus: bus})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load recorder: %w", err)
 	}
 	liveTargets := NewLiveTargetManager(cfg.LiveTarget, cfg.ConfigStore)
-	socketHub := NewSocketHub(SocketHubConfig{Bus: bus, JSONLogs: jsonLogs, Modes: modeRegistry, Schemas: schemaRegistry,
+	socketHub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modeRegistry, Schemas: schemaRegistry,
 		Adapters: adapters, Recorder: recorder, LiveTargets: liveTargets})
 	// Registered after the hub's own listener to keep the original call order.
 	modeRegistry.OnChange(recorder.HandleModeChange)
@@ -301,7 +300,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			event.Type, event.Method, event.Path, event.Status = "MISS", r.Method, requestPath, http.StatusBadRequest
 			event.DurationMs, event.ResponseBody, event.ResponsePayload = time.Since(start).Milliseconds(), responseBody, responsePayload
 			event.ResponseHeaders, event.Error = capture.responseHeaders(), reqReadErr.Error()
-			publishLogEvent(jsonLogs, bus, event)
+			bus.Publish(event)
 			return
 		}
 
@@ -332,7 +331,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				event.SequenceStep = resolved.SequenceStep
 				event.SequenceLen = resolved.SequenceLen
 			}
-			publishLogEvent(jsonLogs, bus, event)
+			bus.Publish(event)
 			return
 		}
 
@@ -351,7 +350,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			if capture.writeErr != nil {
 				event.Error = capture.writeErr.Error()
 			}
-			publishLogEvent(jsonLogs, bus, event)
+			bus.Publish(event)
 			return
 		}
 
@@ -371,7 +370,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if reqReadErr != nil {
 			event.Error = "request body: " + reqReadErr.Error()
 		}
-		publishLogEvent(jsonLogs, bus, event)
+		bus.Publish(event)
 	})
 
 	return &Server{
@@ -870,20 +869,33 @@ func parseRequestForm(body []byte, contentType string, inputIncomplete bool) (ma
 	return nil, nil, false
 }
 
-// logRequest writes a single request log line.
-func logRequest(jsonMode bool, e LogEvent) {
-	logRequestTo(os.Stdout, jsonMode, e)
+// RequestLogger writes one line per log event in the --log-format: a short
+// human-readable line, or the event as a JSON object. A nil *RequestLogger
+// discards events.
+type RequestLogger struct {
+	mu   sync.Mutex
+	w    io.Writer
+	json bool
 }
 
-func logRequestTo(w io.Writer, jsonMode bool, e LogEvent) {
-	if jsonMode {
+func NewRequestLogger(w io.Writer, json bool) *RequestLogger {
+	return &RequestLogger{w: w, json: json}
+}
+
+func (l *RequestLogger) Log(e LogEvent) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.json {
 		data, err := json.Marshal(e)
 		if err != nil {
 			return
 		}
-		fmt.Fprintln(w, string(data))
+		fmt.Fprintln(l.w, string(data))
 		return
 	}
-	fmt.Fprintf(w, "%s %s %-6s %s %s → %d (%dms)\n",
+	fmt.Fprintf(l.w, "%s %s %-6s %s %s → %d (%dms)\n",
 		e.Timestamp, e.ID, e.Type, e.Method, e.Path, e.Status, e.DurationMs)
 }

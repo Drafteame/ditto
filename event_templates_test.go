@@ -318,7 +318,7 @@ func TestEventTemplateRoutesRejectInvalidPayloadAndPathTraversal(t *testing.T) {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}))
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad","channel":"x","payload":`))
 	req.Header.Set("Content-Type", "application/json")
@@ -375,7 +375,7 @@ func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: schemas}))
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Schemas: schemas}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad Type","channel":"x","type_name":"ditto.Missing","payload":{}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -424,7 +424,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: schemas}))
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Schemas: schemas}))
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"ticketId":"abc"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -463,7 +463,7 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 		t.Fatalf("Create(builtins) error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}))
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+missing.ID+"/dispatch", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -497,7 +497,7 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 		t.Fatalf("Create() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)

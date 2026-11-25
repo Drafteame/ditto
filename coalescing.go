@@ -11,10 +11,9 @@ import (
 const SocketLogCoalesceThresholdPerSecond = 20
 
 type CoalescingPublisher struct {
-	mu       sync.Mutex
-	bus      *EventBus
-	jsonLogs bool
-	windows  map[string]*coalesceWindow
+	mu      sync.Mutex
+	bus     *EventBus
+	windows map[string]*coalesceWindow
 }
 
 type coalesceWindow struct {
@@ -31,8 +30,8 @@ type coalesceWindow struct {
 	lastCursor  string
 }
 
-func NewCoalescingPublisher(bus *EventBus, jsonLogs bool) *CoalescingPublisher {
-	return &CoalescingPublisher{bus: bus, jsonLogs: jsonLogs, windows: make(map[string]*coalesceWindow)}
+func NewCoalescingPublisher(bus *EventBus) *CoalescingPublisher {
+	return &CoalescingPublisher{bus: bus, windows: make(map[string]*coalesceWindow)}
 }
 
 func (p *CoalescingPublisher) Publish(event LogEvent) {
@@ -59,7 +58,7 @@ func (p *CoalescingPublisher) Publish(event LogEvent) {
 	window.count++
 	immediate := window.count <= SocketLogCoalesceThresholdPerSecond
 	event = p.bus.publishWithSummary(event, immediate)
-	logRequest(p.jsonLogs, event)
+	p.bus.log.Log(event)
 	if window.firstCursor == "" {
 		window.firstCursor = event.Cursor
 	}
@@ -102,5 +101,5 @@ func (p *CoalescingPublisher) flushLocked(window *coalesceWindow) {
 }
 
 func (p *CoalescingPublisher) publish(event LogEvent) {
-	publishLogEvent(p.jsonLogs, p.bus, event)
+	p.bus.Publish(event)
 }

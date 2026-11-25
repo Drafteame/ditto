@@ -46,11 +46,10 @@ type ChannelModeRegistry struct {
 	path      string
 	channels  map[string]ChannelConfig
 	bus       *EventBus
-	jsonLogs  bool
 	listeners []func(ChannelConfig)
 }
 
-func NewChannelModeRegistry(dir string, bus *EventBus, jsonLogs bool) (*ChannelModeRegistry, error) {
+func NewChannelModeRegistry(dir string, bus *EventBus) (*ChannelModeRegistry, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, fmt.Errorf("channel modes dir is required")
 	}
@@ -61,7 +60,6 @@ func NewChannelModeRegistry(dir string, bus *EventBus, jsonLogs bool) (*ChannelM
 		path:     filepath.Join(dir, "state.json"),
 		channels: make(map[string]ChannelConfig),
 		bus:      bus,
-		jsonLogs: jsonLogs,
 	}
 	if err := r.load(); err != nil {
 		return nil, err
@@ -240,7 +238,7 @@ func (r *ChannelModeRegistry) publishModeEvent(method string, cfg ChannelConfig)
 		Status:       http.StatusOK,
 		ResponseBody: string(body),
 	}
-	publishLogEvent(r.jsonLogs, r.bus, event)
+	r.bus.Publish(event)
 }
 
 func isChannelMode(mode ChannelMode) bool {

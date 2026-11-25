@@ -34,8 +34,8 @@ func TestRequestLogFormatCharacterization(t *testing.T) {
 		ResponseBody:   `{"html":"<b>&</b>"}`,
 	}
 	var out bytes.Buffer
-	logRequestTo(&out, false, event)
-	logRequestTo(&out, true, event)
+	NewRequestLogger(&out, false).Log(event)
+	NewRequestLogger(&out, true).Log(event)
 	assertGolden(t, "request_log.golden", out.Bytes())
 }
 

@@ -32,7 +32,7 @@ func TestDecodeFrameReadsRelayEnvelope(t *testing.T) {
 
 func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(RecorderConfig{Dir: dir, Bus: NewEventBus()})
+	rec, err := NewRecorder(RecorderConfig{Dir: dir, Bus: NewEventBus(nil)})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -193,10 +193,10 @@ func TestRecorderStopTimeoutForceStopsDrain(t *testing.T) {
 }
 
 func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -364,7 +364,7 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 		t.Fatal(err)
 	}
 
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.schemas = schemas
 	hub.logSocketFrame(LogEvent{Status: 200, Adapter: "appsync"}, envelope, websocket.MessageText, encoded.TypeName)
@@ -376,7 +376,7 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 		t.Fatalf("text envelope log = %#v, want decoded JSON without errors", detail)
 	}
 
-	bus = NewEventBus()
+	bus = NewEventBus(nil)
 	hub = NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.logSocketFrame(LogEvent{Status: 200, DeliveryState: "written"}, []byte{0xff, 0x01}, websocket.MessageBinary, "")
 	detail, ok = bus.LogDetail(bus.LogSummaries()[0].ID)
@@ -389,8 +389,8 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 }
 
 func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
-	bus := NewEventBus()
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
+	bus := NewEventBus(nil)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}

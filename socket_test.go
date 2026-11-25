@@ -1,13 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -15,8 +14,6 @@ import (
 
 	"nhooyr.io/websocket"
 )
-
-var captureStdoutMu sync.Mutex
 
 func TestSubscriptionRegistryTracksClientsByChannel(t *testing.T) {
 	registry := NewSubscriptionRegistry()
@@ -164,7 +161,7 @@ func TestRelayAdapterControlFrames(t *testing.T) {
 }
 
 func TestRelayAdapterAcksConnectionWithoutInit(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -246,7 +243,7 @@ func TestAppSyncAdapterErrorPayloadUsesJSONString(t *testing.T) {
 }
 
 func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if IsWebSocketRequest(r) {
@@ -301,7 +298,7 @@ func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 }
 
 func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hub.ServeHTTP)
 	server := httptest.NewServer(mux)
@@ -335,7 +332,7 @@ func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
 }
 
 func TestSocketHubDispatchAdapterFilter(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	rawClient := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -391,30 +388,8 @@ func addRawTestSubscriber(hub *SocketHub, channel string) *SocketClient {
 	return client
 }
 
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	captureStdoutMu.Lock()
-	defer captureStdoutMu.Unlock()
-	old := os.Stdout
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe(): %v", err)
-	}
-	os.Stdout = writer
-	defer func() { os.Stdout = old }()
-	fn()
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close stdout writer: %v", err)
-	}
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read stdout: %v", err)
-	}
-	return string(data)
-}
-
 func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
@@ -440,7 +415,7 @@ func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
 }
 
 func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
@@ -487,13 +462,12 @@ func TestDispatchLogBodyTruncatesUTF8PayloadsAsValidJSONString(t *testing.T) {
 }
 
 func TestDispatchLogIncludesDecodedPayloadWithoutSSESubscribers(t *testing.T) {
-	bus := NewEventBus()
-	hub := NewSocketHub(SocketHubConfig{Bus: bus, JSONLogs: true})
+	var out bytes.Buffer
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(NewRequestLogger(&out, true))})
 	addRawTestSubscriber(hub, "/decoded")
 
-	output := captureStdout(t, func() {
-		hub.dispatchJSON("/decoded", json.RawMessage(`{"score":7}`), "", "")
-	})
+	hub.dispatchJSON("/decoded", json.RawMessage(`{"score":7}`), "", "")
+	output := out.String()
 	var event LogEvent
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		if line == "" {
@@ -524,7 +498,7 @@ func TestDispatchLogIncludesDecodedPayloadWithoutSSESubscribers(t *testing.T) {
 }
 
 func TestSocketAPIRejectsCrossOriginTextPlainDispatch(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	mux := http.NewServeMux()
 	RegisterSocketRoutes(mux, hub)
 
@@ -606,7 +580,7 @@ func TestSocketOriginPolicy(t *testing.T) {
 }
 
 func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -629,7 +603,7 @@ func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
 }
 
 func TestSocketHubAllowsLocalhostCrossPortHandshake(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -702,7 +676,7 @@ func TestShouldProxyWebSocket(t *testing.T) {
 }
 
 func TestSocketHubSubscribeMissingChannelSendsError(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -728,7 +702,7 @@ func TestSocketHubSubscribeMissingChannelSendsError(t *testing.T) {
 }
 
 func TestEnqueueControlPublishesErrorWhenClientClosed(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
@@ -782,7 +756,7 @@ func TestSocketClientEnqueueRejectsAfterClose(t *testing.T) {
 }
 
 func TestSocketClientDropCounterInSnapshot(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	client := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -804,10 +778,10 @@ func TestSocketClientDropCounterInSnapshot(t *testing.T) {
 }
 
 func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	pub := NewCoalescingPublisher(bus, false)
+	pub := NewCoalescingPublisher(bus)
 	for i := 0; i < SocketLogCoalesceThresholdPerSecond+5; i++ {
 		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK,
 			Direction: "ditto_to_client", Source: "test", RequestBody: fmt.Sprintf(`{"index":%d}`, i)})
@@ -846,7 +820,7 @@ func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
 }
 
 func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	client := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -869,7 +843,7 @@ func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
 }
 
 func TestDispatchEncodesPayloadOncePerAdapter(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus()})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	adapter := &countingAdapter{}
 	clientA := &SocketClient{
 		id:            "client-a",

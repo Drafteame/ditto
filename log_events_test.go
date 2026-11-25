@@ -26,7 +26,7 @@ func (w *cancelOnFlushRecorder) Flush() {
 }
 
 func TestEventBusRetainsIdentifiedEventsAndReturnsDetails(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	headers := map[string][]string{"X-Test": {"before"}}
 	metadata := &LogPayloadMetadata{SizeBytes: 4, ContentType: "text/plain", CaptureStatus: "captured", RawBase64: "dGVzdA=="}
 	bus.Publish(LogEvent{Type: "PROXY", Method: "POST", Path: "/item", ResponseBody: "body", RequestHeaders: headers,
@@ -62,7 +62,7 @@ func TestEventBusRetainsIdentifiedEventsAndReturnsDetails(t *testing.T) {
 }
 
 func TestEventBusRetentionBoundsCountAndBytes(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	for i := 0; i <= MaxRetainedLogEvents; i++ {
 		bus.Publish(LogEvent{Method: "GET", Path: "/item"})
 	}
@@ -70,7 +70,7 @@ func TestEventBusRetentionBoundsCountAndBytes(t *testing.T) {
 		t.Fatalf("retained %d events, want max %d", got, MaxRetainedLogEvents)
 	}
 
-	byteBus := NewEventBus()
+	byteBus := NewEventBus(nil)
 	byteBus.Publish(LogEvent{ResponseBody: strings.Repeat("x", MaxRetainedLogBytes+1)})
 	if got := len(byteBus.LogSummaries()); got != 0 {
 		t.Fatalf("oversized event was retained, count=%d", got)
@@ -81,7 +81,7 @@ func TestEventBusRetentionBoundsCountAndBytes(t *testing.T) {
 }
 
 func TestLogSummaryAndDetailRoutes(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	bus.Publish(LogEvent{Type: "MOCK", Method: "GET", Path: "/item", ResponseBody: `{"ok":true}`})
 	id := bus.LogSummaries()[0].ID
 	mux := http.NewServeMux()
@@ -109,7 +109,7 @@ func TestLogSummaryAndDetailRoutes(t *testing.T) {
 }
 
 func TestEventBusReplayOverflowAndFilteredCursorGaps(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	bus.Publish(LogEvent{Type: "SOCKET", Method: "CONNECT", Path: "/a"})
 	first := bus.LogSummaries()[0].Cursor
 	ch, replay, gap := bus.SubscribeAfter(first)
@@ -135,7 +135,7 @@ func TestEventBusReplayOverflowAndFilteredCursorGaps(t *testing.T) {
 		t.Fatalf("history recovery = total %d complete %t gap=%#v", recovered.Total, recovered.Complete, recovered.Gap)
 	}
 
-	gapBus := NewEventBus()
+	gapBus := NewEventBus(nil)
 	gapBus.Publish(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/wanted", Channel: "/wanted"})
 	cursor := gapBus.LogSummaries()[0].Cursor
 	gapBus.Publish(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/other", ResponseBody: strings.Repeat("x", MaxRetainedLogBytes+1)})
@@ -147,7 +147,7 @@ func TestEventBusReplayOverflowAndFilteredCursorGaps(t *testing.T) {
 }
 
 func TestBurstHistoryUsesExactGroupAndReportsExpiredMembers(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	var first, last string
 	for i := 0; i < 4; i++ {
 		direction, source := "ditto_to_client", "hub"
@@ -173,7 +173,7 @@ func TestBurstHistoryUsesExactGroupAndReportsExpiredMembers(t *testing.T) {
 }
 
 func TestConcurrentPublishesKeepCursorAndStdoutIdentityStable(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	const publishers, each = 8, 50
 	var wg sync.WaitGroup
 	for publisher := 0; publisher < publishers; publisher++ {
@@ -204,7 +204,7 @@ func TestConcurrentPublishesKeepCursorAndStdoutIdentityStable(t *testing.T) {
 }
 
 func TestSSEStartsImmediatelyAndReplaysSummariesAfterReset(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	bus.Publish(LogEvent{Type: "PROXY", Method: "POST", Path: "/secret", RequestBody: "request secret", ResponseBody: "response secret",
 		RequestPayload: &LogPayloadMetadata{SizeBytes: 7, CapturedBytes: 7, CaptureStatus: "captured", RawBase64: "c2VjcmV0"}})
 	mux := http.NewServeMux()

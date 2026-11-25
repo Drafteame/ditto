@@ -14,7 +14,7 @@ import (
 
 func TestChannelModeRegistryGetSetSnapshotAndPersistence(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewChannelModeRegistry(dir, NewEventBus(), false)
+	reg, err := NewChannelModeRegistry(dir, NewEventBus(nil))
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -38,7 +38,7 @@ func TestChannelModeRegistryGetSetSnapshotAndPersistence(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatalf("state.json invalid JSON: %v", err)
 	}
-	reloaded, err := NewChannelModeRegistry(dir, nil, false)
+	reloaded, err := NewChannelModeRegistry(dir, nil)
 	if err != nil {
 		t.Fatalf("reload error = %v", err)
 	}
@@ -48,7 +48,7 @@ func TestChannelModeRegistryGetSetSnapshotAndPersistence(t *testing.T) {
 }
 
 func TestChannelModeRegistryConcurrentSetGet(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -66,7 +66,7 @@ func TestChannelModeRegistryConcurrentSetGet(t *testing.T) {
 }
 
 func TestChannelModeRegistrySetPreservesRecordingID(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -84,7 +84,7 @@ func TestChannelModeRegistrySetPreservesRecordingID(t *testing.T) {
 
 func TestChannelModeRegistryPersistsExplicitMockMode(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewChannelModeRegistry(dir, nil, false)
+	reg, err := NewChannelModeRegistry(dir, nil)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -94,7 +94,7 @@ func TestChannelModeRegistryPersistsExplicitMockMode(t *testing.T) {
 	if got := reg.Snapshot(); len(got) != 1 || got[0].Channel != "/known" || got[0].Mode != ModeMock {
 		t.Fatalf("Snapshot() = %#v, want explicit mock channel", got)
 	}
-	reloaded, err := NewChannelModeRegistry(dir, nil, false)
+	reloaded, err := NewChannelModeRegistry(dir, nil)
 	if err != nil {
 		t.Fatalf("reload error = %v", err)
 	}
@@ -105,7 +105,7 @@ func TestChannelModeRegistryPersistsExplicitMockMode(t *testing.T) {
 
 func TestChannelModeRegistryDelete(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewChannelModeRegistry(dir, nil, false)
+	reg, err := NewChannelModeRegistry(dir, nil)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestChannelModeRegistryDelete(t *testing.T) {
 	if got := reg.Snapshot(); len(got) != 0 {
 		t.Fatalf("Snapshot() = %#v, want empty", got)
 	}
-	reloaded, err := NewChannelModeRegistry(dir, nil, false)
+	reloaded, err := NewChannelModeRegistry(dir, nil)
 	if err != nil {
 		t.Fatalf("reload error = %v", err)
 	}
@@ -128,7 +128,7 @@ func TestChannelModeRegistryDelete(t *testing.T) {
 }
 
 func TestChannelModeRegistryDeleteNotFound(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -138,7 +138,7 @@ func TestChannelModeRegistryDeleteNotFound(t *testing.T) {
 }
 
 func TestChannelModeRouteDelete(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -179,11 +179,11 @@ func TestChannelModeRouteDelete(t *testing.T) {
 }
 
 func TestHubDispatchSuppressedByMode(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
+	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Modes: reg})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Modes: reg})
 	for _, mode := range []ChannelMode{ModeLive, ModeRecord} {
 		if err := reg.Set(ChannelConfig{Channel: "/blocked", Mode: mode}); err != nil {
 			t.Fatalf("Set(%s) error = %v", mode, err)

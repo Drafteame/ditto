@@ -36,8 +36,8 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	bus := NewEventBus()
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
+	bus := NewEventBus(nil)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -113,8 +113,8 @@ func TestLiveBridgeForwardsAuthHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	bus := NewEventBus()
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus, false)
+	bus := NewEventBus(nil)
+	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
@@ -188,7 +188,7 @@ func TestLiveBridgeForwardsAuthHeaders(t *testing.T) {
 }
 
 func TestLiveBridgeDetachAttachStressKeepsNewClient(t *testing.T) {
-	bridge := NewLiveBridge(NewLiveTargetManager("", nil), NewSocketHub(SocketHubConfig{Bus: NewEventBus()}))
+	bridge := NewLiveBridge(NewLiveTargetManager("", nil), NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}))
 	for i := 0; i < 250; i++ {
 		channel := "/race"
 		oldClient := testSocketClient("old")
@@ -224,7 +224,7 @@ func TestLiveBridgeDetachAttachStressKeepsNewClient(t *testing.T) {
 }
 
 func TestLiveBridgeEmptyTargetLogsOnceUntilTargetChanges(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	manager := NewLiveTargetManager("", nil)
@@ -247,7 +247,7 @@ func TestLiveBridgeEmptyTargetLogsOnceUntilTargetChanges(t *testing.T) {
 }
 
 func TestForwardFromUpstreamLogsDecodedAppSyncFrame(t *testing.T) {
-	bus := NewEventBus()
+	bus := NewEventBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})

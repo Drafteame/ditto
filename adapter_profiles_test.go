@@ -372,7 +372,7 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 	if err != nil {
 		t.Fatalf("Protocol(appsync-draftea) error = %v", err)
 	}
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: &SchemaRegistry{}, Adapters: adapters})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Schemas: &SchemaRegistry{}, Adapters: adapters})
 	client := &SocketClient{
 		id:            "appsync-draftea-1",
 		adapter:       "appsync-draftea",
@@ -434,7 +434,7 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
 	}
 
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: &SchemaRegistry{}, Adapters: adapters})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Schemas: &SchemaRegistry{}, Adapters: adapters})
 	client := &SocketClient{
 		id:            "relay-draftea-1",
 		adapter:       "relay-draftea",
@@ -503,7 +503,7 @@ func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	RegisterSocketRoutes(mux, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Adapters: adapters}))
+	RegisterSocketRoutes(mux, NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Adapters: adapters}))
 	req := httptest.NewRequest(http.MethodGet, "/__ditto__/api/socket/adapter-profiles", nil)
 	req.RemoteAddr = "127.0.0.1:55555"
 	rec := httptest.NewRecorder()

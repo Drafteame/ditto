@@ -147,7 +147,6 @@ func (r *SubscriptionRegistry) Clients(channel string) []string {
 type SocketHub struct {
 	registry *SubscriptionRegistry
 	bus      *EventBus
-	jsonLogs bool
 	modes    *ChannelModeRegistry
 	live     *LiveBridge
 	recorder *Recorder
@@ -326,7 +325,6 @@ type SocketDispatch struct {
 // field is optional and its zero value disables the matching feature.
 type SocketHubConfig struct {
 	Bus      *EventBus
-	JSONLogs bool
 	Modes    *ChannelModeRegistry
 	Schemas  *SchemaRegistry
 	Adapters *AdapterRegistry
@@ -339,12 +337,11 @@ func NewSocketHub(cfg SocketHubConfig) *SocketHub {
 	hub := &SocketHub{
 		registry: NewSubscriptionRegistry(),
 		bus:      cfg.Bus,
-		jsonLogs: cfg.JSONLogs,
 		modes:    cfg.Modes,
 		recorder: cfg.Recorder,
 		schemas:  cfg.Schemas,
 		adapters: cfg.Adapters,
-		events:   NewCoalescingPublisher(cfg.Bus, cfg.JSONLogs),
+		events:   NewCoalescingPublisher(cfg.Bus),
 		clients:  make(map[string]*SocketClient),
 	}
 	if cfg.LiveTargets != nil {
