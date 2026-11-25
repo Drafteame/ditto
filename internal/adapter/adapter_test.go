@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 func TestAdapterTemplateStringSubstitutionEscapesJSONStringContent(t *testing.T) {

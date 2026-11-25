@@ -47,7 +47,7 @@ Domain-specific data (Protobuf schemas, mocks, recordings, scenarios) lives in *
 | Protobuf handling | Dynamic descriptors at runtime (`bufbuild/protocompile` + `google.golang.org/protobuf/dynamicpb` + `protojson`). No codegen, no schema coupling. |
 | Schema distribution | "Schema packs" — zip bundles with manifest + descriptors, loaded by the user. |
 | Frontend state | Zustand from M0. Theme-scoped stores (`useSocketStore`, `useScenarioStore`, `useSchemaStore`, etc.). |
-| WS library | `nhooyr.io/websocket` (no CGO, plays well with Wails). |
+| WS library | `github.com/coder/websocket`, the maintained successor of `nhooyr.io/websocket` (no CGO, plays well with Wails). |
 | Filesystem layout | Designed from day 1 to be exportable as `.dittopack`. |
 | Match/scenario simulation | No hardcoded generators. Composition of record + replay + scenario + dispatch. |
 | Adapter customization | Profile-based (`adapter_profiles/*.json`). A generic profile-driven adapter at runtime applies envelope templates + type aliases. No per-backend Go code; supporting a new backend = dropping a JSON file. |

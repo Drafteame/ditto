@@ -19,7 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"ditto/internal/adapter"
 	"ditto/internal/capture"

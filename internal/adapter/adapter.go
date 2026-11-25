@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 )
 
 // ClientMessage is a parsed client frame: a subscribe, unsubscribe, ping
