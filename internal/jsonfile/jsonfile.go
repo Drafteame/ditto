@@ -1,4 +1,6 @@
-package main
+// Package jsonfile holds the helpers shared by Ditto's stores that keep one
+// JSON file per entity in a directory: atomic writes and filename-safe IDs.
+package jsonfile
 
 import (
 	"crypto/sha256"
@@ -13,12 +15,9 @@ import (
 	"unicode"
 )
 
-// Helpers shared by the stores that keep one JSON file per entity in a
-// directory (templates, sequences, recordings, channel modes, profiles).
-
-// writeFileAtomic writes data to a temporary file next to path, syncs it and
+// WriteAtomic writes data to a temporary file next to path, syncs it and
 // renames it over path, so readers never see a partial file.
-func writeFileAtomic(path string, data []byte, perm fs.FileMode) error {
+func WriteAtomic(path string, data []byte, perm fs.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -44,9 +43,9 @@ func writeFileAtomic(path string, data []byte, perm fs.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-// writeJSONFile writes v as indented JSON with a trailing newline. Unless
+// Write writes v as indented JSON with a trailing newline. Unless
 // overwrite is set, it fails with os.ErrExist when path already exists.
-func writeJSONFile(path string, v any, overwrite bool) error {
+func Write(path string, v any, overwrite bool) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
@@ -58,12 +57,12 @@ func writeJSONFile(path string, v any, overwrite bool) error {
 			return err
 		}
 	}
-	return writeFileAtomic(path, append(data, '\n'), 0o644)
+	return WriteAtomic(path, append(data, '\n'), 0o644)
 }
 
-// slug lowercases s and collapses every run of characters that are not
+// Slug lowercases s and collapses every run of characters that are not
 // letters or digits into a single dash, trimming dashes at both ends.
-func slug(s string) string {
+func Slug(s string) string {
 	s = strings.TrimSpace(strings.ToLower(s))
 	var b strings.Builder
 	lastDash := false
@@ -81,22 +80,22 @@ func slug(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// validID reports whether id is already a slug, which also makes it safe to
+// ValidID reports whether id is already a Slug, which also makes it safe to
 // use as a file name inside a store directory.
-func validID(id string) bool {
+func ValidID(id string) bool {
 	id = strings.TrimSpace(id)
 	return id != "" &&
 		id != "." &&
 		id != ".." &&
 		!strings.Contains(id, "/") &&
 		!strings.Contains(id, string(os.PathSeparator)) &&
-		id == slug(id)
+		id == Slug(id)
 }
 
-// hashedID returns the slug of name (at most 48 runes, or fallback when
+// HashedID returns the Slug of name (at most 48 runes, or fallback when
 // empty) followed by the first 8 hex digits of sha256(hashInput).
-func hashedID(name, fallback, hashInput string) string {
-	base := slug(name)
+func HashedID(name, fallback, hashInput string) string {
+	base := Slug(name)
 	if base == "" {
 		base = fallback
 	}
@@ -107,9 +106,9 @@ func hashedID(name, fallback, hashInput string) string {
 	return fmt.Sprintf("%s-%s", base, hex.EncodeToString(sum[:])[:8])
 }
 
-// nameAttempt is the hash input for the attempt-th ID derived from name;
+// NameAttempt is the hash input for the attempt-th ID derived from name;
 // attempts after the first resolve collisions.
-func nameAttempt(name string, attempt int) string {
+func NameAttempt(name string, attempt int) string {
 	if attempt > 0 {
 		return fmt.Sprintf("%s\n%d", name, attempt)
 	}

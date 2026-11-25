@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ditto/internal/jsonfile"
 )
 
 const (
@@ -118,7 +120,7 @@ func (r *EventTemplateRegistry) Load() error {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !validID(id) {
+		if !jsonfile.ValidID(id) {
 			log.Printf("event template %s skipped: unsafe id", entry.Name())
 			continue
 		}
@@ -138,7 +140,7 @@ func (r *EventTemplateRegistry) Load() error {
 		fileID := tmpl.ID
 		tmpl = normalizeEventTemplate(tmpl)
 		tmpl.ID = fileID
-		if tmpl.ID != id || !validID(tmpl.ID) {
+		if tmpl.ID != id || !jsonfile.ValidID(tmpl.ID) {
 			log.Printf("event template %s skipped: id mismatch", entry.Name())
 			continue
 		}
@@ -170,7 +172,7 @@ func (r *EventTemplateRegistry) Templates() []EventTemplate {
 }
 
 func (r *EventTemplateRegistry) Get(id string) (EventTemplate, error) {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return EventTemplate{}, fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	r.mu.RLock()
@@ -210,7 +212,7 @@ func (r *EventTemplateRegistry) Create(tmpl EventTemplate) (EventTemplate, error
 }
 
 func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate) (EventTemplate, error) {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return EventTemplate{}, fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	tmpl = normalizeEventTemplate(tmpl)
@@ -238,7 +240,7 @@ func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate) (EventTemp
 }
 
 func (r *EventTemplateRegistry) Delete(id string) error {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	r.mu.Lock()
@@ -306,7 +308,7 @@ func (r *EventTemplateRegistry) nextIDLocked(name string) string {
 }
 
 func (r *EventTemplateRegistry) writeLocked(tmpl EventTemplate, overwrite bool) error {
-	return writeJSONFile(r.pathForIDLocked(tmpl.ID), tmpl, overwrite)
+	return jsonfile.Write(r.pathForIDLocked(tmpl.ID), tmpl, overwrite)
 }
 
 func (r *EventTemplateRegistry) pathForIDLocked(id string) string {
@@ -702,10 +704,10 @@ func describeInvalidCasts(casts []EventTemplateInvalidCast) string {
 
 func splitEventTemplatePath(rest string) (id string, action string, ok bool) {
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) == 1 && validID(parts[0]) {
+	if len(parts) == 1 && jsonfile.ValidID(parts[0]) {
 		return parts[0], "", true
 	}
-	if len(parts) == 2 && parts[1] == "dispatch" && validID(parts[0]) {
+	if len(parts) == 2 && parts[1] == "dispatch" && jsonfile.ValidID(parts[0]) {
 		return parts[0], parts[1], true
 	}
 	return "", "", false
@@ -867,7 +869,7 @@ func normalizeEventTemplate(tmpl EventTemplate) EventTemplate {
 }
 
 func eventTemplateID(name string, attempt int) string {
-	return hashedID(name, "event-template", nameAttempt(name, attempt))
+	return jsonfile.HashedID(name, "event-template", jsonfile.NameAttempt(name, attempt))
 }
 
 func cloneEventTemplate(tmpl EventTemplate) EventTemplate {

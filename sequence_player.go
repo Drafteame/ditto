@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ditto/internal/jsonfile"
 )
 
 var ErrSequencePlayerActive = errors.New("sequence has an active player")
@@ -183,7 +185,7 @@ func NewSequencePlayer(cfg SequencePlayerConfig) *SequencePlayer {
 func (p *SequencePlayer) Play(id string, opts PlayOptions) (PlayerState, error) {
 	// TODO: M7 — support fire-and-forget runs for HTTP triggers so concurrent
 	// trigger hits can launch independent snapshots of the same sequence ID.
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return PlayerState{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	opts = normalizePlayOptions(opts)
@@ -309,7 +311,7 @@ func (p *SequencePlayer) Shutdown(ctx context.Context) error {
 }
 
 func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	p.mu.Lock()
@@ -336,7 +338,7 @@ func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error 
 }
 
 func (p *SequencePlayer) runner(id string) (*sequenceRunner, error) {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return nil, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	p.mu.RLock()

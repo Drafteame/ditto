@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"nhooyr.io/websocket"
+
+	"ditto/internal/jsonfile"
 )
 
 //go:embed defaults/adapter_profiles/*.json
@@ -331,7 +333,7 @@ func SeedDefaultAdapterProfiles(dir string) error {
 		if err != nil {
 			return err
 		}
-		if err := writeFileAtomic(target, data, 0o644); err != nil {
+		if err := jsonfile.WriteAtomic(target, data, 0o644); err != nil {
 			return err
 		}
 		seeded[entry.Name()] = true
@@ -396,7 +398,7 @@ func writeSeededAdapterProfiles(dir string, seeded map[string]bool) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return writeFileAtomic(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
+	return jsonfile.WriteAtomic(filepath.Join(dir, adapterProfilesSeededFile), []byte(strings.Join(names, "\n")+"\n"), 0o644)
 }
 
 func readEmbeddedAdapterProfile(path string) ([]byte, error) {

@@ -26,6 +26,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
+
+	"ditto/internal/jsonfile"
 )
 
 const (
@@ -251,7 +253,7 @@ func (s *SchemaRegistry) Decode(typeName string, data []byte) (json.RawMessage, 
 }
 
 func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (SchemaPack, error) {
-	baseName := slug(strings.TrimSuffix(filename, filepath.Ext(filename)))
+	baseName := jsonfile.Slug(strings.TrimSuffix(filename, filepath.Ext(filename)))
 	if baseName == "" {
 		baseName = "schema-pack"
 	}
@@ -566,12 +568,12 @@ func schemaPackMetadata(root, fallbackName string) (schemaPackMeta, error) {
 	if name == "" {
 		name = fallbackName
 	}
-	name = slug(name)
+	name = jsonfile.Slug(name)
 	if name == "" {
 		name = "schema-pack"
 	}
 
-	id := slug(manifest.ID)
+	id := jsonfile.Slug(manifest.ID)
 	if id == "" {
 		id = fmt.Sprintf("%s-%s", name, contentID[:12])
 	}

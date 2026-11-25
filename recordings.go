@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"nhooyr.io/websocket"
+
+	"ditto/internal/jsonfile"
 )
 
 const (
@@ -365,14 +367,14 @@ func (r *Recorder) List() ([]RecordingManifest, error) {
 }
 
 func (r *Recorder) Manifest(id string) (RecordingManifest, error) {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return RecordingManifest{}, fmt.Errorf("invalid recording id")
 	}
 	return readRecordingManifest(filepath.Join(r.dir, id))
 }
 
 func (r *Recorder) Delete(id string) error {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return fmt.Errorf("invalid recording id")
 	}
 	if active := r.ActiveID(); active == id {
@@ -386,7 +388,7 @@ func (r *Recorder) Delete(id string) error {
 }
 
 func (r *Recorder) Frames(id, channel string, offset, limit int) ([]RecordedFrame, error) {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return nil, fmt.Errorf("invalid recording id")
 	}
 	if offset < 0 {
@@ -864,7 +866,7 @@ func readRecordingManifest(dir string) (RecordingManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return RecordingManifest{}, err
 	}
-	if manifest.Version != 1 || !validID(manifest.ID) {
+	if manifest.Version != 1 || !jsonfile.ValidID(manifest.ID) {
 		return RecordingManifest{}, fmt.Errorf("invalid recording manifest")
 	}
 	if manifest.Channels == nil {
@@ -895,7 +897,7 @@ func writeRecordingManifest(dir string, manifest RecordingManifest) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(dir, "manifest.json"), data, 0o644)
+	return jsonfile.WriteAtomic(filepath.Join(dir, "manifest.json"), data, 0o644)
 }
 
 func (r *Recorder) publish(method, path string, status int, body string) {
@@ -913,11 +915,11 @@ func (r *Recorder) publish(method, path string, status int, body string) {
 }
 
 func recordingID(name string, at time.Time) string {
-	return hashedID(name, "recording", fmt.Sprintf("%s\n%s", name, at.Format(time.RFC3339Nano)))
+	return jsonfile.HashedID(name, "recording", fmt.Sprintf("%s\n%s", name, at.Format(time.RFC3339Nano)))
 }
 
 func channelFileName(channel string) string {
-	base := slug(channel)
+	base := jsonfile.Slug(channel)
 	if base == "" {
 		base = "channel"
 	}
@@ -1008,7 +1010,7 @@ func RegisterRecordingRoutes(mux *http.ServeMux, recorder *Recorder) {
 		}
 		rel := strings.Trim(strings.TrimPrefix(r.URL.Path, "/__ditto__/api/recordings/"), "/")
 		parts := strings.Split(rel, "/")
-		if len(parts) == 0 || !validID(parts[0]) {
+		if len(parts) == 0 || !jsonfile.ValidID(parts[0]) {
 			http.NotFound(w, r)
 			return
 		}

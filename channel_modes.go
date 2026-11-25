@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ditto/internal/jsonfile"
 )
 
 var ErrChannelModeNotFound = errors.New("channel mode not found")
@@ -223,7 +225,7 @@ func writeChannelModeState(path string, channels []ChannelConfig) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, data, 0o644)
+	return jsonfile.WriteAtomic(path, data, 0o644)
 }
 
 func (r *ChannelModeRegistry) publishModeEvent(method string, cfg ChannelConfig) {

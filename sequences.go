@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ditto/internal/jsonfile"
 )
 
 const (
@@ -113,7 +115,7 @@ func (r *EventSequenceRegistry) Load() error {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !validID(id) {
+		if !jsonfile.ValidID(id) {
 			log.Printf("event sequence %s skipped: unsafe id", entry.Name())
 			continue
 		}
@@ -137,7 +139,7 @@ func (r *EventSequenceRegistry) Load() error {
 		}
 		seq = normalizeEventSequence(seq)
 		seq.ID = fileID
-		if seq.ID != id || !validID(seq.ID) {
+		if seq.ID != id || !jsonfile.ValidID(seq.ID) {
 			log.Printf("event sequence %s skipped: id mismatch", entry.Name())
 			continue
 		}
@@ -168,7 +170,7 @@ func (r *EventSequenceRegistry) Sequences() []EventSequence {
 }
 
 func (r *EventSequenceRegistry) Get(id string) (EventSequence, error) {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	r.mu.RLock()
@@ -212,7 +214,7 @@ func (r *EventSequenceRegistry) Create(seq EventSequence) (EventSequence, error)
 }
 
 func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSequence, error) {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
@@ -244,7 +246,7 @@ func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSeque
 }
 
 func (r *EventSequenceRegistry) Delete(id string) error {
-	if !validID(id) {
+	if !jsonfile.ValidID(id) {
 		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
 	}
 	r.mu.Lock()
@@ -344,7 +346,7 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 	}
 	seen := make(map[string]struct{}, len(seq.Steps))
 	for i, step := range seq.Steps {
-		if !validID(step.ID) {
+		if !jsonfile.ValidID(step.ID) {
 			return fmt.Errorf("step %d has unsafe id", i+1)
 		}
 		if _, ok := seen[step.ID]; ok {
@@ -417,7 +419,7 @@ func (r *EventSequenceRegistry) nextIDLocked(name string) string {
 }
 
 func (r *EventSequenceRegistry) writeLocked(seq EventSequence, overwrite bool) error {
-	return writeJSONFile(r.pathForIDLocked(seq.ID), seq, overwrite)
+	return jsonfile.Write(r.pathForIDLocked(seq.ID), seq, overwrite)
 }
 
 func (r *EventSequenceRegistry) pathForIDLocked(id string) string {
@@ -468,7 +470,7 @@ func assignSequenceStepIDs(seq *EventSequence) {
 	for i := range seq.Steps {
 		id := strings.TrimSpace(seq.Steps[i].ID)
 		if id != "" {
-			if _, ok := seen[id]; !ok && validID(id) {
+			if _, ok := seen[id]; !ok && jsonfile.ValidID(id) {
 				seen[id] = struct{}{}
 				continue
 			}
@@ -485,7 +487,7 @@ func assignSequenceStepIDs(seq *EventSequence) {
 }
 
 func eventSequenceID(name string, attempt int) string {
-	return hashedID(name, "event-sequence", nameAttempt(name, attempt))
+	return jsonfile.HashedID(name, "event-sequence", jsonfile.NameAttempt(name, attempt))
 }
 
 func eventSequenceStepID(name string, step EventSequenceStep, index int, attempt int) string {
@@ -628,10 +630,10 @@ func decodeEventSequenceJSON(w http.ResponseWriter, r *http.Request, dst any, al
 
 func splitSequencePath(rest string) (id string, action string, ok bool) {
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) == 1 && validID(parts[0]) {
+	if len(parts) == 1 && jsonfile.ValidID(parts[0]) {
 		return parts[0], "", true
 	}
-	if len(parts) == 2 && validID(parts[0]) {
+	if len(parts) == 2 && jsonfile.ValidID(parts[0]) {
 		switch parts[1] {
 		case "play", "pause", "stop", "seek", "speed":
 			return parts[0], parts[1], true
