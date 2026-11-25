@@ -13,6 +13,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/adapter"
 	"ditto/internal/eventlog"
 )
 
@@ -256,8 +257,8 @@ func TestForwardFromUpstreamLogsDecodedAppSyncFrame(t *testing.T) {
 	client := &SocketClient{
 		id:            "appsync-1",
 		adapter:       "appsync",
-		protocol:      AppSyncAdapter{},
-		send:          make(chan EncodedServerMessage, 2),
+		protocol:      adapter.AppSync{},
+		send:          make(chan adapter.Message, 2),
 		done:          make(chan struct{}),
 		subscriptions: map[string]string{"/live": "sub-1"},
 	}
@@ -288,8 +289,8 @@ func testSocketClient(id string) *SocketClient {
 	return &SocketClient{
 		id:            id,
 		adapter:       "raw",
-		protocol:      RawAdapter{},
-		send:          make(chan EncodedServerMessage, 1),
+		protocol:      adapter.Raw{},
+		send:          make(chan adapter.Message, 1),
 		done:          make(chan struct{}),
 		subscriptions: map[string]string{},
 	}

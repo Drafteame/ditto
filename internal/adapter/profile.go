@@ -1,4 +1,4 @@
-package main
+package adapter
 
 import (
 	"embed"
@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,11 +22,10 @@ import (
 	"ditto/internal/jsonfile"
 )
 
-//go:embed defaults/adapter_profiles/*.json
+//go:embed defaults/*.json
 var defaultAdapterProfilesFS embed.FS
 
 const (
-	adapterProfilesDirName          = "adapter_profiles"
 	adapterProfilesSeededFile       = ".seeded"
 	maxAdapterProfileBytes    int64 = 1 << 20
 )
@@ -38,31 +38,35 @@ var builtinAdapterNames = map[string]struct{}{
 	"relay":   {},
 }
 
-type AdapterProfile struct {
-	ManifestVersion int                    `json:"manifest_version"`
-	Name            string                 `json:"name"`
-	BaseAdapter     string                 `json:"base_adapter"`
-	Subprotocols    []string               `json:"subprotocols,omitempty"`
-	Envelope        AdapterProfileEnvelope `json:"envelope"`
-	TypeAliases     map[string]string      `json:"type_aliases,omitempty"`
+// Profile configures a protocol without code: a built-in base adapter plus
+// envelope templates, subprotocols and type aliases.
+type Profile struct {
+	ManifestVersion int               `json:"manifest_version"`
+	Name            string            `json:"name"`
+	BaseAdapter     string            `json:"base_adapter"`
+	Subprotocols    []string          `json:"subprotocols,omitempty"`
+	Envelope        Envelope          `json:"envelope"`
+	TypeAliases     map[string]string `json:"type_aliases,omitempty"`
 }
 
-type AdapterProfileEnvelope struct {
+// Envelope holds a profile's templates for wrapping outgoing events.
+type Envelope struct {
 	Outer       string `json:"outer"`
 	InnerBinary string `json:"inner_binary"`
 	InnerJSON   string `json:"inner_json"`
 }
 
-type AdapterProfileSummary struct {
+// Summary is the part of a Profile the dashboard lists.
+type Summary struct {
 	Name         string            `json:"name"`
 	BaseAdapter  string            `json:"base_adapter"`
 	Subprotocols []string          `json:"subprotocols"`
 	TypeAliases  map[string]string `json:"type_aliases"`
 }
 
-type ProfileAdapter struct {
-	profile AdapterProfile
-	base    ProtocolAdapter
+type profileAdapter struct {
+	profile Profile
+	base    Protocol
 }
 
 type adapterTemplateValue struct {
@@ -70,19 +74,21 @@ type adapterTemplateValue struct {
 	raw   bool
 }
 
-// AdapterRegistry resolves socket adapter names to the built-in protocol
+// Registry resolves socket adapter names to the built-in protocol
 // adapters or to adapter profiles loaded from disk. The zero value, and a nil
-// *AdapterRegistry, know only the built-in adapters.
-type AdapterRegistry struct {
+// *Registry, know only the built-in adapters.
+type Registry struct {
 	mu       sync.RWMutex
-	profiles map[string]AdapterProfile
+	profiles map[string]Profile
 }
 
-func ValidateAdapterProfile(profile AdapterProfile) error {
+// ValidateProfile checks a profile's version, name, base adapter and
+// envelope templates.
+func ValidateProfile(profile Profile) error {
 	if profile.ManifestVersion != 1 {
 		return fmt.Errorf("manifest_version must be 1, got %d", profile.ManifestVersion)
 	}
-	name := normalizeAdapter(profile.Name)
+	name := Normalize(profile.Name)
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
@@ -92,7 +98,7 @@ func ValidateAdapterProfile(profile AdapterProfile) error {
 	if _, ok := builtinAdapterNames[name]; ok {
 		return fmt.Errorf("name %q collides with a built-in adapter", name)
 	}
-	base := normalizeAdapter(profile.BaseAdapter)
+	base := Normalize(profile.BaseAdapter)
 	if _, ok := builtinAdapterNames[base]; !ok {
 		return fmt.Errorf("base_adapter must be one of raw, appsync, relay, got %q", profile.BaseAdapter)
 	}
@@ -111,45 +117,45 @@ func ValidateAdapterProfile(profile AdapterProfile) error {
 	return nil
 }
 
-func NewProfileAdapter(profile AdapterProfile) (ProfileAdapter, error) {
-	if err := ValidateAdapterProfile(profile); err != nil {
-		return ProfileAdapter{}, err
+func newProfileAdapter(profile Profile) (profileAdapter, error) {
+	if err := ValidateProfile(profile); err != nil {
+		return profileAdapter{}, err
 	}
-	base, err := newBuiltinProtocolAdapter(profile.BaseAdapter)
+	base, err := newBuiltin(profile.BaseAdapter)
 	if err != nil {
-		return ProfileAdapter{}, err
+		return profileAdapter{}, err
 	}
-	return ProfileAdapter{
+	return profileAdapter{
 		profile: cloneAdapterProfile(profile),
 		base:    base,
 	}, nil
 }
 
-func (a ProfileAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
+func (a profileAdapter) ParseClientMessage(b []byte) (ClientMessage, error) {
 	return a.base.ParseClientMessage(b)
 }
 
-func (a ProfileAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
+func (a profileAdapter) EncodePayload(payload json.RawMessage) (Payload, error) {
 	return a.base.EncodePayload(payload)
 }
 
-func (a ProfileAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
+func (a profileAdapter) EncodeServerMessage(msg ServerMessage) (Message, error) {
 	return a.base.EncodeServerMessage(msg)
 }
 
-func (a ProfileAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
+func (a profileAdapter) Heartbeat() (Message, time.Duration) {
 	return a.base.Heartbeat()
 }
 
-func (a ProfileAdapter) Subprotocols() []string {
+func (a profileAdapter) Subprotocols() []string {
 	return append([]string(nil), a.profile.Subprotocols...)
 }
 
-func (a ProfileAdapter) GreetsOnConnect() bool {
-	return adapterGreetsOnConnect(a.base)
+func (a profileAdapter) GreetsOnConnect() bool {
+	return GreetsOnConnect(a.base)
 }
 
-func (a ProfileAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
+func (a profileAdapter) WrapData(payload Payload, subID, channel string) (Message, error) {
 	var innerTemplate string
 	var innerVars map[string]adapterTemplateValue
 	var err error
@@ -161,16 +167,16 @@ func (a ProfileAdapter) WrapData(payload EncodedPayload, subID, channel string) 
 		innerVars, err = a.innerJSONVars(payload, channel)
 	}
 	if err != nil {
-		return EncodedServerMessage{}, err
+		return Message{}, err
 	}
 	inner, err := renderAdapterJSONTemplate(innerTemplate, innerVars)
 	if err != nil {
-		return EncodedServerMessage{}, fmt.Errorf("render inner envelope: %w", err)
+		return Message{}, fmt.Errorf("render inner envelope: %w", err)
 	}
 
 	innerString, err := json.Marshal(string(inner))
 	if err != nil {
-		return EncodedServerMessage{}, err
+		return Message{}, err
 	}
 	outerVars := map[string]adapterTemplateValue{
 		"sub_id":       {value: subID},
@@ -180,12 +186,12 @@ func (a ProfileAdapter) WrapData(payload EncodedPayload, subID, channel string) 
 	}
 	outer, err := renderAdapterJSONTemplate(a.profile.Envelope.Outer, outerVars)
 	if err != nil {
-		return EncodedServerMessage{}, fmt.Errorf("render outer envelope: %w", err)
+		return Message{}, fmt.Errorf("render outer envelope: %w", err)
 	}
-	return EncodedServerMessage{Data: outer, Kind: websocket.MessageText}, nil
+	return Message{Data: outer, Kind: websocket.MessageText}, nil
 }
 
-func (a ProfileAdapter) innerBinaryVars(payload EncodedPayload, channel string) (map[string]adapterTemplateValue, error) {
+func (a profileAdapter) innerBinaryVars(payload Payload, channel string) (map[string]adapterTemplateValue, error) {
 	typeName := strings.TrimSpace(payload.TypeName)
 	alias := typeName
 	if mapped := a.profile.TypeAliases[typeName]; mapped != "" {
@@ -199,7 +205,7 @@ func (a ProfileAdapter) innerBinaryVars(payload EncodedPayload, channel string) 
 	}, nil
 }
 
-func (a ProfileAdapter) innerJSONVars(payload EncodedPayload, channel string) (map[string]adapterTemplateValue, error) {
+func (a profileAdapter) innerJSONVars(payload Payload, channel string) (map[string]adapterTemplateValue, error) {
 	typeName := strings.TrimSpace(payload.TypeName)
 	alias := typeName
 	if mapped := a.profile.TypeAliases[typeName]; mapped != "" {
@@ -220,7 +226,7 @@ func (a ProfileAdapter) innerJSONVars(payload EncodedPayload, channel string) (m
 // payloadJSONValue is used only by the JSON-payload path. Binary callers must
 // use the base64 variable instead; Data is considered here only when it already
 // contains valid JSON bytes from a text payload.
-func payloadJSONValue(payload EncodedPayload) ([]byte, error) {
+func payloadJSONValue(payload Payload) ([]byte, error) {
 	if len(payload.Data) > 0 && json.Valid(payload.Data) {
 		return append([]byte(nil), payload.Data...), nil
 	}
@@ -290,7 +296,7 @@ func jsonStringContent(value string) (string, error) {
 	return string(data[1 : len(data)-1]), nil
 }
 
-func SeedDefaultAdapterProfiles(dir string) error {
+func seedDefaults(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -311,7 +317,7 @@ func SeedDefaultAdapterProfiles(dir string) error {
 		}
 	}
 	changed := false
-	if err := fs.WalkDir(defaultAdapterProfilesFS, "defaults/adapter_profiles", func(path string, entry fs.DirEntry, err error) error {
+	if err := fs.WalkDir(defaultAdapterProfilesFS, "defaults", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -362,7 +368,7 @@ func hasAdapterProfileFiles(dir string) (bool, error) {
 }
 
 func markEmbeddedAdapterProfilesSeeded(dir string, seeded map[string]bool) error {
-	return fs.WalkDir(defaultAdapterProfilesFS, "defaults/adapter_profiles", func(path string, entry fs.DirEntry, err error) error {
+	return fs.WalkDir(defaultAdapterProfilesFS, "defaults", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -433,15 +439,15 @@ func readAdapterProfileFile(path string) ([]byte, error) {
 // Load seeds the bundled default profiles into dir, then replaces the
 // registry's profiles with the valid ones found there. Invalid or duplicate
 // files are skipped with a log line.
-func (r *AdapterRegistry) Load(dir string) error {
-	if err := SeedDefaultAdapterProfiles(dir); err != nil {
+func (r *Registry) Load(dir string) error {
+	if err := seedDefaults(dir); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	profiles := make(map[string]AdapterProfile)
+	profiles := make(map[string]Profile)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
 			continue
@@ -462,27 +468,27 @@ func (r *AdapterRegistry) Load(dir string) error {
 	return nil
 }
 
-func readAdapterProfile(path string) (AdapterProfile, error) {
+func readAdapterProfile(path string) (Profile, error) {
 	data, err := readAdapterProfileFile(path)
 	if err != nil {
-		return AdapterProfile{}, err
+		return Profile{}, err
 	}
-	var profile AdapterProfile
+	var profile Profile
 	if err := json.Unmarshal(data, &profile); err != nil {
-		return AdapterProfile{}, err
+		return Profile{}, err
 	}
-	if err := ValidateAdapterProfile(profile); err != nil {
-		return AdapterProfile{}, err
+	if err := ValidateProfile(profile); err != nil {
+		return Profile{}, err
 	}
 	return cloneAdapterProfile(profile), nil
 }
 
 // Summaries lists the loaded profiles sorted by name.
-func (r *AdapterRegistry) Summaries() []AdapterProfileSummary {
+func (r *Registry) Summaries() []Summary {
 	profiles := r.snapshot()
-	summaries := make([]AdapterProfileSummary, 0, len(profiles))
+	summaries := make([]Summary, 0, len(profiles))
 	for _, profile := range profiles {
-		typeAliases := cloneStringMap(profile.TypeAliases)
+		typeAliases := maps.Clone(profile.TypeAliases)
 		if typeAliases == nil {
 			typeAliases = map[string]string{}
 		}
@@ -490,7 +496,7 @@ func (r *AdapterRegistry) Summaries() []AdapterProfileSummary {
 		if subprotocols == nil {
 			subprotocols = []string{}
 		}
-		summaries = append(summaries, AdapterProfileSummary{
+		summaries = append(summaries, Summary{
 			Name:         profile.Name,
 			BaseAdapter:  profile.BaseAdapter,
 			Subprotocols: subprotocols,
@@ -504,54 +510,54 @@ func (r *AdapterRegistry) Summaries() []AdapterProfileSummary {
 }
 
 // Profile returns a copy of the named profile.
-func (r *AdapterRegistry) Profile(name string) (AdapterProfile, bool) {
+func (r *Registry) Profile(name string) (Profile, bool) {
 	if r == nil {
-		return AdapterProfile{}, false
+		return Profile{}, false
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	profile, ok := r.profiles[normalizeAdapter(name)]
+	profile, ok := r.profiles[Normalize(name)]
 	return cloneAdapterProfile(profile), ok
 }
 
 // Protocol returns the adapter for name: a loaded profile if one matches,
 // otherwise a built-in adapter. An empty name selects the raw adapter.
-func (r *AdapterRegistry) Protocol(name string) (ProtocolAdapter, error) {
-	adapterName := normalizeAdapter(name)
+func (r *Registry) Protocol(name string) (Protocol, error) {
+	adapterName := Normalize(name)
 	if adapterName == "" {
 		adapterName = "raw"
 	}
 	if profile, ok := r.Profile(adapterName); ok {
-		return NewProfileAdapter(profile)
+		return newProfileAdapter(profile)
 	}
-	return newBuiltinProtocolAdapter(adapterName)
+	return newBuiltin(adapterName)
 }
 
-func (r *AdapterRegistry) setProfiles(profiles map[string]AdapterProfile) {
-	next := make(map[string]AdapterProfile, len(profiles))
+func (r *Registry) setProfiles(profiles map[string]Profile) {
+	next := make(map[string]Profile, len(profiles))
 	for name, profile := range profiles {
-		next[normalizeAdapter(name)] = cloneAdapterProfile(profile)
+		next[Normalize(name)] = cloneAdapterProfile(profile)
 	}
 	r.mu.Lock()
 	r.profiles = next
 	r.mu.Unlock()
 }
 
-func (r *AdapterRegistry) snapshot() map[string]AdapterProfile {
+func (r *Registry) snapshot() map[string]Profile {
 	if r == nil {
 		return nil
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	profiles := make(map[string]AdapterProfile, len(r.profiles))
+	profiles := make(map[string]Profile, len(r.profiles))
 	for name, profile := range r.profiles {
 		profiles[name] = cloneAdapterProfile(profile)
 	}
 	return profiles
 }
 
-func cloneAdapterProfile(profile AdapterProfile) AdapterProfile {
+func cloneAdapterProfile(profile Profile) Profile {
 	profile.Subprotocols = append([]string(nil), profile.Subprotocols...)
-	profile.TypeAliases = cloneStringMap(profile.TypeAliases)
+	profile.TypeAliases = maps.Clone(profile.TypeAliases)
 	return profile
 }

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"ditto/internal/adapter"
 	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
 )
@@ -64,7 +65,7 @@ type EventTemplateRegistry struct {
 	dir       string
 	templates map[string]EventTemplate
 	schemas   *schema.Registry
-	adapters  *AdapterRegistry
+	adapters  *adapter.Registry
 }
 
 type eventTemplatesResponse struct {
@@ -87,7 +88,7 @@ type eventTemplateDispatchResponse struct {
 // NewEventTemplateRegistry loads the templates in dir. Templates that name an
 // adapter or schema type unknown to adapters or schemas are skipped, so both
 // must be loaded first.
-func NewEventTemplateRegistry(dir string, schemas *schema.Registry, adapters *AdapterRegistry) (*EventTemplateRegistry, error) {
+func NewEventTemplateRegistry(dir string, schemas *schema.Registry, adapters *adapter.Registry) (*EventTemplateRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -714,7 +715,7 @@ func splitEventTemplatePath(rest string) (id string, action string, ok bool) {
 	return "", "", false
 }
 
-func validateEventTemplate(tmpl EventTemplate, schemas *schema.Registry, adapters *AdapterRegistry) error {
+func validateEventTemplate(tmpl EventTemplate, schemas *schema.Registry, adapters *adapter.Registry) error {
 	if tmpl.Version != 1 {
 		return fmt.Errorf("unsupported event template version %d", tmpl.Version)
 	}
@@ -731,8 +732,8 @@ func validateEventTemplate(tmpl EventTemplate, schemas *schema.Registry, adapter
 	if strings.Contains(channel, "{{") || strings.Contains(channel, "}}") {
 		return fmt.Errorf("channel variables are not supported")
 	}
-	adapter := normalizeAdapter(tmpl.Adapter)
-	if _, err := adapters.Protocol(adapter); err != nil {
+	adapterName := adapter.Normalize(tmpl.Adapter)
+	if _, err := adapters.Protocol(adapterName); err != nil {
 		return err
 	}
 	if len(tmpl.Payload) == 0 {
@@ -852,7 +853,7 @@ func normalizeEventTemplate(tmpl EventTemplate) EventTemplate {
 	tmpl.Name = strings.TrimSpace(tmpl.Name)
 	tmpl.Description = strings.TrimSpace(tmpl.Description)
 	tmpl.Channel = strings.TrimSpace(tmpl.Channel)
-	tmpl.Adapter = normalizeAdapter(tmpl.Adapter)
+	tmpl.Adapter = adapter.Normalize(tmpl.Adapter)
 	tmpl.TypeName = strings.TrimSpace(tmpl.TypeName)
 	tmpl.Payload = append(json.RawMessage(nil), tmpl.Payload...)
 	variables := make([]EventTemplateVariable, 0, len(tmpl.Variables))

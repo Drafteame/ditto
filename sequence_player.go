@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"ditto/internal/adapter"
 	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
 )
@@ -62,7 +63,7 @@ type PlayerEvent struct {
 
 type stepCacheEntry struct {
 	payloadHash [32]byte
-	encoded     EncodedPayload
+	encoded     adapter.Payload
 }
 
 type PlayerBroadcaster struct {
@@ -710,7 +711,7 @@ func (r *sequenceRunner) encodeStep(step EventSequenceStep, dispatch SocketDispa
 	if err != nil {
 		return dispatch, fmt.Errorf("protobuf encode failed: %w", err)
 	}
-	encoded := ProtobufPayload(typeName, data)
+	encoded := adapter.ProtobufPayload(typeName, data)
 	r.cache[step.ID] = stepCacheEntry{payloadHash: hash, encoded: encoded}
 	dispatch.Encoded = &encoded
 	return dispatch, nil

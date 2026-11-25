@@ -12,17 +12,34 @@ import (
 	"testing"
 	"time"
 
+	"ditto/internal/adapter"
 	"ditto/internal/eventlog"
 	"ditto/internal/schema"
 )
 
 func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
-	adapters := &AdapterRegistry{}
-	adapters.setProfiles(map[string]AdapterProfile{
-		"custom-profile": testAdapterProfile("custom-profile", map[string]string{
-			"appsync.recovery.Recovery": "recovery",
-		}),
+	// A directory that already holds a profile is user-owned, so Load does
+	// not seed the bundled defaults next to it.
+	dir := t.TempDir()
+	profile, err := json.Marshal(adapter.Profile{
+		ManifestVersion: 1, Name: "custom-profile", BaseAdapter: "appsync",
+		Envelope: adapter.Envelope{
+			Outer:       `{"id":"${sub_id}","type":"data","event":${inner_string}}`,
+			InnerBinary: `{"t":"${alias}","e":"${base64}"}`,
+			InnerJSON:   `{"t":"${alias}","e":${json}}`,
+		},
+		TypeAliases: map[string]string{"appsync.recovery.Recovery": "recovery"},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "custom-profile.json"), profile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	adapters := &adapter.Registry{}
+	if err := adapters.Load(dir); err != nil {
+		t.Fatal(err)
+	}
 
 	mux := http.NewServeMux()
 	RegisterSocketRoutes(mux, NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Adapters: adapters}))
@@ -34,7 +51,7 @@ func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var got []AdapterProfileSummary
+	var got []adapter.Summary
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("response JSON error = %v", err)
 	}

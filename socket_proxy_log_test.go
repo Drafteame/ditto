@@ -18,6 +18,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/adapter"
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 	"ditto/internal/schema"
@@ -316,7 +317,7 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded := ProtobufPayload("ditto.test.Item", data)
+	encoded := adapter.ProtobufPayload("ditto.test.Item", data)
 	bus := eventlog.NewBus(nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.schemas = schemas
@@ -376,7 +377,7 @@ func TestDispatchLogsPerClientQueueDrop(t *testing.T) {
 	client := testSocketClient("full")
 	client.url, client.host, client.remoteAddr, client.protocolName = "ws://client.test/socket", "client.test", "127.0.0.1:5555", "HTTP/1.1"
 	client.addSubscription("/drop", "sub-1")
-	client.send <- EncodedServerMessage{Kind: websocket.MessageText, Data: []byte("already queued")}
+	client.send <- adapter.Message{Kind: websocket.MessageText, Data: []byte("already queued")}
 	hub.addClient(client)
 	hub.registry.Subscribe("/drop", client.id)
 	result := hub.dispatchJSON("/drop", json.RawMessage(`{"drop":true}`), "", "")

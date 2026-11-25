@@ -1,4 +1,4 @@
-package main
+package adapter
 
 import (
 	"bytes"
@@ -59,16 +59,16 @@ func TestAdapterTemplateRenderedOutputMustBeJSON(t *testing.T) {
 }
 
 func TestProfileAdapterWrapDataBinaryPayloadUsesAlias(t *testing.T) {
-	adapter := newTestProfileAdapter(t, map[string]string{
+	protocol := newTestProfileAdapter(t, map[string]string{
 		"appsync.recovery.Recovery": "recovery",
 	})
-	payload := EncodedPayload{
+	payload := Payload{
 		Data:     []byte{1, 2, 3},
 		Kind:     websocket.MessageBinary,
 		TypeName: "appsync.recovery.Recovery",
 	}
 
-	encoded, err := adapter.WrapData(payload, "sub-1", "/test")
+	encoded, err := protocol.WrapData(payload, "sub-1", "/test")
 	if err != nil {
 		t.Fatalf("WrapData() error = %v", err)
 	}
@@ -83,14 +83,14 @@ func TestProfileAdapterWrapDataBinaryPayloadUsesAlias(t *testing.T) {
 }
 
 func TestProfileAdapterWrapDataBinaryPayloadFallsBackToFQN(t *testing.T) {
-	adapter := newTestProfileAdapter(t, nil)
-	payload := EncodedPayload{
+	protocol := newTestProfileAdapter(t, nil)
+	payload := Payload{
 		Data:     []byte{4, 5, 6},
 		Kind:     websocket.MessageBinary,
 		TypeName: "appsync.unknown.Event",
 	}
 
-	encoded, err := adapter.WrapData(payload, "sub-1", "/test")
+	encoded, err := protocol.WrapData(payload, "sub-1", "/test")
 	if err != nil {
 		t.Fatalf("WrapData() error = %v", err)
 	}
@@ -102,16 +102,16 @@ func TestProfileAdapterWrapDataBinaryPayloadFallsBackToFQN(t *testing.T) {
 }
 
 func TestProfileAdapterWrapDataJSONPayloadUsesRawJSONValue(t *testing.T) {
-	adapter := newTestProfileAdapter(t, map[string]string{
+	protocol := newTestProfileAdapter(t, map[string]string{
 		"appsync.gameinfo.GameEventDto": "gameInfo",
 	})
-	payload := EncodedPayload{
+	payload := Payload{
 		Kind:     websocket.MessageText,
 		Value:    map[string]any{"score": float64(7)},
 		TypeName: "appsync.gameinfo.GameEventDto",
 	}
 
-	encoded, err := adapter.WrapData(payload, "sub-1", "/test")
+	encoded, err := protocol.WrapData(payload, "sub-1", "/test")
 	if err != nil {
 		t.Fatalf("WrapData() error = %v", err)
 	}
@@ -127,8 +127,8 @@ func TestProfileAdapterWrapDataJSONPayloadUsesRawJSONValue(t *testing.T) {
 }
 
 func TestProfileAdapterSubprotocolsOverrideBase(t *testing.T) {
-	adapter := newTestProfileAdapter(t, nil)
-	got := adapter.Subprotocols()
+	protocol := newTestProfileAdapter(t, nil)
+	got := protocol.Subprotocols()
 	if len(got) != 1 || got[0] != "custom-protocol" {
 		t.Fatalf("Subprotocols() = %v, want profile list", got)
 	}
@@ -137,12 +137,12 @@ func TestProfileAdapterSubprotocolsOverrideBase(t *testing.T) {
 func TestProfileAdapterWrapDataExposesChannelVariable(t *testing.T) {
 	profile := testAdapterProfile("custom-profile", nil)
 	profile.Envelope.Outer = `{"id":"${sub_id}","channel":"${channel}","event":${inner_string}}`
-	adapter, err := NewProfileAdapter(profile)
+	protocol, err := newProfileAdapter(profile)
 	if err != nil {
-		t.Fatalf("NewProfileAdapter() error = %v", err)
+		t.Fatalf("newProfileAdapter() error = %v", err)
 	}
 
-	encoded, err := adapter.WrapData(EncodedPayload{
+	encoded, err := protocol.WrapData(Payload{
 		Data:     []byte{1},
 		Kind:     websocket.MessageBinary,
 		TypeName: "appsync.recovery.Recovery",
@@ -165,12 +165,12 @@ func TestProfileAdapterWrapDataExposesChannelVariable(t *testing.T) {
 func TestProfileAdapterWrapDataExposesChannelVariableInsideInnerTemplate(t *testing.T) {
 	profile := testAdapterProfile("custom-profile", nil)
 	profile.Envelope.InnerBinary = `{"t":"${alias}","channel":"${channel}","e":"${base64}"}`
-	adapter, err := NewProfileAdapter(profile)
+	protocol, err := newProfileAdapter(profile)
 	if err != nil {
-		t.Fatalf("NewProfileAdapter() error = %v", err)
+		t.Fatalf("newProfileAdapter() error = %v", err)
 	}
 
-	encoded, err := adapter.WrapData(EncodedPayload{
+	encoded, err := protocol.WrapData(Payload{
 		Data:     []byte{1},
 		Kind:     websocket.MessageBinary,
 		TypeName: "appsync.recovery.Recovery",
@@ -190,12 +190,12 @@ func TestProfileAdapterWrapDataCanInsertInnerObjectRaw(t *testing.T) {
 		"appsync.gameinfo.GameEventDto": "gameInfo",
 	})
 	profile.Envelope.Outer = `{"id":"${sub_id}","event":${inner_object}}`
-	adapter, err := NewProfileAdapter(profile)
+	protocol, err := newProfileAdapter(profile)
 	if err != nil {
-		t.Fatalf("NewProfileAdapter() error = %v", err)
+		t.Fatalf("newProfileAdapter() error = %v", err)
 	}
 
-	encoded, err := adapter.WrapData(EncodedPayload{
+	encoded, err := protocol.WrapData(Payload{
 		Kind:     websocket.MessageText,
 		Value:    map[string]any{"score": float64(7)},
 		TypeName: "appsync.gameinfo.GameEventDto",
@@ -219,11 +219,11 @@ func TestProfileAdapterWrapDataCanInsertInnerObjectRaw(t *testing.T) {
 }
 
 func TestProfileAdapterWrapDataDoesNotEvaluateJSONVarsForBinaryPayload(t *testing.T) {
-	adapter := newTestProfileAdapter(t, map[string]string{
+	protocol := newTestProfileAdapter(t, map[string]string{
 		"appsync.recovery.Recovery": "recovery",
 	})
 
-	_, err := adapter.WrapData(EncodedPayload{
+	_, err := protocol.WrapData(Payload{
 		Data:     []byte{0xff, 0xfe},
 		Kind:     websocket.MessageBinary,
 		Value:    func() {},
@@ -242,25 +242,25 @@ func TestAdapterRegistryLoadRegistersValidFilesAndSkipsInvalidFiles(t *testing.T
 
 	dir := t.TempDir()
 	writeProfileFile(t, dir, "valid.json", testAdapterProfile("custom-profile", nil))
-	writeProfileFile(t, dir, "bad-version.json", AdapterProfile{
+	writeProfileFile(t, dir, "bad-version.json", Profile{
 		ManifestVersion: 2,
 		Name:            "bad-version",
 		BaseAdapter:     "appsync",
 		Envelope:        testProfileEnvelope(),
 	})
-	writeProfileFile(t, dir, "missing-name.json", AdapterProfile{
+	writeProfileFile(t, dir, "missing-name.json", Profile{
 		ManifestVersion: 1,
 		BaseAdapter:     "appsync",
 		Envelope:        testProfileEnvelope(),
 	})
-	writeProfileFile(t, dir, "collision.json", AdapterProfile{
+	writeProfileFile(t, dir, "collision.json", Profile{
 		ManifestVersion: 1,
 		Name:            "raw",
 		BaseAdapter:     "appsync",
 		Envelope:        testProfileEnvelope(),
 	})
 
-	adapters := &AdapterRegistry{}
+	adapters := &Registry{}
 	if err := adapters.Load(dir); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -283,14 +283,14 @@ func TestSeedDefaultAdapterProfilesCopiesEmbeddedDefaultOnce(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "appsync-draftea.json")
 
-	if err := SeedDefaultAdapterProfiles(dir); err != nil {
-		t.Fatalf("SeedDefaultAdapterProfiles() error = %v", err)
+	if err := seedDefaults(dir); err != nil {
+		t.Fatalf("seedDefaults() error = %v", err)
 	}
 	got, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("seeded profile missing: %v", err)
 	}
-	want, err := defaultAdapterProfilesFS.ReadFile("defaults/adapter_profiles/appsync-draftea.json")
+	want, err := defaultAdapterProfilesFS.ReadFile("defaults/appsync-draftea.json")
 	if err != nil {
 		t.Fatalf("ReadFile(default) error = %v", err)
 	}
@@ -302,8 +302,8 @@ func TestSeedDefaultAdapterProfilesCopiesEmbeddedDefaultOnce(t *testing.T) {
 	if err := os.WriteFile(target, edited, 0o644); err != nil {
 		t.Fatalf("edit seeded profile: %v", err)
 	}
-	if err := SeedDefaultAdapterProfiles(dir); err != nil {
-		t.Fatalf("second SeedDefaultAdapterProfiles() error = %v", err)
+	if err := seedDefaults(dir); err != nil {
+		t.Fatalf("second seedDefaults() error = %v", err)
 	}
 	got, err = os.ReadFile(target)
 	if err != nil {
@@ -319,14 +319,14 @@ func TestSeedDefaultAdapterProfilesDoesNotReseedRenamedDefault(t *testing.T) {
 	target := filepath.Join(dir, "appsync-draftea.json")
 	renamed := filepath.Join(dir, "my-draftea.json")
 
-	if err := SeedDefaultAdapterProfiles(dir); err != nil {
-		t.Fatalf("SeedDefaultAdapterProfiles() error = %v", err)
+	if err := seedDefaults(dir); err != nil {
+		t.Fatalf("seedDefaults() error = %v", err)
 	}
 	if err := os.Rename(target, renamed); err != nil {
 		t.Fatalf("rename seeded profile: %v", err)
 	}
-	if err := SeedDefaultAdapterProfiles(dir); err != nil {
-		t.Fatalf("second SeedDefaultAdapterProfiles() error = %v", err)
+	if err := seedDefaults(dir); err != nil {
+		t.Fatalf("second seedDefaults() error = %v", err)
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("default profile was re-seeded after rename, stat err=%v", err)
@@ -340,8 +340,8 @@ func TestSeedDefaultAdapterProfilesTreatsExistingProfilesAsUserOwned(t *testing.
 	dir := t.TempDir()
 	writeProfileFile(t, dir, "my-draftea.json", testAdapterProfile("my-draftea", nil))
 
-	if err := SeedDefaultAdapterProfiles(dir); err != nil {
-		t.Fatalf("SeedDefaultAdapterProfiles() error = %v", err)
+	if err := seedDefaults(dir); err != nil {
+		t.Fatalf("seedDefaults() error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "appsync-draftea.json")); !os.IsNotExist(err) {
 		t.Fatalf("default profile was seeded into a user-owned profile dir, stat err=%v", err)
@@ -361,17 +361,17 @@ func TestReadAdapterProfileRejectsOversizedFile(t *testing.T) {
 	}
 }
 
-func newTestProfileAdapter(t *testing.T, aliases map[string]string) ProfileAdapter {
+func newTestProfileAdapter(t *testing.T, aliases map[string]string) profileAdapter {
 	t.Helper()
-	adapter, err := NewProfileAdapter(testAdapterProfile("custom-profile", aliases))
+	protocol, err := newProfileAdapter(testAdapterProfile("custom-profile", aliases))
 	if err != nil {
-		t.Fatalf("NewProfileAdapter() error = %v", err)
+		t.Fatalf("newProfileAdapter() error = %v", err)
 	}
-	return adapter
+	return protocol
 }
 
-func testAdapterProfile(name string, aliases map[string]string) AdapterProfile {
-	return AdapterProfile{
+func testAdapterProfile(name string, aliases map[string]string) Profile {
+	return Profile{
 		ManifestVersion: 1,
 		Name:            name,
 		BaseAdapter:     "appsync",
@@ -381,8 +381,8 @@ func testAdapterProfile(name string, aliases map[string]string) AdapterProfile {
 	}
 }
 
-func testProfileEnvelope() AdapterProfileEnvelope {
-	return AdapterProfileEnvelope{
+func testProfileEnvelope() Envelope {
+	return Envelope{
 		Outer:       `{"id":"${sub_id}","type":"data","event":${inner_string}}`,
 		InnerBinary: `{"t":"${alias}","e":"${base64}"}`,
 		InnerJSON:   `{"t":"${alias}","e":${json}}`,
@@ -418,7 +418,7 @@ func decodeProfileEnvelope(t *testing.T, data []byte) (struct {
 	return env, inner
 }
 
-func writeProfileFile(t *testing.T, dir, name string, profile AdapterProfile) {
+func writeProfileFile(t *testing.T, dir, name string, profile Profile) {
 	t.Helper()
 	data, err := json.Marshal(profile)
 	if err != nil {
@@ -430,13 +430,13 @@ func writeProfileFile(t *testing.T, dir, name string, profile AdapterProfile) {
 }
 
 func TestAppSyncWrapsBinaryPayloadAsBase64(t *testing.T) {
-	payload := EncodedPayload{
+	payload := Payload{
 		Data:        []byte{8, 7},
 		Kind:        websocket.MessageBinary,
 		ContentType: "application/x-protobuf",
 		TypeName:    "ditto.test.ScoreEvent",
 	}
-	msg, err := AppSyncAdapter{}.WrapData(payload, "sub-1", "/test")
+	msg, err := AppSync{}.WrapData(payload, "sub-1", "/test")
 	if err != nil {
 		t.Fatalf("WrapData() error = %v", err)
 	}
@@ -461,7 +461,7 @@ func TestAppSyncWrapsBinaryPayloadAsBase64(t *testing.T) {
 }
 
 func TestDecodeFrameReadsRelayEnvelope(t *testing.T) {
-	adapters := &AdapterRegistry{}
+	adapters := &Registry{}
 	if err := adapters.Load(t.TempDir()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -477,11 +477,7 @@ func TestDecodeFrameReadsRelayEnvelope(t *testing.T) {
 }
 
 func TestAppSyncDecoderKeepsBuiltInAliasWhenSchemaMissing(t *testing.T) {
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
-	}
-	decoded, decodeErr := rec.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, []byte(`{
+	decoded, decodeErr := decodeAppSyncEnvelope(nil, Profile{BaseAdapter: "appsync"}, []byte(`{
 		"type":"data",
 		"payload":{"data":{"t":"example.Event","e":"AAAA"}}
 	}`))
@@ -494,11 +490,7 @@ func TestAppSyncDecoderKeepsBuiltInAliasWhenSchemaMissing(t *testing.T) {
 }
 
 func TestAppSyncDecoderReportsMissingPayload(t *testing.T) {
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
-	}
-	decoded, decodeErr := rec.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, []byte(`{
+	decoded, decodeErr := decodeAppSyncEnvelope(nil, Profile{BaseAdapter: "appsync"}, []byte(`{
 		"type":"data",
 		"payload":{"data":{"t":"example.Event"}}
 	}`))
@@ -508,15 +500,11 @@ func TestAppSyncDecoderReportsMissingPayload(t *testing.T) {
 }
 
 func TestAppSyncDecoderTreatsControlFramesAsBenign(t *testing.T) {
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
-	}
 	// AppSync sends keep-alives and subscription-lifecycle frames that carry
 	// no payload; they must not be reported as decode errors.
 	for _, typ := range []string{"ka", "connection_ack", "subscribe", "subscribe_success", "complete"} {
-		decoded, decodeErr := rec.decodeAppSyncProfile(
-			AdapterProfile{BaseAdapter: "appsync"},
+		decoded, decodeErr := decodeAppSyncEnvelope(nil,
+			Profile{BaseAdapter: "appsync"},
 			[]byte(`{"type":"`+typ+`"}`),
 		)
 		if decodeErr != "" {
@@ -529,9 +517,9 @@ func TestAppSyncDecoderTreatsControlFramesAsBenign(t *testing.T) {
 }
 
 func TestRawAdapterSubscribeAndDispatchPayload(t *testing.T) {
-	adapter := RawAdapter{}
+	protocol := Raw{}
 
-	msg, err := adapter.ParseClientMessage([]byte(`{"type":"subscribe","id":"sub-1","channel":"/scores"}`))
+	msg, err := protocol.ParseClientMessage([]byte(`{"type":"subscribe","id":"sub-1","channel":"/scores"}`))
 	if err != nil {
 		t.Fatalf("ParseClientMessage() error = %v", err)
 	}
@@ -540,7 +528,7 @@ func TestRawAdapterSubscribeAndDispatchPayload(t *testing.T) {
 	}
 
 	payload := json.RawMessage(`{"score":7}`)
-	encoded, err := adapter.EncodeServerMessage(ServerMsg{Type: "data", Channel: "/scores", Payload: payload})
+	encoded, err := protocol.EncodeServerMessage(ServerMessage{Type: "data", Channel: "/scores", Payload: payload})
 	if err != nil {
 		t.Fatalf("EncodeServerMessage() error = %v", err)
 	}
@@ -550,9 +538,9 @@ func TestRawAdapterSubscribeAndDispatchPayload(t *testing.T) {
 }
 
 func TestAppSyncAdapterEnvelope(t *testing.T) {
-	adapter := AppSyncAdapter{}
+	protocol := AppSync{}
 
-	msg, err := adapter.ParseClientMessage([]byte(`{"type":"start","id":"sub-1","payload":{"channel":"/scores"}}`))
+	msg, err := protocol.ParseClientMessage([]byte(`{"type":"start","id":"sub-1","payload":{"channel":"/scores"}}`))
 	if err != nil {
 		t.Fatalf("ParseClientMessage() error = %v", err)
 	}
@@ -560,7 +548,7 @@ func TestAppSyncAdapterEnvelope(t *testing.T) {
 		t.Fatalf("ParseClientMessage() = %#v, want subscribe /scores sub-1", msg)
 	}
 
-	encoded, err := adapter.EncodeServerMessage(ServerMsg{
+	encoded, err := protocol.EncodeServerMessage(ServerMessage{
 		Type:    "data",
 		ID:      "sub-1",
 		Channel: "/scores",
@@ -586,16 +574,16 @@ func TestAppSyncAdapterEnvelope(t *testing.T) {
 }
 
 func TestRelayAdapterControlFrames(t *testing.T) {
-	adapter := RelayAdapter{}
+	protocol := Relay{}
 
-	if !adapter.GreetsOnConnect() {
+	if !protocol.GreetsOnConnect() {
 		t.Fatalf("GreetsOnConnect() = false, want true")
 	}
-	if len(adapter.Subprotocols()) != 0 {
-		t.Fatalf("Subprotocols() = %v, want none", adapter.Subprotocols())
+	if len(protocol.Subprotocols()) != 0 {
+		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
 	}
 
-	msg, err := adapter.ParseClientMessage([]byte(`{"type":"subscribe","id":"/osb/s/l/*","channel":"/osb/s/l/*","authorization":{"Authorization":"Basic token"}}`))
+	msg, err := protocol.ParseClientMessage([]byte(`{"type":"subscribe","id":"/osb/s/l/*","channel":"/osb/s/l/*","authorization":{"Authorization":"Basic token"}}`))
 	if err != nil {
 		t.Fatalf("ParseClientMessage() error = %v", err)
 	}
@@ -603,7 +591,7 @@ func TestRelayAdapterControlFrames(t *testing.T) {
 		t.Fatalf("ParseClientMessage() = %#v, want subscribe /osb/s/l/*", msg)
 	}
 
-	ack, err := adapter.EncodeServerMessage(ServerMsg{Type: "connection_ack"})
+	ack, err := protocol.EncodeServerMessage(ServerMessage{Type: "connection_ack"})
 	if err != nil {
 		t.Fatalf("EncodeServerMessage(connection_ack) error = %v", err)
 	}
@@ -611,7 +599,7 @@ func TestRelayAdapterControlFrames(t *testing.T) {
 		t.Fatalf("connection_ack = %s", ack.Data)
 	}
 
-	subAck, err := adapter.EncodeServerMessage(ServerMsg{Type: "subscribe_ack", ID: "/scores", Channel: "/scores"})
+	subAck, err := protocol.EncodeServerMessage(ServerMessage{Type: "subscribe_ack", ID: "/scores", Channel: "/scores"})
 	if err != nil {
 		t.Fatalf("EncodeServerMessage(subscribe_ack) error = %v", err)
 	}
@@ -626,7 +614,7 @@ func TestRelayAdapterControlFrames(t *testing.T) {
 		t.Fatalf("subscribe ack = %s, want subscribe_success with channel", subAck.Data)
 	}
 
-	data, err := adapter.EncodeServerMessage(ServerMsg{Type: "data", Channel: "/scores", Payload: json.RawMessage(`{"score":7}`)})
+	data, err := protocol.EncodeServerMessage(ServerMessage{Type: "data", Channel: "/scores", Payload: json.RawMessage(`{"score":7}`)})
 	if err != nil {
 		t.Fatalf("EncodeServerMessage(data) error = %v", err)
 	}
@@ -644,9 +632,9 @@ func TestRelayAdapterControlFrames(t *testing.T) {
 }
 
 func TestAppSyncAdapterErrorPayloadUsesJSONString(t *testing.T) {
-	adapter := AppSyncAdapter{}
+	protocol := AppSync{}
 
-	encoded, err := adapter.EncodeServerMessage(ServerMsg{
+	encoded, err := protocol.EncodeServerMessage(ServerMessage{
 		Type:    "error",
 		ID:      "sub-1",
 		Payload: json.RawMessage(`"plain error"`),

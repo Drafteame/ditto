@@ -19,8 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"nhooyr.io/websocket"
-
+	"ditto/internal/adapter"
 	"ditto/internal/eventlog"
 	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
@@ -69,19 +68,13 @@ type RecordingProfileChange struct {
 }
 
 type RecordedFrame struct {
-	TsMs        int64         `json:"ts_ms"`
-	Direction   string        `json:"direction"`
-	Channel     string        `json:"channel"`
-	FrameKind   string        `json:"frame_kind"`
-	RawB64      string        `json:"raw_b64"`
-	Decoded     *DecodedFrame `json:"decoded,omitempty"`
-	DecodeError string        `json:"decode_error"`
-}
-
-type DecodedFrame struct {
-	TypeName    string          `json:"type_name,omitempty"`
-	PayloadJSON json.RawMessage `json:"payload_json,omitempty"`
-	Alias       string          `json:"alias,omitempty"`
+	TsMs        int64            `json:"ts_ms"`
+	Direction   string           `json:"direction"`
+	Channel     string           `json:"channel"`
+	FrameKind   string           `json:"frame_kind"`
+	RawB64      string           `json:"raw_b64"`
+	Decoded     *adapter.Decoded `json:"decoded,omitempty"`
+	DecodeError string           `json:"decode_error"`
 }
 
 type RecordFrameInput struct {
@@ -97,7 +90,7 @@ type Recorder struct {
 	mu       sync.Mutex
 	dir      string
 	schemas  *schema.Registry
-	adapters *AdapterRegistry
+	adapters *adapter.Registry
 	modes    *ChannelModeRegistry
 	bus      *eventlog.Bus
 	active   *recordingSession
@@ -140,7 +133,7 @@ type rateLimiter struct {
 type RecorderConfig struct {
 	Dir      string
 	Schemas  *schema.Registry
-	Adapters *AdapterRegistry
+	Adapters *adapter.Registry
 	Modes    *ChannelModeRegistry
 	Bus      *eventlog.Bus
 	// Options tunes queueing and flushing; zero fields use the defaults.
@@ -303,9 +296,13 @@ func (r *Recorder) Record(input RecordFrameInput) {
 		session.addRateDrop(channel, input.RateCapHz)
 		return
 	}
+	direction := input.Direction
+	if strings.TrimSpace(direction) == "" {
+		direction = "upstream"
+	}
 	frame := RecordedFrame{
 		TsMs:      time.Since(session.start).Milliseconds(),
-		Direction: firstNonEmpty(input.Direction, "upstream"),
+		Direction: direction,
 		Channel:   channel,
 		FrameKind: input.Kind,
 		RawB64:    base64.StdEncoding.EncodeToString(input.Data),
@@ -465,135 +462,10 @@ func (r *Recorder) recoverInterrupted() error {
 	return nil
 }
 
-func (r *Recorder) decodeFrame(channel, kind string, data []byte, adapter string) (*DecodedFrame, string) {
+func (r *Recorder) decodeFrame(channel, kind string, data []byte, adapterName string) (*adapter.Decoded, string) {
 	// See docs/adr/0004-recording-decoder-strategy.md: M5 records raw frames
 	// first and treats decoder output as optional metadata.
-	return r.adapters.DecodeFrame(r.schemas, kind, data, adapter)
-}
-
-func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*DecodedFrame, string) {
-	return decodeAppSyncEnvelope(r.schemas, profile, data)
-}
-
-// DecodeFrame decodes a text frame's envelope for the named adapter so logs
-// and recordings can show the logical payload. Binary frames are not decoded.
-func (r *AdapterRegistry) DecodeFrame(schemas *schema.Registry, kind string, data []byte, adapter string) (*DecodedFrame, string) {
-	if kind == "binary" {
-		return nil, "binary frame has no envelope decoder"
-	}
-	profileName := normalizeAdapter(adapter)
-	if profileName == "" {
-		profileName = "raw"
-	}
-	if profile, ok := r.Profile(profileName); ok && hasEnvelopeDecoder(profile.BaseAdapter) {
-		return decodeAppSyncEnvelope(schemas, profile, data)
-	}
-	if hasEnvelopeDecoder(profileName) {
-		return decodeAppSyncEnvelope(schemas, AdapterProfile{BaseAdapter: profileName}, data)
-	}
-	var payload json.RawMessage
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, err.Error()
-	}
-	return &DecodedFrame{PayloadJSON: payload}, ""
-}
-
-func hasEnvelopeDecoder(baseAdapter string) bool {
-	switch normalizeAdapter(baseAdapter) {
-	case "appsync", "relay":
-		return true
-	default:
-		return false
-	}
-}
-
-func decodeAppSyncEnvelope(schemas *schema.Registry, profile AdapterProfile, data []byte) (*DecodedFrame, string) {
-	var outer map[string]any
-	if err := json.Unmarshal(data, &outer); err != nil {
-		return nil, err.Error()
-	}
-	// AppSync emits periodic keep-alives and subscription-lifecycle frames
-	// (ka, connection_ack, subscribe, subscribe_success, complete, error, …)
-	// that carry no decodable payload. Surface them as control frames with the
-	// type as the label instead of reporting a spurious decode error. Only
-	// "data" frames carry a {t, e} payload to decode.
-	if typ, ok := outer["type"].(string); ok && typ != "" && typ != "data" {
-		return &DecodedFrame{Alias: typ}, ""
-	}
-	value := outer["event"]
-	if value == nil {
-		if payload, ok := outer["payload"].(map[string]any); ok {
-			if dataObj, ok := payload["data"].(map[string]any); ok {
-				value = dataObj
-			} else {
-				value = payload["data"]
-			}
-		}
-	}
-	if text, ok := value.(string); ok {
-		var inner map[string]any
-		if err := json.Unmarshal([]byte(text), &inner); err != nil {
-			return nil, err.Error()
-		}
-		value = inner
-	}
-	inner, ok := value.(map[string]any)
-	if !ok {
-		return nil, "appsync envelope not found"
-	}
-	alias, _ := inner["t"].(string)
-	if encoded, ok := inner["base64"].(string); ok {
-		raw, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil, err.Error()
-		}
-		typeName, _ := inner["type_name"].(string)
-		if typeName == "" {
-			typeName = reverseAlias(profile.TypeAliases, alias)
-		}
-		if typeName == "" {
-			typeName = alias
-		}
-		if typeName == "" || schemas == nil || schemas.Descriptor(typeName) == nil {
-			return &DecodedFrame{TypeName: typeName, Alias: alias}, ""
-		}
-		payload, err := schemas.Decode(typeName, raw)
-		if err != nil {
-			return nil, err.Error()
-		}
-		return &DecodedFrame{TypeName: typeName, PayloadJSON: payload, Alias: alias}, ""
-	}
-	if alias == "" {
-		return nil, "appsync alias missing"
-	}
-	rawValue, exists := inner["e"]
-	if !exists {
-		return nil, "appsync payload missing"
-	}
-	encoded, ok := rawValue.(string)
-	if !ok {
-		payload, err := json.Marshal(rawValue)
-		if err != nil {
-			return nil, err.Error()
-		}
-		return &DecodedFrame{Alias: alias, PayloadJSON: payload}, ""
-	}
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, err.Error()
-	}
-	typeName := reverseAlias(profile.TypeAliases, alias)
-	if typeName == "" {
-		typeName = alias
-	}
-	if schemas == nil || schemas.Descriptor(typeName) == nil {
-		return &DecodedFrame{Alias: alias}, ""
-	}
-	payload, err := schemas.Decode(typeName, raw)
-	if err != nil {
-		return nil, err.Error()
-	}
-	return &DecodedFrame{TypeName: typeName, PayloadJSON: payload, Alias: alias}, ""
+	return r.adapters.DecodeFrame(r.schemas, kind, data, adapterName)
 }
 
 func (s *recordingSession) run() {
@@ -940,22 +812,6 @@ func schemaPackIDs(schemas *schema.Registry) []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-func reverseAlias(aliases map[string]string, alias string) string {
-	for typeName, value := range aliases {
-		if value == alias {
-			return typeName
-		}
-	}
-	return ""
-}
-
-func frameKind(typ websocket.MessageType) string {
-	if typ == websocket.MessageBinary {
-		return "binary"
-	}
-	return "text"
 }
 
 func RegisterRecordingRoutes(mux *http.ServeMux, recorder *Recorder) {

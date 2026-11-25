@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"ditto/internal/adapter"
 	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
 )
@@ -57,7 +58,7 @@ type EventSequenceRegistry struct {
 	sequences map[string]EventSequence
 	templates *EventTemplateRegistry
 	schemas   *schema.Registry
-	adapters  *AdapterRegistry
+	adapters  *adapter.Registry
 }
 
 type eventSequencesResponse struct {
@@ -81,7 +82,7 @@ type sequenceSpeedRequest struct {
 // NewEventSequenceRegistry loads the sequences in dir. Sequences that reference
 // unknown templates, adapters or schema types are skipped, so those
 // registries must be loaded first.
-func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *schema.Registry, adapters *AdapterRegistry) (*EventSequenceRegistry, error) {
+func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *schema.Registry, adapters *adapter.Registry) (*EventSequenceRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -288,7 +289,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 			rendered.Channel = strings.TrimSpace(step.Channel)
 		}
 		if strings.TrimSpace(step.Adapter) != "" {
-			rendered.Adapter = normalizeAdapter(step.Adapter)
+			rendered.Adapter = adapter.Normalize(step.Adapter)
 		}
 		if strings.TrimSpace(step.TypeName) != "" {
 			rendered.TypeName = strings.TrimSpace(step.TypeName)
@@ -310,7 +311,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 		}
 		rendered = RenderedTemplate{
 			Channel:      strings.TrimSpace(step.Channel),
-			Adapter:      normalizeAdapter(step.Adapter),
+			Adapter:      adapter.Normalize(step.Adapter),
 			TypeName:     strings.TrimSpace(step.TypeName),
 			Payload:      payload,
 			Missing:      missing,
@@ -452,7 +453,7 @@ func normalizeEventSequence(seq EventSequence) EventSequence {
 		step.Name = strings.TrimSpace(step.Name)
 		step.TemplateRef = strings.TrimSpace(step.TemplateRef)
 		step.Channel = strings.TrimSpace(step.Channel)
-		step.Adapter = normalizeAdapter(step.Adapter)
+		step.Adapter = adapter.Normalize(step.Adapter)
 		step.TypeName = strings.TrimSpace(step.TypeName)
 		step.Payload = append(json.RawMessage(nil), step.Payload...)
 		if step.VarsOverride != nil {

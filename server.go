@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"ditto/internal/adapter"
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 	"ditto/internal/httpmock"
@@ -181,7 +182,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)
 	}
-	adapters := &AdapterRegistry{}
+	adapters := &adapter.Registry{}
 	if err := adapters.Load(cfg.Layout.AdapterProfilesDir); err != nil {
 		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
 	}

@@ -15,6 +15,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/adapter"
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 )
@@ -73,7 +74,7 @@ type liveChannel struct {
 	bridge  *LiveBridge
 	ctx     context.Context
 	cancel  context.CancelFunc
-	out     chan EncodedServerMessage
+	out     chan adapter.Message
 
 	mu            sync.RWMutex
 	clients       map[string]*SocketClient
@@ -105,7 +106,7 @@ func (b *LiveBridge) Attach(channel string, client *SocketClient) {
 			bridge:  b,
 			ctx:     ctx,
 			cancel:  cancel,
-			out:     make(chan EncodedServerMessage, 128),
+			out:     make(chan adapter.Message, 128),
 			clients: make(map[string]*SocketClient),
 		}
 		b.chans[channel] = ch
@@ -154,7 +155,7 @@ func (b *LiveBridge) ForwardFromClientWithID(ctx context.Context, channel string
 	if dispatchID == "" {
 		dispatchID = newSocketDispatchID()
 	}
-	msg := EncodedServerMessage{Kind: typ, Data: append([]byte(nil), data...), DispatchID: dispatchID,
+	msg := adapter.Message{Kind: typ, Data: append([]byte(nil), data...), DispatchID: dispatchID,
 		Channel: channel, Source: "live-bridge", ControlType: "application_frame", Direction: "client_to_upstream"}
 	if ch != nil {
 		ch.mu.RLock()
@@ -388,7 +389,7 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 	if h.recorder != nil && h.isRecordingMode(channel) {
 		cfg := h.modes.Get(channel)
 		h.recorder.Record(RecordFrameInput{
-			Channel: channel, Direction: "upstream", Kind: frameKind(typ), Data: data,
+			Channel: channel, Direction: "upstream", Kind: adapter.FrameKind(typ), Data: data,
 			Adapter: adapterName, RateCapHz: cfg.RateCapHz,
 		})
 	}
@@ -399,7 +400,7 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 			result.Dropped = append(result.Dropped, id)
 			continue
 		}
-		msg := EncodedServerMessage{Kind: typ, Data: append([]byte(nil), data...), DispatchID: dispatchID, Channel: channel,
+		msg := adapter.Message{Kind: typ, Data: append([]byte(nil), data...), DispatchID: dispatchID, Channel: channel,
 			Source: "live-bridge", Target: target, Direction: "upstream_to_client", Adapter: client.adapter,
 			ClientID: client.id, Subprotocol: client.subprotocol}
 		if client.enqueue(msg, 0) {
@@ -411,7 +412,7 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 			h.logClientDelivery(client, msg, "dropped", fmt.Errorf("client queue full or disconnected"))
 		}
 	}
-	decoded, decodeErr := h.adapters.DecodeFrame(h.schemas, frameKind(typ), data, adapterName)
+	decoded, decodeErr := h.adapters.DecodeFrame(h.schemas, adapter.FrameKind(typ), data, adapterName)
 	body := buildDispatchLogBodyWithID(result, decoded, decodeErr, dispatchID)
 	event := eventlog.Event{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
 		Source: "live", DispatchID: dispatchID, Queued: result.Queued, ResponseBody: body, ConnectionID: connectionID, Target: target,
@@ -477,9 +478,9 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 	started := time.Now()
 	connectionID := fmt.Sprintf("proxy-ws-%d", h.nextID.Add(1))
 	requestURL := socketRequestURL(r, r.RequestURI)
-	adapter := normalizeAdapter(r.URL.Query().Get("adapter"))
-	if adapter == "" {
-		adapter = "raw"
+	adapterName := adapter.Normalize(r.URL.Query().Get("adapter"))
+	if adapterName == "" {
+		adapterName = "raw"
 	}
 	responseCaptureTransport := &websocketResponseCaptureTransport{base: http.DefaultTransport, writer: w}
 	conn, response, err := websocket.Dial(r.Context(), u.String(), &websocket.DialOptions{HTTPHeader: upstreamReq.Header, Subprotocols: protocols,
@@ -524,13 +525,13 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 	clientConn.SetReadLimit(-1)
 	h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "CONNECT", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: http.StatusSwitchingProtocols, DurationMs: time.Since(started).Milliseconds(),
-		Source: "websocket-proxy", Target: target, ConnectionID: connectionID, ClientID: connectionID, Adapter: adapter, Mode: "proxy",
+		Source: "websocket-proxy", Target: target, ConnectionID: connectionID, ClientID: connectionID, Adapter: adapterName, Mode: "proxy",
 		Subprotocol: conn.Subprotocol(), RequestHeaders: r.Header.Clone(), ResponseHeaders: cw.Headers()})
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	errCh := make(chan error, 2)
-	go tunnelWebSocketMessages(ctx, clientConn, conn, h, r, target, connectionID, adapter, conn.Subprotocol(), "client_to_upstream", errCh)
-	go tunnelWebSocketMessages(ctx, conn, clientConn, h, r, target, connectionID, adapter, conn.Subprotocol(), "upstream_to_client", errCh)
+	go tunnelWebSocketMessages(ctx, clientConn, conn, h, r, target, connectionID, adapterName, conn.Subprotocol(), "client_to_upstream", errCh)
+	go tunnelWebSocketMessages(ctx, conn, clientConn, h, r, target, connectionID, adapterName, conn.Subprotocol(), "upstream_to_client", errCh)
 	firstErr := <-errCh
 	closeCode, closeReason := socketCloseDetails(firstErr)
 	if closeCode < 0 {
@@ -600,7 +601,7 @@ func (w *boundedLogWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub *SocketHub, req *http.Request, target, connectionID, adapter, subprotocol, direction string, errCh chan<- error) {
+func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub *SocketHub, req *http.Request, target, connectionID, adapterName, subprotocol, direction string, errCh chan<- error) {
 	for {
 		typ, reader, err := src.Reader(ctx)
 		if err != nil {
@@ -632,7 +633,7 @@ func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub 
 		event := eventlog.Event{Type: "SOCKET", Method: "FRAME", Path: req.URL.RequestURI(), URL: socketRequestURL(req, req.RequestURI),
 			Host: req.Host, RemoteAddr: req.RemoteAddr, Protocol: req.Proto, Status: http.StatusOK, Source: "websocket-proxy",
 			ConnectionID: connectionID, ClientID: connectionID, Target: target, Direction: direction, Subprotocol: subprotocol,
-			Adapter: adapter, Mode: "proxy",
+			Adapter: adapterName, Mode: "proxy",
 			DispatchID: dispatchID, DeliveryState: "written", FrameKind: kind, RequestBody: body, RequestPayload: meta}
 		if strings.HasPrefix(direction, "upstream") {
 			event.ResponseBody = body
@@ -647,7 +648,7 @@ func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub 
 		}
 		if typ == websocket.MessageBinary {
 			event.DecodeError = "binary frame has no text envelope; raw bytes are available"
-		} else if decoded, decodeErr := hub.decodeSocketFrame(typ, cw.buf.Bytes(), adapter, ""); decoded != nil {
+		} else if decoded, decodeErr := hub.decodeSocketFrame(typ, cw.buf.Bytes(), adapterName, ""); decoded != nil {
 			event.TypeName, event.Alias = decoded.TypeName, decoded.Alias
 			event.DecodedPayload, event.DecodedTruncated = boundedSocketJSON(decoded.PayloadJSON)
 			if decodeErr != "" {

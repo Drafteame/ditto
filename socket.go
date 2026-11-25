@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,74 +17,11 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/adapter"
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 	"ditto/internal/schema"
 )
-
-type ClientMsg struct {
-	Type           string
-	ID             string
-	Channel        string
-	Payload        json.RawMessage
-	SubscriptionID string
-}
-
-type ServerMsg struct {
-	Type    string
-	ID      string
-	Channel string
-	Payload json.RawMessage
-}
-
-type EncodedServerMessage struct {
-	Data           []byte
-	Kind           websocket.MessageType
-	DispatchID     string
-	Channel        string
-	SubscriptionID string
-	Source         string
-	ControlType    string
-	TypeName       string
-	Target         string
-	ClientID       string
-	Adapter        string
-	Subprotocol    string
-	Direction      string
-}
-
-type EncodedPayload struct {
-	Data        []byte
-	Kind        websocket.MessageType
-	Value       any
-	ContentType string
-	TypeName    string
-}
-
-// ProtobufPayload wraps protobuf wire bytes of typeName as a binary socket
-// payload. Value carries the base64 form for adapters that embed it in JSON.
-func ProtobufPayload(typeName string, data []byte) EncodedPayload {
-	return EncodedPayload{
-		Data:        data,
-		Kind:        websocket.MessageBinary,
-		Value:       base64.StdEncoding.EncodeToString(data),
-		ContentType: "application/x-protobuf",
-		TypeName:    typeName,
-	}
-}
-
-type GreetingAdapter interface {
-	GreetsOnConnect() bool
-}
-
-type ProtocolAdapter interface {
-	ParseClientMessage(b []byte) (ClientMsg, error)
-	EncodePayload(payload json.RawMessage) (EncodedPayload, error)
-	WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error)
-	EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error)
-	Heartbeat() (EncodedServerMessage, time.Duration)
-	Subprotocols() []string
-}
 
 type SubscriptionRegistry struct {
 	mu       sync.RWMutex
@@ -155,7 +91,7 @@ type SocketHub struct {
 	live     *LiveBridge
 	recorder *Recorder
 	schemas  *schema.Registry
-	adapters *AdapterRegistry
+	adapters *adapter.Registry
 	events   *eventlog.Coalescer
 
 	mu      sync.RWMutex
@@ -166,12 +102,12 @@ type SocketHub struct {
 type SocketClient struct {
 	id              string
 	adapter         string
-	protocol        ProtocolAdapter
+	protocol        adapter.Protocol
 	remoteAddr      string
 	connected       time.Time
 	conn            *websocket.Conn
-	control         chan EncodedServerMessage
-	send            chan EncodedServerMessage
+	control         chan adapter.Message
+	send            chan adapter.Message
 	done            chan struct{}
 	closed          atomic.Bool
 	closeOnce       sync.Once
@@ -268,7 +204,7 @@ func truncateSocketPreview(preview string) string {
 
 func (h *SocketHub) logSocketFrame(event eventlog.Event, data []byte, kind websocket.MessageType, typeName string) {
 	event.Type = "SOCKET"
-	event.FrameKind = frameKind(kind)
+	event.FrameKind = adapter.FrameKind(kind)
 	event.TypeName = typeName
 	preview, metadata := socketFramePreview(data, kind)
 	if event.Direction == "client_to_ditto" || event.Direction == "client_to_upstream" || event.Direction == "ditto_to_upstream" {
@@ -290,9 +226,9 @@ func (h *SocketHub) logSocketFrame(event eventlog.Event, data []byte, kind webso
 	h.events.Publish(event)
 }
 
-func (h *SocketHub) decodeSocketFrame(kind websocket.MessageType, data []byte, adapter, typeName string) (*DecodedFrame, string) {
+func (h *SocketHub) decodeSocketFrame(kind websocket.MessageType, data []byte, adapterName, typeName string) (*adapter.Decoded, string) {
 	if kind == websocket.MessageBinary && typeName != "" {
-		decoded := &DecodedFrame{TypeName: typeName}
+		decoded := &adapter.Decoded{TypeName: typeName}
 		if h.schemas == nil {
 			return decoded, "schema not loaded"
 		}
@@ -303,11 +239,11 @@ func (h *SocketHub) decodeSocketFrame(kind websocket.MessageType, data []byte, a
 		decoded.PayloadJSON = payload
 		return decoded, ""
 	}
-	return h.adapters.DecodeFrame(h.schemas, frameKind(kind), data, adapter)
+	return h.adapters.DecodeFrame(h.schemas, adapter.FrameKind(kind), data, adapterName)
 }
 
 type adapterPayload struct {
-	payload EncodedPayload
+	payload adapter.Payload
 	err     error
 }
 
@@ -322,7 +258,7 @@ type SocketDispatch struct {
 	Source   string
 	// Encoded is a pre-encoded protobuf payload (the sequence player caches
 	// one per step); when set, Payload is not encoded again.
-	Encoded *EncodedPayload
+	Encoded *adapter.Payload
 }
 
 // SocketHubConfig holds the hub's collaborators. Bus is required; every other
@@ -331,7 +267,7 @@ type SocketHubConfig struct {
 	Bus      *eventlog.Bus
 	Modes    *ChannelModeRegistry
 	Schemas  *schema.Registry
-	Adapters *AdapterRegistry
+	Adapters *adapter.Registry
 	Recorder *Recorder
 	// LiveTargets enables live/mixed channel forwarding to an upstream.
 	LiveTargets *LiveTargetManager
@@ -544,8 +480,8 @@ func (h *SocketHub) Dispatch(d SocketDispatch) (SocketDispatchResult, error) {
 		fail(msg, true)
 		return SocketDispatchResult{Errors: []string{msg}}, nil
 	}
-	adapter := normalizeAdapter(d.Adapter)
-	if _, err := h.adapters.Protocol(adapter); err != nil {
+	adapterName := adapter.Normalize(d.Adapter)
+	if _, err := h.adapters.Protocol(adapterName); err != nil {
 		fail(err.Error(), false)
 		return SocketDispatchResult{}, err
 	}
@@ -564,16 +500,16 @@ func (h *SocketHub) Dispatch(d SocketDispatch) (SocketDispatchResult, error) {
 				fail(wrapped.Error(), false)
 				return SocketDispatchResult{}, wrapped
 			}
-			next := ProtobufPayload(typeName, data)
+			next := adapter.ProtobufPayload(typeName, data)
 			encoded = &next
 		}
-		return h.dispatchEncoded(channel, *encoded, adapter, d.Source, d.Payload), nil
+		return h.dispatchEncoded(channel, *encoded, adapterName, d.Source, d.Payload), nil
 	}
 	payload := d.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
-	return h.dispatchJSON(channel, payload, adapter, d.Source), nil
+	return h.dispatchJSON(channel, payload, adapterName, d.Source), nil
 }
 
 func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload json.RawMessage, reason string, suppressed bool) {
@@ -677,11 +613,11 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.events.Publish(event)
 	}
 
-	adapterName := normalizeAdapter(r.URL.Query().Get("adapter"))
+	adapterName := adapter.Normalize(r.URL.Query().Get("adapter"))
 	if adapterName == "" {
 		adapterName = "raw"
 	}
-	adapter, err := h.adapters.Protocol(adapterName)
+	protocol, err := h.adapters.Protocol(adapterName)
 	if err != nil {
 		http.Error(cw, err.Error(), http.StatusBadRequest)
 		logHandshakeFailure(err)
@@ -697,7 +633,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(cw, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 		CompressionMode:    websocket.CompressionDisabled,
-		Subprotocols:       adapter.Subprotocols(),
+		Subprotocols:       protocol.Subprotocols(),
 	})
 	if err != nil {
 		logHandshakeFailure(err)
@@ -707,12 +643,12 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := &SocketClient{
 		id:              connectionID,
 		adapter:         adapterName,
-		protocol:        adapter,
+		protocol:        protocol,
 		remoteAddr:      r.RemoteAddr,
 		connected:       time.Now(),
 		conn:            conn,
-		control:         make(chan EncodedServerMessage, 16),
-		send:            make(chan EncodedServerMessage, 64),
+		control:         make(chan adapter.Message, 16),
+		send:            make(chan adapter.Message, 64),
 		done:            make(chan struct{}),
 		subscriptions:   make(map[string]string),
 		upstreamHeaders: extractUpstreamHeaders(r.Header),
@@ -740,8 +676,8 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeDone <- err
 	}()
 
-	if adapterGreetsOnConnect(adapter) {
-		h.enqueueControl(client, ServerMsg{Type: "connection_ack"})
+	if adapter.GreetsOnConnect(protocol) {
+		h.enqueueControl(client, adapter.ServerMessage{Type: "connection_ack"})
 	}
 
 	readErr := h.readLoop(ctx, client)
@@ -797,23 +733,23 @@ func socketCloseDetails(err error) (int, string) {
 // dispatchJSON fans a JSON payload out without mode or adapter validation;
 // Dispatch is the validating entry point.
 func (h *SocketHub) dispatchJSON(channel string, payload json.RawMessage, adapterFilter, source string) SocketDispatchResult {
-	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{Payload: payload}, func(client *SocketClient) (EncodedPayload, error) {
+	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{Payload: payload}, func(client *SocketClient) (adapter.Payload, error) {
 		return client.protocol.EncodePayload(payload)
 	})
 }
 
 // dispatchEncoded fans out a pre-encoded payload. logicalPayload is the JSON
 // it was encoded from, used only for logging.
-func (h *SocketHub) dispatchEncoded(channel string, payload EncodedPayload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
+func (h *SocketHub) dispatchEncoded(channel string, payload adapter.Payload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
 	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{TypeName: payload.TypeName, Payload: logicalPayload,
-		RawData: payload.Data, RawKind: payload.Kind, RawContentType: payload.ContentType}, func(client *SocketClient) (EncodedPayload, error) {
+		RawData: payload.Data, RawKind: payload.Kind, RawContentType: payload.ContentType}, func(client *SocketClient) (adapter.Payload, error) {
 		return payload, nil
 	})
 }
 
-func (h *SocketHub) dispatch(channel string, adapterFilter string, source string, hint dispatchDecodeHint, encode func(client *SocketClient) (EncodedPayload, error)) SocketDispatchResult {
+func (h *SocketHub) dispatch(channel string, adapterFilter string, source string, hint dispatchDecodeHint, encode func(client *SocketClient) (adapter.Payload, error)) SocketDispatchResult {
 	channel = strings.TrimSpace(channel)
-	adapterFilter = normalizeAdapter(adapterFilter)
+	adapterFilter = adapter.Normalize(adapterFilter)
 	dispatchID := newSocketDispatchID()
 	ids := h.registry.Clients(channel)
 	result := SocketDispatchResult{Queued: 0}
@@ -852,7 +788,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 			if _, recorded := recordedAdapters[client.adapter]; !recorded {
 				cfg := h.modes.Get(channel)
 				h.recorder.Record(RecordFrameInput{
-					Channel: channel, Direction: "local", Kind: frameKind(data.Kind), Data: data.Data,
+					Channel: channel, Direction: "local", Kind: adapter.FrameKind(data.Kind), Data: data.Data,
 					Adapter: client.adapter, RateCapHz: cfg.RateCapHz,
 				})
 				recordedAdapters[client.adapter] = struct{}{}
@@ -899,7 +835,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 	return result
 }
 
-func (h *SocketHub) logClientDelivery(client *SocketClient, msg EncodedServerMessage, state string, err error) {
+func (h *SocketHub) logClientDelivery(client *SocketClient, msg adapter.Message, state string, err error) {
 	event := h.clientSocketEvent(client, "FRAME", msg.Channel)
 	event.Status, event.SubscriptionID, event.Source, event.Target = http.StatusOK, msg.SubscriptionID, msg.Source, msg.Target
 	event.DeliveryState, event.ControlType, event.DispatchID = state, msg.ControlType, msg.DispatchID
@@ -930,9 +866,9 @@ func boundedSocketJSON(raw []byte) (string, bool) {
 	return string(raw), false
 }
 
-func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCache map[string]adapterPayload) (*DecodedFrame, string) {
+func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCache map[string]adapterPayload) (*adapter.Decoded, string) {
 	if hint.TypeName != "" {
-		decoded := &DecodedFrame{TypeName: hint.TypeName}
+		decoded := &adapter.Decoded{TypeName: hint.TypeName}
 		if h.schemas == nil {
 			return decoded, "schema not loaded"
 		}
@@ -959,7 +895,7 @@ func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCac
 		return decoded, "schema payload not available"
 	}
 	if len(hint.Payload) > 0 {
-		return &DecodedFrame{PayloadJSON: hint.Payload}, ""
+		return &adapter.Decoded{PayloadJSON: hint.Payload}, ""
 	}
 	return nil, ""
 }
@@ -1056,14 +992,14 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) error {
 		}
 		switch msg.Type {
 		case "connection_init":
-			h.enqueueControl(client, ServerMsg{Type: "connection_ack"})
+			h.enqueueControl(client, adapter.ServerMessage{Type: "connection_ack"})
 		case "subscribe":
 			channel = strings.TrimSpace(msg.Channel)
 			if channel == "" {
 				errorEvent := h.clientSocketEvent(client, "ERROR", "")
 				errorEvent.Status, errorEvent.Error, errorEvent.Source = http.StatusBadRequest, "subscribe message missing channel", "socket-hub"
 				h.events.Publish(errorEvent)
-				h.enqueueControl(client, ServerMsg{Type: "error", ID: msg.ID, Payload: json.RawMessage(`{"error":"subscribe message missing channel"}`)})
+				h.enqueueControl(client, adapter.ServerMessage{Type: "error", ID: msg.ID, Payload: json.RawMessage(`{"error":"subscribe message missing channel"}`)})
 				continue
 			}
 			subID := msg.SubscriptionID
@@ -1075,7 +1011,7 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) error {
 			}
 			client.addSubscription(channel, subID)
 			h.registry.Subscribe(channel, client.id)
-			h.enqueueControl(client, ServerMsg{Type: "subscribe_ack", ID: subID, Channel: channel})
+			h.enqueueControl(client, adapter.ServerMessage{Type: "subscribe_ack", ID: subID, Channel: channel})
 			event := h.clientSocketEvent(client, "SUBSCRIBE", channel)
 			event.Status, event.SubscriptionID, event.Source = http.StatusOK, subID, "socket-hub"
 			h.events.Publish(event)
@@ -1100,7 +1036,7 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) error {
 			event.Status, event.SubscriptionID, event.Source = http.StatusOK, subscriptionID, "socket-hub"
 			h.events.Publish(event)
 		case "ping":
-			h.enqueueControl(client, ServerMsg{Type: "pong"})
+			h.enqueueControl(client, adapter.ServerMessage{Type: "pong"})
 		default:
 			if channel != "" {
 				h.forwardLiveFromClient(ctx, client, channel, typ, data, dispatchID)
@@ -1148,7 +1084,7 @@ func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketCli
 	}
 	if h.recorder != nil && h.modes.Get(channel).Mode == ModeMixed {
 		h.recorder.Record(RecordFrameInput{
-			Channel: channel, Direction: "local", Kind: frameKind(typ), Data: data,
+			Channel: channel, Direction: "local", Kind: adapter.FrameKind(typ), Data: data,
 			Adapter: client.adapter, RateCapHz: h.modes.Get(channel).RateCapHz,
 		})
 	}
@@ -1190,7 +1126,7 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) error {
 	if len(heartbeat.Data) > 0 {
 		heartbeat.DispatchID, heartbeat.Source, heartbeat.ControlType = newSocketDispatchID(), "socket-hub", "heartbeat"
 	}
-	writeMsg := func(msg EncodedServerMessage) error {
+	writeMsg := func(msg adapter.Message) error {
 		if msg.Kind == 0 {
 			return errors.New("empty websocket message type")
 		}
@@ -1251,7 +1187,7 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) error {
 	}
 }
 
-func (h *SocketHub) enqueueControl(client *SocketClient, msg ServerMsg) {
+func (h *SocketHub) enqueueControl(client *SocketClient, msg adapter.ServerMessage) {
 	data, err := client.protocol.EncodeServerMessage(msg)
 	if err != nil {
 		event := h.clientSocketEvent(client, "ERROR", msg.Channel)
@@ -1303,11 +1239,11 @@ func dispatchSummary(result SocketDispatchResult) string {
 	return string(data)
 }
 
-func buildDispatchLogBody(result SocketDispatchResult, decoded *DecodedFrame, decodeErr string) string {
+func buildDispatchLogBody(result SocketDispatchResult, decoded *adapter.Decoded, decodeErr string) string {
 	return buildDispatchLogBodyWithID(result, decoded, decodeErr, "")
 }
 
-func buildDispatchLogBodyWithID(result SocketDispatchResult, decoded *DecodedFrame, decodeErr, dispatchID string) string {
+func buildDispatchLogBodyWithID(result SocketDispatchResult, decoded *adapter.Decoded, decodeErr, dispatchID string) string {
 	body := DispatchLogBody{
 		Delivered:  result.Delivered,
 		Queued:     result.Queued,
@@ -1385,11 +1321,11 @@ func (c *SocketClient) close() {
 	})
 }
 
-func (c *SocketClient) enqueue(msg EncodedServerMessage, timeout time.Duration) bool {
+func (c *SocketClient) enqueue(msg adapter.Message, timeout time.Duration) bool {
 	return c.enqueueOn(c.send, msg, timeout)
 }
 
-func (c *SocketClient) enqueueOn(ch chan EncodedServerMessage, msg EncodedServerMessage, timeout time.Duration) bool {
+func (c *SocketClient) enqueueOn(ch chan adapter.Message, msg adapter.Message, timeout time.Duration) bool {
 	if msg.Kind == 0 {
 		return false
 	}
@@ -1425,341 +1361,4 @@ func (c *SocketClient) enqueueOn(ch chan EncodedServerMessage, msg EncodedServer
 	case <-timer.C:
 		return false
 	}
-}
-
-func textMessage(data []byte) EncodedServerMessage {
-	return EncodedServerMessage{Data: data, Kind: websocket.MessageText}
-}
-
-func marshalTextMessage(v any) (EncodedServerMessage, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return EncodedServerMessage{}, err
-	}
-	return textMessage(data), nil
-}
-
-func rawPayload(raw json.RawMessage) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return string(raw)
-	}
-	return value
-}
-
-func appSyncErrorPayload(raw json.RawMessage) any {
-	message := "socket error"
-	if len(raw) > 0 {
-		var value any
-		if err := json.Unmarshal(raw, &value); err == nil {
-			if text, ok := value.(string); ok && text != "" {
-				message = text
-			} else if obj, ok := value.(map[string]any); ok {
-				if value, ok := obj["error"].(string); ok && value != "" {
-					message = value
-				} else if value, ok := obj["message"].(string); ok && value != "" {
-					message = value
-				}
-			}
-		} else {
-			message = string(raw)
-		}
-	}
-	return map[string]any{
-		"errors": []map[string]string{{"message": message}},
-	}
-}
-
-func newBuiltinProtocolAdapter(name string) (ProtocolAdapter, error) {
-	switch normalizeAdapter(name) {
-	case "", "raw":
-		return RawAdapter{}, nil
-	case "appsync":
-		return AppSyncAdapter{}, nil
-	case "relay":
-		return RelayAdapter{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported socket adapter %q", name)
-	}
-}
-
-func normalizeAdapter(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
-type RawAdapter struct{}
-
-func (RawAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
-	var env struct {
-		Type    string          `json:"type"`
-		Action  string          `json:"action"`
-		Op      string          `json:"op"`
-		ID      string          `json:"id"`
-		Channel string          `json:"channel"`
-		Payload json.RawMessage `json:"payload"`
-	}
-	if err := json.Unmarshal(b, &env); err != nil {
-		return ClientMsg{}, err
-	}
-	msgType := firstNonEmpty(env.Type, env.Action, env.Op)
-	msgType = normalizeClientMessageType(msgType)
-	if msgType == "" && env.Channel != "" {
-		msgType = "subscribe"
-	}
-	if msgType == "" {
-		return ClientMsg{}, errors.New("message missing type")
-	}
-	return ClientMsg{
-		Type:           msgType,
-		ID:             env.ID,
-		Channel:        env.Channel,
-		Payload:        env.Payload,
-		SubscriptionID: env.ID,
-	}, nil
-}
-
-func (RawAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
-	switch msg.Type {
-	case "data", "":
-		payload, err := RawAdapter{}.EncodePayload(msg.Payload)
-		if err != nil {
-			return EncodedServerMessage{}, err
-		}
-		return RawAdapter{}.WrapData(payload, msg.ID, msg.Channel)
-	case "connection_ack":
-		return marshalTextMessage(map[string]any{"type": "connection_ack"})
-	case "subscribe_ack":
-		return marshalTextMessage(map[string]any{"type": "subscribe_ack", "channel": msg.Channel})
-	case "pong":
-		return marshalTextMessage(map[string]any{"type": "pong"})
-	case "error":
-		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "payload": rawPayload(msg.Payload)})
-	default:
-		return marshalTextMessage(map[string]any{"type": msg.Type})
-	}
-}
-
-func (RawAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
-	if len(payload) == 0 {
-		payload = json.RawMessage(`{}`)
-	}
-	return EncodedPayload{
-		Data: append([]byte(nil), payload...),
-		Kind: websocket.MessageText,
-	}, nil
-}
-
-func (RawAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
-	return EncodedServerMessage{Data: payload.Data, Kind: payload.Kind}, nil
-}
-
-func (RawAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
-	return textMessage([]byte(`{"type":"ping"}`)), 30 * time.Second
-}
-
-func (RawAdapter) Subprotocols() []string {
-	return nil
-}
-
-type AppSyncAdapter struct{}
-
-func (AppSyncAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
-	var env struct {
-		Type    string          `json:"type"`
-		ID      string          `json:"id"`
-		Channel string          `json:"channel"`
-		Payload json.RawMessage `json:"payload"`
-	}
-	if err := json.Unmarshal(b, &env); err != nil {
-		return ClientMsg{}, err
-	}
-
-	msgType := normalizeClientMessageType(env.Type)
-	if msgType == "" {
-		return ClientMsg{}, errors.New("message missing type")
-	}
-
-	channel := strings.TrimSpace(env.Channel)
-	if channel == "" && len(env.Payload) > 0 {
-		channel = channelFromPayload(env.Payload)
-	}
-
-	return ClientMsg{
-		Type:           msgType,
-		ID:             env.ID,
-		Channel:        channel,
-		Payload:        env.Payload,
-		SubscriptionID: env.ID,
-	}, nil
-}
-
-func (AppSyncAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
-	switch msg.Type {
-	case "connection_ack":
-		return marshalTextMessage(map[string]any{
-			"type":    "connection_ack",
-			"payload": map[string]any{"connectionTimeoutMs": 300000},
-		})
-	case "subscribe_ack":
-		return marshalTextMessage(map[string]any{"type": "subscribe_success", "id": msg.ID})
-	case "pong":
-		return marshalTextMessage(map[string]any{"type": "pong"})
-	case "error":
-		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "payload": appSyncErrorPayload(msg.Payload)})
-	case "data", "":
-		payload, err := AppSyncAdapter{}.EncodePayload(msg.Payload)
-		if err != nil {
-			return EncodedServerMessage{}, err
-		}
-		return AppSyncAdapter{}.WrapData(payload, msg.ID, msg.Channel)
-	default:
-		return marshalTextMessage(map[string]any{"type": msg.Type, "id": msg.ID})
-	}
-}
-
-func (AppSyncAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
-	var value any = map[string]any{}
-	if len(payload) > 0 {
-		if err := json.Unmarshal(payload, &value); err != nil {
-			value = string(payload)
-		}
-	}
-	return EncodedPayload{Value: value, Kind: websocket.MessageText}, nil
-}
-
-func (AppSyncAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
-	value := payload.Value
-	if payload.Kind == websocket.MessageBinary {
-		value = map[string]any{
-			"base64":       base64.StdEncoding.EncodeToString(payload.Data),
-			"content_type": payload.ContentType,
-			"type_name":    payload.TypeName,
-		}
-	}
-	return marshalTextMessage(map[string]any{
-		"type": "data",
-		"id":   subID,
-		"payload": map[string]any{
-			"data": value,
-		},
-	})
-}
-
-func (AppSyncAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
-	return textMessage([]byte(`{"type":"ka"}`)), 5 * time.Second
-}
-
-func (AppSyncAdapter) Subprotocols() []string {
-	return []string{"aws-appsync-event-ws"}
-}
-
-type RelayAdapter struct{}
-
-func (RelayAdapter) ParseClientMessage(b []byte) (ClientMsg, error) {
-	return RawAdapter{}.ParseClientMessage(b)
-}
-
-func (RelayAdapter) EncodeServerMessage(msg ServerMsg) (EncodedServerMessage, error) {
-	switch msg.Type {
-	case "connection_ack":
-		return marshalTextMessage(map[string]any{"type": "connection_ack"})
-	case "subscribe_ack":
-		return marshalTextMessage(map[string]any{"type": "subscribe_success", "id": msg.ID, "channel": msg.Channel})
-	case "pong":
-		return marshalTextMessage(map[string]any{"type": "pong"})
-	case "error":
-		return marshalTextMessage(map[string]any{"type": "error", "id": msg.ID, "channel": msg.Channel, "payload": rawPayload(msg.Payload)})
-	case "data", "":
-		payload, err := RelayAdapter{}.EncodePayload(msg.Payload)
-		if err != nil {
-			return EncodedServerMessage{}, err
-		}
-		return RelayAdapter{}.WrapData(payload, msg.ID, msg.Channel)
-	default:
-		return marshalTextMessage(map[string]any{"type": msg.Type, "channel": msg.Channel})
-	}
-}
-
-func (RelayAdapter) EncodePayload(payload json.RawMessage) (EncodedPayload, error) {
-	return AppSyncAdapter{}.EncodePayload(payload)
-}
-
-func (RelayAdapter) WrapData(payload EncodedPayload, subID, channel string) (EncodedServerMessage, error) {
-	value := payload.Value
-	if payload.Kind == websocket.MessageBinary {
-		value = map[string]any{
-			"base64":       base64.StdEncoding.EncodeToString(payload.Data),
-			"content_type": payload.ContentType,
-			"type_name":    payload.TypeName,
-		}
-	}
-	return marshalTextMessage(map[string]any{
-		"type":    "data",
-		"channel": channel,
-		"event":   value,
-	})
-}
-
-func (RelayAdapter) Heartbeat() (EncodedServerMessage, time.Duration) {
-	return textMessage([]byte(`{"type":"ka"}`)), 5 * time.Second
-}
-
-func (RelayAdapter) Subprotocols() []string {
-	return nil
-}
-
-func (RelayAdapter) GreetsOnConnect() bool {
-	return true
-}
-
-func adapterGreetsOnConnect(adapter ProtocolAdapter) bool {
-	greeter, ok := adapter.(GreetingAdapter)
-	return ok && greeter.GreetsOnConnect()
-}
-
-func normalizeClientMessageType(t string) string {
-	switch strings.ToLower(strings.TrimSpace(t)) {
-	case "connection_init", "init":
-		return "connection_init"
-	case "subscribe", "start":
-		return "subscribe"
-	case "unsubscribe", "stop", "complete":
-		return "unsubscribe"
-	case "ping":
-		return "ping"
-	default:
-		return strings.ToLower(strings.TrimSpace(t))
-	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func channelFromPayload(payload json.RawMessage) string {
-	var obj map[string]any
-	if err := json.Unmarshal(payload, &obj); err != nil {
-		return ""
-	}
-	for _, key := range []string{"channel", "path", "topic"} {
-		if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	if ext, ok := obj["extensions"].(map[string]any); ok {
-		for _, key := range []string{"channel", "path", "topic"} {
-			if value, ok := ext[key].(string); ok && strings.TrimSpace(value) != "" {
-				return strings.TrimSpace(value)
-			}
-		}
-	}
-	return ""
 }

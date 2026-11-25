@@ -28,7 +28,7 @@ type dataSubdir struct {
 var dataSubdirs = []dataSubdir{
 	{"mocks", func(layout *DataLayout, path string) { layout.MocksDir = path }},
 	{"descriptors", func(layout *DataLayout, path string) { layout.DescriptorsDir = path }},
-	{adapterProfilesDirName, func(layout *DataLayout, path string) { layout.AdapterProfilesDir = path }},
+	{"adapter_profiles", func(layout *DataLayout, path string) { layout.AdapterProfilesDir = path }},
 	{"event_templates", func(layout *DataLayout, path string) { layout.EventTemplatesDir = path }},
 	{"sequences", func(layout *DataLayout, path string) { layout.SequencesDir = path }},
 	{"recordings", func(layout *DataLayout, path string) { layout.RecordingsDir = path }},
