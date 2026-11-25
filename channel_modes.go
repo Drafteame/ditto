@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"ditto/internal/eventlog"
 	"ditto/internal/jsonfile"
 )
 
@@ -47,11 +48,11 @@ type ChannelModeRegistry struct {
 	mu        sync.RWMutex
 	path      string
 	channels  map[string]ChannelConfig
-	bus       *EventBus
+	bus       *eventlog.Bus
 	listeners []func(ChannelConfig)
 }
 
-func NewChannelModeRegistry(dir string, bus *EventBus) (*ChannelModeRegistry, error) {
+func NewChannelModeRegistry(dir string, bus *eventlog.Bus) (*ChannelModeRegistry, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, fmt.Errorf("channel modes dir is required")
 	}
@@ -233,7 +234,7 @@ func (r *ChannelModeRegistry) publishModeEvent(method string, cfg ChannelConfig)
 		return
 	}
 	body, _ := json.Marshal(cfg)
-	event := LogEvent{
+	event := eventlog.Event{
 		Type:         "MODE",
 		Method:       method,
 		Path:         cfg.Channel,

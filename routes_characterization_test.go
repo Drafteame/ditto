@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"ditto/internal/golden"
 )
 
 // TestRouteTableCharacterization pins method, path and origin handling for
@@ -94,7 +96,7 @@ func TestRouteTableCharacterization(t *testing.T) {
 			}
 		}
 	}
-	assertGolden(t, "routes.golden", []byte(out.String()))
+	golden.Assert(t, "routes.golden", []byte(out.String()))
 }
 
 // tempPathPattern matches the per-test data directory that leaks into some

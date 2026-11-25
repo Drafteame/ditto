@@ -21,6 +21,7 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"ditto/internal/eventlog"
 	"ditto/internal/jsonfile"
 )
 
@@ -97,7 +98,7 @@ type Recorder struct {
 	schemas  *SchemaRegistry
 	adapters *AdapterRegistry
 	modes    *ChannelModeRegistry
-	bus      *EventBus
+	bus      *eventlog.Bus
 	active   *recordingSession
 	options  RecorderOptions
 }
@@ -140,7 +141,7 @@ type RecorderConfig struct {
 	Schemas  *SchemaRegistry
 	Adapters *AdapterRegistry
 	Modes    *ChannelModeRegistry
-	Bus      *EventBus
+	Bus      *eventlog.Bus
 	// Options tunes queueing and flushing; zero fields use the defaults.
 	Options RecorderOptions
 }
@@ -904,7 +905,7 @@ func (r *Recorder) publish(method, path string, status int, body string) {
 	if r.bus == nil {
 		return
 	}
-	event := LogEvent{
+	event := eventlog.Event{
 		Type:         "RECORD",
 		Method:       method,
 		Path:         path,

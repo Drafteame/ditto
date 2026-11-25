@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"nhooyr.io/websocket"
+
+	"ditto/internal/eventlog"
 )
 
 func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
@@ -47,7 +49,7 @@ func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	proxy := NewProxyManager(upstream.URL + "/base?from=target")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +106,7 @@ func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		var foundText, foundBinary, foundTruncated bool
-		for _, e := range bus.LogSummaries() {
+		for _, e := range bus.Summaries() {
 			if e.Method == "FRAME" && e.Source == "websocket-proxy" {
 				if e.Direction == "client_to_upstream" && e.FrameKind == "text" {
 					foundText = true
@@ -113,7 +115,7 @@ func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
 					foundBinary = true
 				}
 				if e.Direction == "client_to_upstream" && e.FrameKind == "binary" && e.RequestPayload != nil {
-					detail, ok := bus.LogDetail(e.ID)
+					detail, ok := bus.Detail(e.ID)
 					foundTruncated = ok && detail.RequestPayload != nil && detail.RequestPayload.SizeBytes == int64(len(large)) &&
 						detail.RequestPayload.CapturedBytes == MaxLogPayloadCaptureBytes && detail.RequestPayload.CaptureStatus == "truncated"
 				}
@@ -135,7 +137,7 @@ func TestDirectWebSocketProxyReplaysFullUpstreamRejectionBody(t *testing.T) {
 		_, _ = io.WriteString(w, body)
 	}))
 	defer upstream.Close()
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	proxy := NewProxyManager(upstream.URL)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -158,9 +160,9 @@ func TestDirectWebSocketProxyReplaysFullUpstreamRejectionBody(t *testing.T) {
 	if resp.Header.Get("X-Upstream-Rejection") != "auth" {
 		t.Fatalf("upstream header not forwarded: %v", resp.Header)
 	}
-	for _, event := range bus.LogSummaries() {
+	for _, event := range bus.Summaries() {
 		if event.Method == "HANDSHAKE_ERROR" && event.Source == "websocket-proxy" {
-			detail, ok := bus.LogDetail(event.ID)
+			detail, ok := bus.Detail(event.ID)
 			if !ok {
 				t.Fatal("handshake detail missing")
 			}
@@ -184,7 +186,7 @@ func TestDirectWebSocketProxyPreservesUpstreamCloseCodeAndReason(t *testing.T) {
 		_ = conn.Close(websocket.StatusPolicyViolation, "blocked by upstream")
 	}))
 	defer upstream.Close()
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
+	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
 	proxy := NewProxyManager(upstream.URL)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { tunnelThrough(proxy, hub, w, r) }))
 	defer server.Close()
@@ -226,7 +228,7 @@ func TestLiveBridgeLogsQueuedWrittenAndUpstreamFanoutWithCorrelatedIDs(t *testin
 		}
 	}))
 	defer upstream.Close()
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatal(err)
@@ -263,8 +265,8 @@ func TestLiveBridgeLogsQueuedWrittenAndUpstreamFanoutWithCorrelatedIDs(t *testin
 		var clientDispatchID, clientDeliveryID, liveDispatchID, upstreamDeliveryID string
 		clientStates := map[string]bool{}
 		ackStates := map[string]bool{}
-		for _, summary := range bus.LogSummaries() {
-			event, ok := bus.LogDetail(summary.ID)
+		for _, summary := range bus.Summaries() {
+			event, ok := bus.Detail(summary.ID)
 			if !ok {
 				continue
 			}
@@ -313,17 +315,17 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 		t.Fatal(err)
 	}
 	encoded := ProtobufPayload("ditto.test.Item", data)
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.schemas = schemas
 	result := hub.dispatchEncoded("/proto", encoded, "", "manual", json.RawMessage(`{"name":"without-subscriber"}`))
 	if result.Queued != 0 || result.Delivered != 0 {
 		t.Fatalf("dispatch result = %#v, want no recipients", result)
 	}
-	var detail LogEvent
-	for _, summary := range bus.LogSummaries() {
+	var detail eventlog.Event
+	for _, summary := range bus.Summaries() {
 		if summary.Method == "DISPATCH" {
-			detail, _ = bus.LogDetail(summary.ID)
+			detail, _ = bus.Detail(summary.ID)
 		}
 	}
 	if detail.ID == "" || detail.RequestPayload == nil {
@@ -352,11 +354,11 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 		t.Fatal(err)
 	}
 	found := false
-	for _, summary := range bus.LogSummaries() {
+	for _, summary := range bus.Summaries() {
 		if summary.Method != "DISPATCH_SUPPRESSED" {
 			continue
 		}
-		item, ok := bus.LogDetail(summary.ID)
+		item, ok := bus.Detail(summary.ID)
 		if ok && item.Source == "sequence" && item.RequestBody == `{"visible":true}` && item.DeliveryState == "suppressed" {
 			found = true
 		}
@@ -367,7 +369,7 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 }
 
 func TestDispatchLogsPerClientQueueDrop(t *testing.T) {
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	client := testSocketClient("full")
 	client.url, client.host, client.remoteAddr, client.protocolName = "ws://client.test/socket", "client.test", "127.0.0.1:5555", "HTTP/1.1"
@@ -379,8 +381,8 @@ func TestDispatchLogsPerClientQueueDrop(t *testing.T) {
 	if result.Delivered != 0 || len(result.Dropped) != 1 {
 		t.Fatalf("dispatch result = %#v", result)
 	}
-	for _, summary := range bus.LogSummaries() {
-		event, ok := bus.LogDetail(summary.ID)
+	for _, summary := range bus.Summaries() {
+		event, ok := bus.Detail(summary.ID)
 		if ok && event.Method == "FRAME" && event.ClientID == client.id && event.DeliveryState == "dropped" {
 			if event.URL != client.url || event.Host != client.host || event.RemoteAddr != client.remoteAddr || event.Protocol != client.protocolName {
 				t.Fatalf("delivery context = %#v", event)

@@ -8,11 +8,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"ditto/internal/eventlog"
 )
 
 func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(RecorderConfig{Dir: dir, Bus: NewEventBus(nil)})
+	rec, err := NewRecorder(RecorderConfig{Dir: dir, Bus: eventlog.NewBus(nil)})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -172,7 +174,7 @@ func TestRecorderStopTimeoutForceStopsDrain(t *testing.T) {
 	}
 }
 
-func waitForBurstSummary(t *testing.T, events <-chan LogEvent, channel string) int {
+func waitForBurstSummary(t *testing.T, events <-chan eventlog.Event, channel string) int {
 	t.Helper()
 	deadline := time.After(1500 * time.Millisecond)
 	for {

@@ -1,4 +1,6 @@
-package main
+// Package golden compares test output with files under testdata/ and
+// rewrites them when tests run with -update.
+package golden
 
 import (
 	"flag"
@@ -7,13 +9,14 @@ import (
 	"testing"
 )
 
-var updateGolden = flag.Bool("update", false, "rewrite testdata/*.golden files")
+var update = flag.Bool("update", false, "rewrite testdata/*.golden files")
 
-// assertGolden compares got with testdata/name, rewriting it when -update is set.
-func assertGolden(t *testing.T, name string, got []byte) {
+// Assert compares got with testdata/name, rewriting the file when -update
+// is set.
+func Assert(t *testing.T, name string, got []byte) {
 	t.Helper()
 	path := filepath.Join("testdata", name)
-	if *updateGolden {
+	if *update {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatal(err)
 		}

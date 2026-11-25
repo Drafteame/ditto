@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"nhooyr.io/websocket"
+
+	"ditto/internal/eventlog"
 )
 
 type ClientMsg struct {
@@ -146,13 +148,13 @@ func (r *SubscriptionRegistry) Clients(channel string) []string {
 
 type SocketHub struct {
 	registry *SubscriptionRegistry
-	bus      *EventBus
+	bus      *eventlog.Bus
 	modes    *ChannelModeRegistry
 	live     *LiveBridge
 	recorder *Recorder
 	schemas  *SchemaRegistry
 	adapters *AdapterRegistry
-	events   *CoalescingPublisher
+	events   *eventlog.Coalescer
 
 	mu      sync.RWMutex
 	clients map[string]*SocketClient
@@ -243,7 +245,7 @@ func (h *SocketHub) currentSocketMode(channel string) string {
 	return string(h.modes.Get(channel).Mode)
 }
 
-func socketFramePreview(raw []byte, kind websocket.MessageType) (string, *LogPayloadMetadata) {
+func socketFramePreview(raw []byte, kind websocket.MessageType) (string, *eventlog.Payload) {
 	contentType := "application/octet-stream"
 	if kind == websocket.MessageText {
 		contentType = "text/plain; charset=utf-8"
@@ -262,7 +264,7 @@ func truncateSocketPreview(preview string) string {
 	return preview
 }
 
-func (h *SocketHub) logSocketFrame(event LogEvent, data []byte, kind websocket.MessageType, typeName string) {
+func (h *SocketHub) logSocketFrame(event eventlog.Event, data []byte, kind websocket.MessageType, typeName string) {
 	event.Type = "SOCKET"
 	event.FrameKind = frameKind(kind)
 	event.TypeName = typeName
@@ -324,7 +326,7 @@ type SocketDispatch struct {
 // SocketHubConfig holds the hub's collaborators. Bus is required; every other
 // field is optional and its zero value disables the matching feature.
 type SocketHubConfig struct {
-	Bus      *EventBus
+	Bus      *eventlog.Bus
 	Modes    *ChannelModeRegistry
 	Schemas  *SchemaRegistry
 	Adapters *AdapterRegistry
@@ -341,7 +343,7 @@ func NewSocketHub(cfg SocketHubConfig) *SocketHub {
 		recorder: cfg.Recorder,
 		schemas:  cfg.Schemas,
 		adapters: cfg.Adapters,
-		events:   NewCoalescingPublisher(cfg.Bus),
+		events:   eventlog.NewCoalescer(cfg.Bus),
 		clients:  make(map[string]*SocketClient),
 	}
 	if cfg.LiveTargets != nil {
@@ -578,7 +580,7 @@ func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload
 		method, state = "DISPATCH_SUPPRESSED", "suppressed"
 	}
 	id := newSocketDispatchID()
-	event := LogEvent{Type: "SOCKET", Method: method, Path: channel, Channel: channel, Status: http.StatusServiceUnavailable,
+	event := eventlog.Event{Type: "SOCKET", Method: method, Path: channel, Channel: channel, Status: http.StatusServiceUnavailable,
 		Source: source, DispatchID: id, DeliveryState: state, TypeName: typeName, Error: reason,
 		Mode: h.currentSocketMode(channel)}
 	if !suppressed {
@@ -662,7 +664,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	capture := newResponseCapture(w)
 	logHandshakeFailure := func(err error) {
 		body, metadata := capture.responsePayload()
-		event := LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: requestURI, URL: requestURL,
+		event := eventlog.Event{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: requestURI, URL: requestURL,
 			Host: r.Host, RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: capture.statusCode,
 			DurationMs: time.Since(start).Milliseconds(), Source: "socket-hub", ConnectionID: connectionID,
 			ClientID: connectionID, RequestHeaders: requestHeaders, ResponseHeaders: capture.responseHeaders(),
@@ -720,7 +722,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		requestHeaders:  requestHeaders,
 	}
 	h.addClient(client)
-	h.events.Publish(LogEvent{Type: "SOCKET", Method: "CONNECT", Path: requestURI, URL: requestURL, Host: r.Host,
+	h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "CONNECT", Path: requestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: capture.statusCode, DurationMs: time.Since(start).Milliseconds(),
 		Source: "socket-hub", ConnectionID: connectionID, ClientID: connectionID, Adapter: adapterName,
 		Subprotocol: conn.Subprotocol(), RequestHeaders: requestHeaders, ResponseHeaders: capture.responseHeaders()})
@@ -755,7 +757,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if closeCode != int(websocket.StatusAbnormalClosure) {
 		_ = conn.Close(websocket.StatusCode(closeCode), closeReason)
 	}
-	closeEvent := LogEvent{Type: "SOCKET", Method: "CLOSE", Path: requestURI, URL: requestURL, Host: r.Host,
+	closeEvent := eventlog.Event{Type: "SOCKET", Method: "CLOSE", Path: requestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: closeCode, DurationMs: time.Since(client.connected).Milliseconds(),
 		Source: "socket-hub", ConnectionID: connectionID, ClientID: connectionID, Adapter: adapterName,
 		Subprotocol: client.subprotocol, CloseCode: closeCode, CloseReason: closeReason}
@@ -867,7 +869,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 	}
 	decoded, decodeErr := h.decodeDispatchLogPayload(hint, payloadCache)
 	body := buildDispatchLogBodyWithID(result, decoded, decodeErr, dispatchID)
-	event := LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
+	event := eventlog.Event{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
 		Source: source, DispatchID: dispatchID, Queued: result.Queued, Dropped: len(result.Dropped), Errors: len(result.Errors), ResponseBody: body,
 		TypeName: hint.TypeName, DecodeError: decodeErr, Mode: h.currentSocketMode(channel)}
 	if decoded != nil {
@@ -1105,8 +1107,8 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) error {
 	}
 }
 
-func (h *SocketHub) clientSocketEvent(client *SocketClient, method, channel string) LogEvent {
-	return LogEvent{Type: "SOCKET", Method: method, Path: channel, Channel: channel, Status: http.StatusOK,
+func (h *SocketHub) clientSocketEvent(client *SocketClient, method, channel string) eventlog.Event {
+	return eventlog.Event{Type: "SOCKET", Method: method, Path: channel, Channel: channel, Status: http.StatusOK,
 		URL: client.url, Host: client.host, RemoteAddr: client.remoteAddr, Protocol: client.protocolName,
 		ConnectionID: client.id, ClientID: client.id, Adapter: client.adapter, Subprotocol: client.subprotocol,
 		Mode: h.currentSocketMode(channel)}
@@ -1275,7 +1277,7 @@ func (h *SocketHub) enqueueControl(client *SocketClient, msg ServerMsg) {
 }
 
 func (h *SocketHub) publishSocketEventWithSource(method, path string, status int, body string, duration int64, source string) {
-	event := LogEvent{
+	event := eventlog.Event{
 		Type:         "SOCKET",
 		Method:       method,
 		Path:         path,

@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"ditto/internal/eventlog"
 )
 
 func TestChannelModeRegistryGetSetSnapshotAndPersistence(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewChannelModeRegistry(dir, NewEventBus(nil))
+	reg, err := NewChannelModeRegistry(dir, eventlog.NewBus(nil))
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"nhooyr.io/websocket"
+
+	"ditto/internal/eventlog"
 )
 
 type LiveTargetManager struct {
@@ -231,7 +233,7 @@ func (ch *liveChannel) run() {
 		}
 		headers = applyForwardingHeaders(headers, clientHost, clientAddr, isSecureTarget(target))
 		connectionID := fmt.Sprintf("live-%s-%d", ch.channel, time.Now().UnixNano())
-		dialEvent := LogEvent{Type: "SOCKET", Method: "LIVE_DIAL", Path: ch.channel, Channel: ch.channel, URL: target, Target: target,
+		dialEvent := eventlog.Event{Type: "SOCKET", Method: "LIVE_DIAL", Path: ch.channel, Channel: ch.channel, URL: target, Target: target,
 			Source: "live", Mode: ch.bridge.hub.currentSocketMode(ch.channel), ConnectionID: connectionID, Adapter: adapterName,
 			Subprotocol: strings.Join(subprotocols, ","), Host: clientHost, RemoteAddr: clientAddr, RequestHeaders: headers.Clone()}
 		if client != nil {
@@ -245,7 +247,7 @@ func (ch *liveChannel) run() {
 			HTTPClient:   &http.Client{Transport: dialCapture, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		})
 		if err != nil {
-			event := LogEvent{Type: "SOCKET", Method: "LIVE_DIAL_ERROR", Path: ch.channel, Channel: ch.channel, URL: target, Target: target,
+			event := eventlog.Event{Type: "SOCKET", Method: "LIVE_DIAL_ERROR", Path: ch.channel, Channel: ch.channel, URL: target, Target: target,
 				Status: http.StatusBadGateway, Error: err.Error(), Source: "live", Mode: ch.bridge.hub.currentSocketMode(ch.channel),
 				RequestHeaders: headers.Clone(), Adapter: adapterName, ConnectionID: connectionID}
 			if response != nil {
@@ -271,7 +273,7 @@ func (ch *liveChannel) run() {
 		ch.connectionID = connectionID
 		ch.currentTarget = target
 		ch.mu.Unlock()
-		ch.bridge.hub.events.Publish(LogEvent{Type: "SOCKET", Method: "LIVE_CONNECT", Path: ch.channel, Channel: ch.channel,
+		ch.bridge.hub.events.Publish(eventlog.Event{Type: "SOCKET", Method: "LIVE_CONNECT", Path: ch.channel, Channel: ch.channel,
 			URL: target, Target: target, Status: http.StatusSwitchingProtocols, Source: "live", ConnectionID: connectionID,
 			Adapter: adapterName, Subprotocol: conn.Subprotocol(), Mode: ch.bridge.hub.currentSocketMode(ch.channel), ClientID: clientID(client),
 			Host: clientHost, RemoteAddr: clientAddr,
@@ -301,7 +303,7 @@ func (ch *liveChannel) run() {
 			if status < 0 {
 				status = http.StatusBadGateway
 			}
-			ch.bridge.hub.events.Publish(LogEvent{Type: "SOCKET", Method: "LIVE_CLOSE", Path: ch.channel, Channel: ch.channel,
+			ch.bridge.hub.events.Publish(eventlog.Event{Type: "SOCKET", Method: "LIVE_CLOSE", Path: ch.channel, Channel: ch.channel,
 				URL: target, Target: target, Status: status, Error: errorText(disconnectErr), Source: "live",
 				ConnectionID: connectionID, CloseCode: code, CloseReason: reason, Mode: ch.bridge.hub.currentSocketMode(ch.channel)})
 		}
@@ -323,7 +325,7 @@ func (ch *liveChannel) readUpstream(ctx context.Context, conn *websocket.Conn, t
 		}
 		dispatchID := newSocketDispatchID()
 		client := ch.firstClient()
-		event := LogEvent{Type: "SOCKET", Method: "FRAME", Path: ch.channel, Channel: ch.channel, Direction: "upstream_to_ditto",
+		event := eventlog.Event{Type: "SOCKET", Method: "FRAME", Path: ch.channel, Channel: ch.channel, Direction: "upstream_to_ditto",
 			DispatchID: dispatchID, Source: "live", ConnectionID: connectionID, Target: target, Mode: ch.bridge.hub.currentSocketMode(ch.channel),
 			Adapter: adapterNameForClient(client)}
 		ch.bridge.hub.logSocketFrame(event, data, typ, "")
@@ -346,7 +348,7 @@ func (ch *liveChannel) writeUpstream(ctx context.Context, conn *websocket.Conn, 
 				state = "write_error"
 			}
 			if ch.bridge.hub != nil {
-				event := LogEvent{Type: "SOCKET", Method: "FRAME", Path: ch.channel, Channel: ch.channel,
+				event := eventlog.Event{Type: "SOCKET", Method: "FRAME", Path: ch.channel, Channel: ch.channel,
 					Direction: "client_to_upstream", DispatchID: msg.DispatchID, DeliveryState: state, Source: msg.Source,
 					ConnectionID: connectionID, SubscriptionID: msg.SubscriptionID, Target: target, Mode: ch.bridge.hub.currentSocketMode(ch.channel), Error: errorText(err)}
 				event.ClientID, event.Adapter, event.Subprotocol = msg.ClientID, msg.Adapter, msg.Subprotocol
@@ -410,7 +412,7 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 	}
 	decoded, decodeErr := h.adapters.DecodeFrame(h.schemas, frameKind(typ), data, adapterName)
 	body := buildDispatchLogBodyWithID(result, decoded, decodeErr, dispatchID)
-	event := LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
+	event := eventlog.Event{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
 		Source: "live", DispatchID: dispatchID, Queued: result.Queued, ResponseBody: body, ConnectionID: connectionID, Target: target,
 		Adapter: adapterName, DecodeError: decodeErr, Mode: h.currentSocketMode(channel)}
 	if decoded != nil {
@@ -488,7 +490,7 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 			status = response.StatusCode
 			respHeaders = response.Header.Clone()
 			body, metadata := responseCaptureTransport.responseBody, responseCaptureTransport.responsePayload
-			event := LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL, Host: r.Host,
+			event := eventlog.Event{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 				RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: status, DurationMs: time.Since(started).Milliseconds(),
 				Source: "websocket-proxy", Error: err.Error(), Target: target, ConnectionID: connectionID, ClientID: connectionID,
 				RequestHeaders: r.Header.Clone(), ResponseHeaders: respHeaders, ResponseBody: body, ResponsePayload: metadata}
@@ -498,7 +500,7 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 			h.events.Publish(event)
 		} else {
 			http.Error(w, http.StatusText(status), status)
-			h.events.Publish(LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL, Host: r.Host,
+			h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 				RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: status, DurationMs: time.Since(started).Milliseconds(),
 				Source: "websocket-proxy", Error: err.Error(), Target: target, ConnectionID: connectionID, ClientID: connectionID,
 				RequestHeaders: r.Header.Clone()})
@@ -512,14 +514,14 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 		CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{conn.Subprotocol()}, OriginPatterns: []string{"*"}})
 	if acceptErr != nil {
 		_ = conn.Close(websocket.StatusInternalError, "client handshake failed")
-		h.events.Publish(LogEvent{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL,
+		h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "HANDSHAKE_ERROR", Path: r.RequestURI, URL: requestURL,
 			Status: capture.statusCode, DurationMs: time.Since(started).Milliseconds(), Source: "websocket-proxy", Error: acceptErr.Error(),
 			Target: target, ConnectionID: connectionID, RequestHeaders: r.Header.Clone(), ResponseHeaders: capture.responseHeaders()})
 		return
 	}
 	conn.SetReadLimit(-1)
 	clientConn.SetReadLimit(-1)
-	h.events.Publish(LogEvent{Type: "SOCKET", Method: "CONNECT", Path: r.RequestURI, URL: requestURL, Host: r.Host,
+	h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "CONNECT", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: http.StatusSwitchingProtocols, DurationMs: time.Since(started).Milliseconds(),
 		Source: "websocket-proxy", Target: target, ConnectionID: connectionID, ClientID: connectionID, Adapter: adapter, Mode: "proxy",
 		Subprotocol: conn.Subprotocol(), RequestHeaders: r.Header.Clone(), ResponseHeaders: capture.responseHeaders()})
@@ -537,7 +539,7 @@ func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string
 	_ = conn.Close(websocket.StatusCode(closeCode), closeReason)
 	cancel()
 	<-errCh
-	h.events.Publish(LogEvent{Type: "SOCKET", Method: "CLOSE", Path: r.RequestURI, URL: requestURL, Host: r.Host,
+	h.events.Publish(eventlog.Event{Type: "SOCKET", Method: "CLOSE", Path: r.RequestURI, URL: requestURL, Host: r.Host,
 		RemoteAddr: r.RemoteAddr, Protocol: r.Proto, Status: closeCode, DurationMs: time.Since(started).Milliseconds(),
 		Source: "websocket-proxy", Target: target, ConnectionID: connectionID, ClientID: connectionID,
 		Subprotocol: conn.Subprotocol(), CloseCode: closeCode, CloseReason: closeReason, Error: errorText(firstErr)})
@@ -555,7 +557,7 @@ type websocketResponseCaptureTransport struct {
 	base            http.RoundTripper
 	writer          http.ResponseWriter
 	responseBody    string
-	responsePayload *LogPayloadMetadata
+	responsePayload *eventlog.Payload
 	responseError   string
 }
 
@@ -626,7 +628,7 @@ func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub 
 		if typ == websocket.MessageText {
 			body = truncateSocketPreview(body)
 		}
-		event := LogEvent{Type: "SOCKET", Method: "FRAME", Path: req.URL.RequestURI(), URL: socketRequestURL(req, req.RequestURI),
+		event := eventlog.Event{Type: "SOCKET", Method: "FRAME", Path: req.URL.RequestURI(), URL: socketRequestURL(req, req.RequestURI),
 			Host: req.Host, RemoteAddr: req.RemoteAddr, Protocol: req.Proto, Status: http.StatusOK, Source: "websocket-proxy",
 			ConnectionID: connectionID, ClientID: connectionID, Target: target, Direction: direction, Subprotocol: subprotocol,
 			Adapter: adapter, Mode: "proxy",

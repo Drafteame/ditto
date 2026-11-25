@@ -1,4 +1,4 @@
-package main
+package eventlog
 
 import (
 	"encoding/json"
@@ -8,11 +8,17 @@ import (
 	"time"
 )
 
-const SocketLogCoalesceThresholdPerSecond = 20
+// CoalesceThresholdPerSecond is how many DISPATCH or FRAME events per channel
+// a Coalescer sends to subscribers each second before summarising the rest.
+const CoalesceThresholdPerSecond = 20
 
-type CoalescingPublisher struct {
+// Coalescer publishes socket DISPATCH and FRAME events, but stops sending
+// them to subscribers once a channel exceeds CoalesceThresholdPerSecond in a
+// one-second window; it then publishes a single *_BURST summary event.
+// Every event is still retained and printed.
+type Coalescer struct {
 	mu      sync.Mutex
-	bus     *EventBus
+	bus     *Bus
 	windows map[string]*coalesceWindow
 }
 
@@ -30,11 +36,13 @@ type coalesceWindow struct {
 	lastCursor  string
 }
 
-func NewCoalescingPublisher(bus *EventBus) *CoalescingPublisher {
-	return &CoalescingPublisher{bus: bus, windows: make(map[string]*coalesceWindow)}
+// NewCoalescer returns a Coalescer that publishes to bus.
+func NewCoalescer(bus *Bus) *Coalescer {
+	return &Coalescer{bus: bus, windows: make(map[string]*coalesceWindow)}
 }
 
-func (p *CoalescingPublisher) Publish(event LogEvent) {
+// Publish publishes event, coalescing high-rate socket frames.
+func (p *Coalescer) Publish(event Event) {
 	if event.Type != "SOCKET" || (event.Method != "DISPATCH" && event.Method != "FRAME") {
 		p.publish(event)
 		return
@@ -56,20 +64,20 @@ func (p *CoalescingPublisher) Publish(event LogEvent) {
 		window.timer = time.AfterFunc(time.Second, func() { p.flush(key, window) })
 	}
 	window.count++
-	immediate := window.count <= SocketLogCoalesceThresholdPerSecond
+	immediate := window.count <= CoalesceThresholdPerSecond
 	event = p.bus.publishWithSummary(event, immediate)
 	p.bus.log.Log(event)
 	if window.firstCursor == "" {
 		window.firstCursor = event.Cursor
 	}
 	window.lastCursor = event.Cursor
-	if window.count == SocketLogCoalesceThresholdPerSecond+1 {
+	if window.count == CoalesceThresholdPerSecond+1 {
 		window.suppressed = true
 	}
 	p.mu.Unlock()
 }
 
-func (p *CoalescingPublisher) flush(key string, expected *coalesceWindow) {
+func (p *Coalescer) flush(key string, expected *coalesceWindow) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.windows[key] != expected {
@@ -79,7 +87,7 @@ func (p *CoalescingPublisher) flush(key string, expected *coalesceWindow) {
 	p.flushLocked(expected)
 }
 
-func (p *CoalescingPublisher) flushLocked(window *coalesceWindow) {
+func (p *Coalescer) flushLocked(window *coalesceWindow) {
 	if !window.suppressed {
 		return
 	}
@@ -92,7 +100,7 @@ func (p *CoalescingPublisher) flushLocked(window *coalesceWindow) {
 		"window_ms": time.Since(window.start).Milliseconds(), "start_cursor": window.firstCursor,
 		"end_cursor": window.lastCursor,
 	})
-	p.publish(LogEvent{
+	p.publish(Event{
 		Type: "SOCKET", Method: window.method + "_BURST", Path: window.path, Channel: window.channel,
 		Status: http.StatusOK, ResponseBody: string(body), BurstID: burstID, BurstMethod: window.method,
 		BurstCount: window.count, BurstDirection: window.direction, BurstSource: window.source,
@@ -100,6 +108,6 @@ func (p *CoalescingPublisher) flushLocked(window *coalesceWindow) {
 	})
 }
 
-func (p *CoalescingPublisher) publish(event LogEvent) {
+func (p *Coalescer) publish(event Event) {
 	p.bus.Publish(event)
 }

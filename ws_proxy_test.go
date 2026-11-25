@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"nhooyr.io/websocket"
+
+	"ditto/internal/eventlog"
 )
 
 func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
@@ -36,7 +38,7 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
@@ -113,7 +115,7 @@ func TestLiveBridgeForwardsAuthHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
@@ -188,7 +190,7 @@ func TestLiveBridgeForwardsAuthHeaders(t *testing.T) {
 }
 
 func TestLiveBridgeDetachAttachStressKeepsNewClient(t *testing.T) {
-	bridge := NewLiveBridge(NewLiveTargetManager("", nil), NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)}))
+	bridge := NewLiveBridge(NewLiveTargetManager("", nil), NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)}))
 	for i := 0; i < 250; i++ {
 		channel := "/race"
 		oldClient := testSocketClient("old")
@@ -224,7 +226,7 @@ func TestLiveBridgeDetachAttachStressKeepsNewClient(t *testing.T) {
 }
 
 func TestLiveBridgeEmptyTargetLogsOnceUntilTargetChanges(t *testing.T) {
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	manager := NewLiveTargetManager("", nil)
@@ -247,7 +249,7 @@ func TestLiveBridgeEmptyTargetLogsOnceUntilTargetChanges(t *testing.T) {
 }
 
 func TestForwardFromUpstreamLogsDecodedAppSyncFrame(t *testing.T) {
-	bus := NewEventBus(nil)
+	bus := eventlog.NewBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
@@ -293,7 +295,7 @@ func testSocketClient(id string) *SocketClient {
 	}
 }
 
-func waitForSocketEvent(t *testing.T, events <-chan LogEvent, timeout time.Duration) LogEvent {
+func waitForSocketEvent(t *testing.T, events <-chan eventlog.Event, timeout time.Duration) eventlog.Event {
 	t.Helper()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -309,7 +311,7 @@ func waitForSocketEvent(t *testing.T, events <-chan LogEvent, timeout time.Durat
 	}
 }
 
-func waitForSocketMethod(t *testing.T, events <-chan LogEvent, method, path string, timeout time.Duration) LogEvent {
+func waitForSocketMethod(t *testing.T, events <-chan eventlog.Event, method, path string, timeout time.Duration) eventlog.Event {
 	t.Helper()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

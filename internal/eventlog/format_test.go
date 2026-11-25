@@ -1,20 +1,22 @@
-package main
+package eventlog
 
 import (
 	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"ditto/internal/golden"
 )
 
-// TestLogEventJSONCharacterization pins the wire shape of LogEvent (key names,
+// TestLogEventJSONCharacterization pins the wire shape of Event (key names,
 // order and omitempty behaviour) that the dashboard and --log-format json rely on.
 func TestLogEventJSONCharacterization(t *testing.T) {
-	var full LogEvent
+	var full Event
 	fillSample(reflect.ValueOf(&full).Elem(), "")
 
 	var out bytes.Buffer
-	for _, event := range []LogEvent{{}, full} {
+	for _, event := range []Event{{}, full} {
 		data, err := json.MarshalIndent(event, "", "  ")
 		if err != nil {
 			t.Fatal(err)
@@ -22,21 +24,21 @@ func TestLogEventJSONCharacterization(t *testing.T) {
 		out.Write(data)
 		out.WriteByte('\n')
 	}
-	assertGolden(t, "log_event.golden", out.Bytes())
+	golden.Assert(t, "log_event.golden", out.Bytes())
 }
 
 // TestRequestLogFormatCharacterization pins both --log-format outputs.
 func TestRequestLogFormatCharacterization(t *testing.T) {
-	event := LogEvent{
+	event := Event{
 		ID: "log-1", Timestamp: "2026-01-02T03:04:05Z", Type: "MOCK", Method: "GET",
 		Path: "/api/users?x=1", Status: 200, DurationMs: 12, MockIndex: 3,
 		RequestHeaders: map[string][]string{"Accept": {"application/json"}},
 		ResponseBody:   `{"html":"<b>&</b>"}`,
 	}
 	var out bytes.Buffer
-	NewRequestLogger(&out, false).Log(event)
-	NewRequestLogger(&out, true).Log(event)
-	assertGolden(t, "request_log.golden", out.Bytes())
+	NewPrinter(&out, false).Log(event)
+	NewPrinter(&out, true).Log(event)
+	golden.Assert(t, "request_log.golden", out.Bytes())
 }
 
 // fillSample sets every field reachable from v to a deterministic non-zero

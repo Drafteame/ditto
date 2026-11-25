@@ -1,10 +1,8 @@
-package main
+package eventlog
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"runtime"
 	"strings"
 	"sync"
@@ -12,30 +10,16 @@ import (
 	"time"
 )
 
-type cancelOnFlushRecorder struct {
-	*httptest.ResponseRecorder
-	cancel  context.CancelFunc
-	flushed bool
-}
-
-func (w *cancelOnFlushRecorder) Flush() {
-	w.ResponseRecorder.Flush()
-	if !w.flushed {
-		w.flushed = true
-		w.cancel()
-	}
-}
-
 func TestEventBusRetainsIdentifiedEventsAndReturnsDetails(t *testing.T) {
-	bus := NewEventBus(nil)
+	bus := NewBus(nil)
 	headers := map[string][]string{"X-Test": {"before"}}
-	metadata := &LogPayloadMetadata{SizeBytes: 4, ContentType: "text/plain", CaptureStatus: "captured", RawBase64: "dGVzdA=="}
-	bus.Publish(LogEvent{Type: "PROXY", Method: "POST", Path: "/item", ResponseBody: "body", RequestHeaders: headers,
+	metadata := &Payload{SizeBytes: 4, ContentType: "text/plain", CaptureStatus: "captured", RawBase64: "dGVzdA=="}
+	bus.Publish(Event{Type: "PROXY", Method: "POST", Path: "/item", ResponseBody: "body", RequestHeaders: headers,
 		RequestPayload: metadata, Direction: "inbound", ClientID: "client-1"})
 	headers["X-Test"][0] = "after"
 	metadata.RawBase64 = "mutated"
 
-	summaries := bus.LogSummaries()
+	summaries := bus.Summaries()
 	if len(summaries) != 1 {
 		t.Fatalf("got %d summaries, want 1", len(summaries))
 	}
@@ -53,45 +37,45 @@ func TestEventBusRetainsIdentifiedEventsAndReturnsDetails(t *testing.T) {
 		t.Fatalf("summary lost event context: %#v", summary)
 	}
 
-	detail, ok := bus.LogDetail(summary.ID)
+	detail, ok := bus.Detail(summary.ID)
 	if !ok || detail.ResponseBody != "body" || detail.RequestHeaders["X-Test"][0] != "before" || detail.RequestPayload.RawBase64 != "dGVzdA==" {
 		t.Fatalf("detail does not preserve published values: %#v, found=%t", detail, ok)
 	}
-	if _, ok := bus.LogDetail("missing"); ok {
+	if _, ok := bus.Detail("missing"); ok {
 		t.Fatal("missing ID unexpectedly resolved")
 	}
 }
 
 func TestEventBusRetentionBoundsCountAndBytes(t *testing.T) {
-	bus := NewEventBus(nil)
-	for i := 0; i <= MaxRetainedLogEvents; i++ {
-		bus.Publish(LogEvent{Method: "GET", Path: "/item"})
+	bus := NewBus(nil)
+	for i := 0; i <= MaxRetainedEvents; i++ {
+		bus.Publish(Event{Method: "GET", Path: "/item"})
 	}
-	if got := len(bus.LogSummaries()); got != MaxRetainedLogEvents {
-		t.Fatalf("retained %d events, want max %d", got, MaxRetainedLogEvents)
+	if got := len(bus.Summaries()); got != MaxRetainedEvents {
+		t.Fatalf("retained %d events, want max %d", got, MaxRetainedEvents)
 	}
 
-	byteBus := NewEventBus(nil)
-	byteBus.Publish(LogEvent{ResponseBody: strings.Repeat("x", MaxRetainedLogBytes+1)})
-	if got := len(byteBus.LogSummaries()); got != 0 {
+	byteBus := NewBus(nil)
+	byteBus.Publish(Event{ResponseBody: strings.Repeat("x", MaxRetainedBytes+1)})
+	if got := len(byteBus.Summaries()); got != 0 {
 		t.Fatalf("oversized event was retained, count=%d", got)
 	}
-	if byteBus.retainedBytes > MaxRetainedLogBytes {
-		t.Fatalf("retained bytes %d exceed max %d", byteBus.retainedBytes, MaxRetainedLogBytes)
+	if byteBus.retainedBytes > MaxRetainedBytes {
+		t.Fatalf("retained bytes %d exceed max %d", byteBus.retainedBytes, MaxRetainedBytes)
 	}
 }
 
 func TestEventBusReplayOverflowAndFilteredCursorGaps(t *testing.T) {
-	bus := NewEventBus(nil)
-	bus.Publish(LogEvent{Type: "SOCKET", Method: "CONNECT", Path: "/a"})
-	first := bus.LogSummaries()[0].Cursor
+	bus := NewBus(nil)
+	bus.Publish(Event{Type: "SOCKET", Method: "CONNECT", Path: "/a"})
+	first := bus.Summaries()[0].Cursor
 	ch, replay, gap := bus.SubscribeAfter(first)
 	defer bus.Unsubscribe(ch)
 	if gap != nil || len(replay) != 0 {
 		t.Fatalf("initial replay = %d events, gap=%#v", len(replay), gap)
 	}
 	for i := 0; i < 200; i++ {
-		bus.Publish(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/a", Direction: "upstream_to_ditto"})
+		bus.Publish(Event{Type: "SOCKET", Method: "FRAME", Path: "/a", Direction: "upstream_to_ditto"})
 	}
 	var sawGap bool
 	for len(ch) > 0 {
@@ -103,31 +87,31 @@ func TestEventBusReplayOverflowAndFilteredCursorGaps(t *testing.T) {
 	if !sawGap {
 		t.Fatal("slow subscriber did not receive a gap marker")
 	}
-	recovered := bus.History(first, "", "", "", "", "", "", "", 0, 500, 0)
+	recovered := bus.History(HistoryQuery{Since: first, Limit: 500})
 	if recovered.Total != 200 || !recovered.Complete {
 		t.Fatalf("history recovery = total %d complete %t gap=%#v", recovered.Total, recovered.Complete, recovered.Gap)
 	}
 
-	gapBus := NewEventBus(nil)
-	gapBus.Publish(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/wanted", Channel: "/wanted"})
-	cursor := gapBus.LogSummaries()[0].Cursor
-	gapBus.Publish(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/other", ResponseBody: strings.Repeat("x", MaxRetainedLogBytes+1)})
-	gapBus.Publish(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/wanted", Channel: "/wanted"})
-	filtered := gapBus.History(cursor, "", "", "/wanted", "", "", "", "", 0, 20, 0)
+	gapBus := NewBus(nil)
+	gapBus.Publish(Event{Type: "SOCKET", Method: "FRAME", Path: "/wanted", Channel: "/wanted"})
+	cursor := gapBus.Summaries()[0].Cursor
+	gapBus.Publish(Event{Type: "SOCKET", Method: "FRAME", Path: "/other", ResponseBody: strings.Repeat("x", MaxRetainedBytes+1)})
+	gapBus.Publish(Event{Type: "SOCKET", Method: "FRAME", Path: "/wanted", Channel: "/wanted"})
+	filtered := gapBus.History(HistoryQuery{Since: cursor, Channel: "/wanted", Limit: 20})
 	if filtered.Gap == nil || filtered.Gap.Reason != "event_not_retained" {
 		t.Fatalf("filtered history gap = %#v, want missing cursor event", filtered.Gap)
 	}
 }
 
 func TestBurstHistoryUsesExactGroupAndReportsExpiredMembers(t *testing.T) {
-	bus := NewEventBus(nil)
+	bus := NewBus(nil)
 	var first, last string
 	for i := 0; i < 4; i++ {
 		direction, source := "ditto_to_client", "hub"
 		if i == 1 {
 			direction, source = "client_to_upstream", "live-bridge"
 		}
-		event := bus.publishWithSummary(LogEvent{Type: "SOCKET", Method: "FRAME", Path: "/scores", Channel: "/scores", Direction: direction, Source: source}, false)
+		event := bus.publishWithSummary(Event{Type: "SOCKET", Method: "FRAME", Path: "/scores", Channel: "/scores", Direction: direction, Source: source}, false)
 		if i == 0 {
 			first = event.Cursor
 		}
@@ -135,18 +119,18 @@ func TestBurstHistoryUsesExactGroupAndReportsExpiredMembers(t *testing.T) {
 			last = event.Cursor
 		}
 	}
-	history := bus.History("", first, last, "/scores", "FRAME", "ditto_to_client", "hub", "", 0, 20, 3)
+	history := bus.History(HistoryQuery{From: first, To: last, Channel: "/scores", Method: "FRAME", Direction: "ditto_to_client", Source: "hub", Limit: 20, Expected: 3})
 	if len(history.Events) != 3 || !history.Complete {
 		t.Fatalf("burst history = %d events complete=%t gap=%#v", len(history.Events), history.Complete, history.Gap)
 	}
-	history = bus.History("", first, last, "/scores", "FRAME", "ditto_to_client", "hub", "", 0, 20, 4)
+	history = bus.History(HistoryQuery{From: first, To: last, Channel: "/scores", Method: "FRAME", Direction: "ditto_to_client", Source: "hub", Limit: 20, Expected: 4})
 	if history.Complete || history.Gap == nil || history.Gap.Reason != "members_expired" {
 		t.Fatalf("incomplete burst = complete %t gap=%#v, want members_expired", history.Complete, history.Gap)
 	}
 }
 
 func TestConcurrentPublishesKeepCursorAndStdoutIdentityStable(t *testing.T) {
-	bus := NewEventBus(nil)
+	bus := NewBus(nil)
 	const publishers, each = 8, 50
 	var wg sync.WaitGroup
 	for publisher := 0; publisher < publishers; publisher++ {
@@ -154,18 +138,18 @@ func TestConcurrentPublishesKeepCursorAndStdoutIdentityStable(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < each; i++ {
-				bus.Publish(LogEvent{Type: "MODE", Method: "CHANGE"})
+				bus.Publish(Event{Type: "MODE", Method: "CHANGE"})
 			}
 		}()
 	}
 	wg.Wait()
-	items := bus.LogSummaries()
+	items := bus.Summaries()
 	if len(items) != publishers*each {
 		t.Fatalf("retained %d events", len(items))
 	}
 	last := uint64(0)
 	for _, item := range items {
-		_, seq, ok := parseLogCursor(item.Cursor)
+		_, seq, ok := parseCursor(item.Cursor)
 		if !ok || seq <= last {
 			t.Fatalf("cursor %q is not strictly increasing after %d", item.Cursor, last)
 		}
@@ -177,12 +161,12 @@ func TestConcurrentPublishesKeepCursorAndStdoutIdentityStable(t *testing.T) {
 }
 
 func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
-	bus := NewEventBus(nil)
+	bus := NewBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	pub := NewCoalescingPublisher(bus)
-	for i := 0; i < SocketLogCoalesceThresholdPerSecond+5; i++ {
-		pub.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK,
+	pub := NewCoalescer(bus)
+	for i := 0; i < CoalesceThresholdPerSecond+5; i++ {
+		pub.Publish(Event{Type: "SOCKET", Method: "DISPATCH", Path: "/burst", Status: http.StatusOK,
 			Direction: "ditto_to_client", Source: "test", RequestBody: fmt.Sprintf(`{"index":%d}`, i)})
 	}
 	deadline := time.After(1500 * time.Millisecond)
@@ -197,20 +181,20 @@ func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
 			if summaries != 1 {
 				t.Fatalf("burst summaries = %d, want 1", summaries)
 			}
-			var burst LogEvent
-			for _, event := range bus.LogSummaries() {
+			var burst Event
+			for _, event := range bus.Summaries() {
 				if event.Method == "DISPATCH_BURST" {
 					burst = event
 				}
 			}
-			if burst.BurstCount != SocketLogCoalesceThresholdPerSecond+5 || burst.BurstStartCursor == "" || burst.BurstEndCursor == "" {
+			if burst.BurstCount != CoalesceThresholdPerSecond+5 || burst.BurstStartCursor == "" || burst.BurstEndCursor == "" {
 				t.Fatalf("burst summary = %#v", burst)
 			}
-			members := bus.History("", burst.BurstStartCursor, burst.BurstEndCursor, "/burst", "DISPATCH", "ditto_to_client", "test", "", 0, 100, burst.BurstCount)
+			members := bus.History(HistoryQuery{From: burst.BurstStartCursor, To: burst.BurstEndCursor, Channel: "/burst", Method: "DISPATCH", Direction: "ditto_to_client", Source: "test", Limit: 100, Expected: burst.BurstCount})
 			if !members.Complete || len(members.Events) != burst.BurstCount {
 				t.Fatalf("burst members = %d complete=%t gap=%#v", len(members.Events), members.Complete, members.Gap)
 			}
-			if detail, ok := bus.LogDetail(members.Events[0].ID); !ok || detail.RequestBody == "" {
+			if detail, ok := bus.Detail(members.Events[0].ID); !ok || detail.RequestBody == "" {
 				t.Fatalf("suppressed dispatch detail not retained: %#v found=%t", detail, ok)
 			}
 			return
@@ -219,8 +203,8 @@ func TestCoalescingPublisherEmitsBurstSummary(t *testing.T) {
 }
 
 func TestEventBusPublishUnsubscribeRace(t *testing.T) {
-	b := NewEventBus(nil)
-	subs := make([]chan LogEvent, 100)
+	b := NewBus(nil)
+	subs := make([]chan Event, 100)
 	for i := range subs {
 		subs[i] = b.Subscribe()
 	}
@@ -229,7 +213,7 @@ func TestEventBusPublishUnsubscribeRace(t *testing.T) {
 	var drainWG sync.WaitGroup
 	for _, ch := range subs {
 		drainWG.Add(1)
-		go func(ch chan LogEvent) {
+		go func(ch chan Event) {
 			defer drainWG.Done()
 			for {
 				select {
@@ -246,7 +230,7 @@ func TestEventBusPublishUnsubscribeRace(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 500; i++ {
-			b.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH"})
+			b.Publish(Event{Type: "SOCKET", Method: "DISPATCH"})
 			runtime.Gosched()
 		}
 	}()

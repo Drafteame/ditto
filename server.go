@@ -8,7 +8,6 @@ import (
 	"compress/zlib"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +25,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"ditto/internal/eventlog"
 )
 
 // ProxyManager allows changing the target URL at runtime.
@@ -128,7 +129,7 @@ type ServerConfig struct {
 type Server struct {
 	Mux        *http.ServeMux
 	Store      *MockStore
-	Bus        *EventBus
+	Bus        *eventlog.Bus
 	ProxyMgr   *ProxyManager
 	SocketHub  *SocketHub
 	Modes      *ChannelModeRegistry
@@ -178,7 +179,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to load mocks: %w", err)
 	}
 
-	bus := NewEventBus(NewRequestLogger(os.Stdout, cfg.JSONLogs))
+	bus := eventlog.NewBus(eventlog.NewPrinter(os.Stdout, cfg.JSONLogs))
 	proxyMgr := NewProxyManager(cfg.Target)
 	modeRegistry, err := NewChannelModeRegistry(cfg.Layout.ChannelModesDir, bus)
 	if err != nil {
@@ -304,7 +305,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			requestPayload.CaptureStatus = "not_captured"
 		}
 		formFields, uploadedFiles, formTruncated := parseRequestForm(reqBody, reqHeaders.Get("Content-Type"), reqReadErr != nil)
-		requestContext := LogEvent{URL: requestURL, Host: requestHost, RemoteAddr: remoteAddr, Protocol: protocol,
+		requestContext := eventlog.Event{URL: requestURL, Host: requestHost, RemoteAddr: remoteAddr, Protocol: protocol,
 			RequestBody: requestBody, RequestPayload: requestPayload, RequestHeaders: reqHeaders,
 			RequestFormFields: formFields, RequestFiles: uploadedFiles, RequestFormsTruncated: formTruncated}
 		if reqReadErr != nil {
@@ -745,11 +746,11 @@ func isTextContentType(contentType string) bool {
 		mediaType == "application/x-www-form-urlencoded" || mediaType == "multipart/form-data"
 }
 
-func (rc *responseCapture) responsePayload() (string, *LogPayloadMetadata) {
+func (rc *responseCapture) responsePayload() (string, *eventlog.Payload) {
 	captured := rc.body.Bytes()
 	body, decodedTruncated, decodeErr := rc.decodedBodyInfo()
 	headers := rc.responseHeaders()
-	meta := &LogPayloadMetadata{SizeBytes: rc.totalBytes, CapturedBytes: int64(len(captured)),
+	meta := &eventlog.Payload{SizeBytes: rc.totalBytes, CapturedBytes: int64(len(captured)),
 		ContentType: headers.Get("Content-Type"), Encoding: headers.Get("Content-Encoding"),
 		RawBase64: base64.StdEncoding.EncodeToString(captured)}
 	switch {
@@ -774,7 +775,7 @@ func (rc *responseCapture) responsePayload() (string, *LogPayloadMetadata) {
 	return body, meta
 }
 
-func captureLogPayload(raw []byte, total int64, contentType, encoding string, captureErr error) (string, *LogPayloadMetadata) {
+func captureLogPayload(raw []byte, total int64, contentType, encoding string, captureErr error) (string, *eventlog.Payload) {
 	captured := raw
 	truncated := total > int64(len(captured))
 	if len(captured) > MaxLogPayloadCaptureBytes {
@@ -782,7 +783,7 @@ func captureLogPayload(raw []byte, total int64, contentType, encoding string, ca
 	}
 	displayBytes, supported, decodedTruncated, decodeErr := decodePayload(captured, encoding)
 	truncated = truncated || decodedTruncated
-	meta := &LogPayloadMetadata{SizeBytes: total, CapturedBytes: int64(len(captured)), ContentType: contentType,
+	meta := &eventlog.Payload{SizeBytes: total, CapturedBytes: int64(len(captured)), ContentType: contentType,
 		Encoding: encoding, RawBase64: base64.StdEncoding.EncodeToString(captured)}
 	switch {
 	case captureErr != nil:
@@ -817,7 +818,7 @@ func captureLogPayload(raw []byte, total int64, contentType, encoding string, ca
 	return string(displayBytes), meta
 }
 
-func parseRequestForm(body []byte, contentType string, inputIncomplete bool) (map[string][]string, []LogFileMetadata, bool) {
+func parseRequestForm(body []byte, contentType string, inputIncomplete bool) (map[string][]string, []eventlog.FileMeta, bool) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return nil, nil, false
@@ -852,7 +853,7 @@ func parseRequestForm(body []byte, contentType string, inputIncomplete bool) (ma
 		fieldCount := 0
 		partCount := 0
 		formsTruncated := inputIncomplete
-		var files []LogFileMetadata
+		var files []eventlog.FileMeta
 		for {
 			part, err := reader.NextPart()
 			if err != nil {
@@ -873,7 +874,7 @@ func parseRequestForm(body []byte, contentType string, inputIncomplete bool) (ma
 				if readErr != nil {
 					status = "error"
 				}
-				files = append(files, LogFileMetadata{Name: name, ContentType: part.Header.Get("Content-Type"),
+				files = append(files, eventlog.FileMeta{Name: name, ContentType: part.Header.Get("Content-Type"),
 					SizeBytes: size, CapturedBytes: 0, CaptureStatus: status})
 				_ = part.Close()
 				continue
@@ -908,35 +909,4 @@ func parseRequestForm(body []byte, contentType string, inputIncomplete bool) (ma
 		return fields, files, formsTruncated
 	}
 	return nil, nil, false
-}
-
-// RequestLogger writes one line per log event in the --log-format: a short
-// human-readable line, or the event as a JSON object. A nil *RequestLogger
-// discards events.
-type RequestLogger struct {
-	mu   sync.Mutex
-	w    io.Writer
-	json bool
-}
-
-func NewRequestLogger(w io.Writer, json bool) *RequestLogger {
-	return &RequestLogger{w: w, json: json}
-}
-
-func (l *RequestLogger) Log(e LogEvent) {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.json {
-		data, err := json.Marshal(e)
-		if err != nil {
-			return
-		}
-		fmt.Fprintln(l.w, string(data))
-		return
-	}
-	fmt.Fprintf(l.w, "%s %s %-6s %s %s → %d (%dms)\n",
-		e.Timestamp, e.ID, e.Type, e.Method, e.Path, e.Status, e.DurationMs)
 }
