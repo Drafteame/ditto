@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,4 +37,12 @@ func newTestSequenceRegistry(t *testing.T) *sequence.Store {
 		t.Fatal(err)
 	}
 	return reg
+}
+
+// localRequest is a body-less request from a loopback address, which the
+// API's origin check accepts.
+func localRequest(method, path string) *http.Request {
+	req := httptest.NewRequest(method, path, nil)
+	req.RemoteAddr = "127.0.0.1:5555"
+	return req
 }

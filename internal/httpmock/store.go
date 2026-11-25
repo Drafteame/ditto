@@ -2,6 +2,7 @@ package httpmock
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +12,9 @@ import (
 
 	"ditto/internal/jsonfile"
 )
+
+// ErrNotFound is returned for a mock index outside the store.
+var ErrNotFound = errors.New("mock not found")
 
 // Store holds the mocks loaded from one directory, one JSON file per mock,
 // and keeps each sequence mock's position in memory. Mocks are addressed by
@@ -264,7 +268,7 @@ func (s *Store) Update(index int, mock Mock) ([]int, error) {
 	defer s.mu.Unlock()
 
 	if index < 0 || index >= len(s.mocks) {
-		return nil, fmt.Errorf("mock not found")
+		return nil, ErrNotFound
 	}
 	if mock.Method == "" || mock.Path == "" {
 		return nil, fmt.Errorf("method and path are required")
@@ -310,7 +314,7 @@ func (s *Store) Delete(index int) error {
 	defer s.mu.Unlock()
 
 	if index < 0 || index >= len(s.mocks) {
-		return fmt.Errorf("mock not found")
+		return ErrNotFound
 	}
 
 	filePath := filepath.Join(s.dir, s.mocks[index].Source)

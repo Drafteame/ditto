@@ -34,6 +34,17 @@ const (
 	recordingStopTimeout        = 5 * time.Second
 )
 
+// Errors returned by Recorder methods.
+var (
+	// ErrActive reports that a recording is active: another cannot start and
+	// the active one cannot be deleted.
+	ErrActive = errors.New("a recording is already active")
+	// ErrNotActive reports a Stop for a recording that is not the active one.
+	ErrNotActive = errors.New("recording is not active")
+	// ErrNotFound reports an invalid recording ID.
+	ErrNotFound = errors.New("recording not found")
+)
+
 // Options tunes a recorder's frame queue and flushing; zero fields use the
 // defaults.
 type Options struct {
@@ -193,7 +204,7 @@ func (r *Recorder) Start(name, description string) (Manifest, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != nil {
-		return Manifest{}, fmt.Errorf("recording %q is already active", r.active.manifest.ID)
+		return Manifest{}, fmt.Errorf("%w: %q", ErrActive, r.active.manifest.ID)
 	}
 	id := recordingID(name, time.Now().UTC())
 	dir := filepath.Join(r.dir, id)
@@ -248,7 +259,7 @@ func (r *Recorder) Stop(id string) (Manifest, error) {
 	session := r.active
 	if session == nil || session.manifest.ID != id {
 		r.mu.Unlock()
-		return Manifest{}, fmt.Errorf("active recording %q not found", id)
+		return Manifest{}, fmt.Errorf("%w: %q", ErrNotActive, id)
 	}
 	r.active = nil
 	session.beginClosing()
@@ -391,7 +402,7 @@ func (r *Recorder) List() ([]Manifest, error) {
 // Manifest returns one recording's manifest.
 func (r *Recorder) Manifest(id string) (Manifest, error) {
 	if !jsonfile.ValidID(id) {
-		return Manifest{}, fmt.Errorf("invalid recording id")
+		return Manifest{}, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	return readManifest(filepath.Join(r.dir, id))
 }
@@ -399,10 +410,10 @@ func (r *Recorder) Manifest(id string) (Manifest, error) {
 // Delete removes a recording that is not active.
 func (r *Recorder) Delete(id string) error {
 	if !jsonfile.ValidID(id) {
-		return fmt.Errorf("invalid recording id")
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	if active := r.ActiveID(); active == id {
-		return fmt.Errorf("cannot delete active recording")
+		return fmt.Errorf("cannot delete %q: %w", id, ErrActive)
 	}
 	path := filepath.Join(r.dir, id)
 	if _, err := os.Stat(path); err != nil {
@@ -414,7 +425,7 @@ func (r *Recorder) Delete(id string) error {
 // Frames returns a page of one channel's recorded frames.
 func (r *Recorder) Frames(id, channel string, offset, limit int) ([]Frame, error) {
 	if !jsonfile.ValidID(id) {
-		return nil, fmt.Errorf("invalid recording id")
+		return nil, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	if offset < 0 {
 		offset = 0
