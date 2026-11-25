@@ -1,4 +1,4 @@
-package main
+package httpmock
 
 import (
 	"encoding/json"
@@ -54,8 +54,8 @@ func TestMatchPathSupportsWildcardWithinSegment(t *testing.T) {
 	}
 }
 
-func TestFindPrefersExactPathOverWildcardPath(t *testing.T) {
-	store := &MockStore{
+func TestResolvePrefersExactPathOverWildcardPath(t *testing.T) {
+	store := &Store{
 		mocks: []Mock{
 			{
 				Method:  "GET",
@@ -73,17 +73,17 @@ func TestFindPrefersExactPathOverWildcardPath(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/tickets-bff/tkt_8WNAsd8wsRnf0xC0m", nil)
-	mock := store.Find(req, nil)
-	if mock == nil {
+	resolved := store.Resolve(req, nil)
+	if resolved == nil {
 		t.Fatal("expected a matching mock")
 	}
-	if got := mock.Path; got != "/tickets-bff/tkt_8WNAsd8wsRnf0xC0m" {
-		t.Fatalf("expected exact mock to win, got %q", got)
+	if resolved.Status != 201 {
+		t.Fatalf("expected the exact mock (201) to win, got status %d", resolved.Status)
 	}
 }
 
-func TestMatchAndResolveSequenceProxyFallsThroughAfterLastStep(t *testing.T) {
-	store := &MockStore{
+func TestResolveSequenceProxyFallsThroughAfterLastStep(t *testing.T) {
+	store := &Store{
 		mocks: []Mock{
 			{
 				Method:       "GET",
@@ -93,7 +93,7 @@ func TestMatchAndResolveSequenceProxyFallsThroughAfterLastStep(t *testing.T) {
 				ResponseMode: "sequence",
 				Sequence: &Sequence{
 					OnEnd: "proxy",
-					Steps: []SequenceStep{
+					Steps: []Step{
 						{Status: 201, Body: json.RawMessage(`{"mocked":true}`)},
 					},
 				},
@@ -103,7 +103,7 @@ func TestMatchAndResolveSequenceProxyFallsThroughAfterLastStep(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/users", nil)
 
-	first := store.MatchAndResolve(req, nil)
+	first := store.Resolve(req, nil)
 	if first == nil {
 		t.Fatal("expected first sequence step to resolve")
 	}
@@ -111,7 +111,7 @@ func TestMatchAndResolveSequenceProxyFallsThroughAfterLastStep(t *testing.T) {
 		t.Fatalf("expected status 201 on first call, got %d", got)
 	}
 
-	second := store.MatchAndResolve(req, nil)
+	second := store.Resolve(req, nil)
 	if second != nil {
 		t.Fatal("expected exhausted proxy sequence to fall through")
 	}

@@ -1,100 +1,32 @@
-package main
+package httpmock
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
-	pathpkg "path"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 )
 
-// Match holds optional conditions a request must satisfy beyond method + path.
-// All fields are optional; a request matches if every specified condition is met.
-type Match struct {
-	Query   map[string]string `json:"query,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Body    json.RawMessage   `json:"body,omitempty"`
-}
-
-// IsEmpty reports whether no conditions are defined.
-func (m Match) IsEmpty() bool {
-	return len(m.Query) == 0 && len(m.Headers) == 0 && len(m.Body) == 0
-}
-
-// Specificity returns the number of conditions defined; used to prefer the
-// most specific mock when multiple mocks could match the same request.
-func (m Match) Specificity() int {
-	score := len(m.Query) + len(m.Headers)
-	if len(m.Body) > 0 {
-		score++
-	}
-	return score
-}
-
-// Equals reports whether two Match definitions describe the same conditions.
-func (m Match) Equals(other Match) bool {
-	if !reflect.DeepEqual(m.Query, other.Query) {
-		return false
-	}
-	if !equalCaseInsensitive(m.Headers, other.Headers) {
-		return false
-	}
-	return jsonEqual(m.Body, other.Body)
-}
-
-type Mock struct {
-	Method       string            `json:"method"`
-	Path         string            `json:"path"`
-	Status       int               `json:"status"`
-	Headers      map[string]string `json:"headers,omitempty"`
-	Body         json.RawMessage   `json:"body"`
-	RawBody      []byte            `json:"-"`
-	DelayMs      int               `json:"delay_ms,omitempty"`
-	Match        Match             `json:"match,omitempty"`
-	Enabled      bool              `json:"enabled"`
-	Source       string            `json:"source"`
-	ResponseMode string            `json:"response_mode,omitempty"` // "static" (default) | "sequence"
-	Sequence     *Sequence         `json:"sequence,omitempty"`
-}
-
-// Sequence lets a single mock return different responses on subsequent calls.
-// CurrentStep is in-memory only (not persisted to disk); it resets when the
-// server restarts. It is exposed over the wire so the UI can render the
-// current position, but writeMockFile uses its own struct that excludes it.
-type Sequence struct {
-	Steps       []SequenceStep `json:"steps"`
-	OnEnd       string         `json:"on_end"` // "loop" | "stay" | "reset" | "proxy"
-	CurrentStep int            `json:"current_step,omitempty"`
-}
-
-type SequenceStep struct {
-	Status  int               `json:"status"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Body    json.RawMessage   `json:"body"`
-	DelayMs int               `json:"delay_ms,omitempty"`
-}
-
-// IsSequence reports whether this mock should serve a sequence response.
-func (m *Mock) IsSequence() bool {
-	return m.ResponseMode == "sequence" && m.Sequence != nil && len(m.Sequence.Steps) > 0
-}
-
-type MockStore struct {
+// Store holds the mocks loaded from one directory, one JSON file per mock,
+// and keeps each sequence mock's position in memory. Mocks are addressed by
+// their index in All.
+type Store struct {
 	mu    sync.RWMutex
 	mocks []Mock
 	dir   string
 }
 
-func NewMockStore(dir string) *MockStore {
-	return &MockStore{dir: dir}
+// NewStore returns an empty store for dir; call Load to read it.
+func NewStore(dir string) *Store {
+	return &Store{dir: dir}
 }
 
-func (s *MockStore) Load() error {
+// Load replaces the store's mocks with the files in dir. Every loaded mock
+// starts enabled.
+func (s *Store) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -106,22 +38,9 @@ func (s *MockStore) Load() error {
 	return nil
 }
 
-// Find returns the most specific enabled mock that matches the request.
-// reqBody may be nil if the request has no body to inspect.
-func (s *MockStore) Find(r *http.Request, reqBody []byte) *Mock {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	idx := s.findBestLocked(r, reqBody)
-	if idx < 0 {
-		return nil
-	}
-	return &s.mocks[idx]
-}
-
 // findBestLocked returns the index of the best matching enabled mock, or -1.
 // Caller must hold s.mu (read or write).
-func (s *MockStore) findBestLocked(r *http.Request, reqBody []byte) int {
+func (s *Store) findBestLocked(r *http.Request, reqBody []byte) int {
 	bestIdx := -1
 	bestScore := -1
 	bestPathScore := -1
@@ -147,8 +66,8 @@ func (s *MockStore) findBestLocked(r *http.Request, reqBody []byte) int {
 	return bestIdx
 }
 
-// ResolvedResponse is a snapshot of what to send for one matched request.
-type ResolvedResponse struct {
+// Resolved is a snapshot of what to send for one matched request.
+type Resolved struct {
 	Status    int
 	Headers   map[string]string
 	Body      []byte
@@ -160,10 +79,10 @@ type ResolvedResponse struct {
 	SequenceLen  int
 }
 
-// MatchAndResolve finds the best matching mock and returns a response snapshot.
+// Resolve finds the best matching mock and returns a response snapshot.
 // For sequence mocks, it advances the in-memory counter atomically.
 // Returns nil if no mock matches.
-func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedResponse {
+func (s *Store) Resolve(r *http.Request, reqBody []byte) *Resolved {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -174,7 +93,7 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 	m := &s.mocks[idx]
 
 	if !m.IsSequence() {
-		return &ResolvedResponse{
+		return &Resolved{
 			Status:    m.Status,
 			Headers:   m.Headers,
 			Body:      m.RawBody,
@@ -191,7 +110,7 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 	// once and then start over from step 0.
 	if seq.OnEnd == "reset" && cur >= n {
 		seq.CurrentStep = 0
-		return &ResolvedResponse{
+		return &Resolved{
 			Status:       m.Status,
 			Headers:      m.Headers,
 			Body:         m.RawBody,
@@ -243,7 +162,7 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 		status = m.Status
 	}
 
-	return &ResolvedResponse{
+	return &Resolved{
 		Status:       status,
 		Headers:      step.Headers,
 		Body:         body,
@@ -257,7 +176,7 @@ func (s *MockStore) MatchAndResolve(r *http.Request, reqBody []byte) *ResolvedRe
 
 // ResetSequence resets the in-memory counter of the sequence at the given index.
 // Returns false if the index is invalid or the mock is not a sequence.
-func (s *MockStore) ResetSequence(index int) bool {
+func (s *Store) ResetSequence(index int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -272,7 +191,8 @@ func (s *MockStore) ResetSequence(index int) bool {
 	return true
 }
 
-func (s *MockStore) All() []Mock {
+// All returns a copy of every mock in index order.
+func (s *Store) All() []Mock {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -284,7 +204,7 @@ func (s *MockStore) All() []Mock {
 // Toggle flips a mock's enabled state. When enabling, any other mock with
 // identical method + path + match conditions is auto-disabled to prevent
 // ambiguity. Returns the indices of any mocks that were auto-disabled.
-func (s *MockStore) Toggle(index int) (bool, []int) {
+func (s *Store) Toggle(index int) (bool, []int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -300,13 +220,16 @@ func (s *MockStore) Toggle(index int) (bool, []int) {
 	return true, disabled
 }
 
-func (s *MockStore) Count() int {
+// Count returns the number of mocks.
+func (s *Store) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.mocks)
 }
 
-func (s *MockStore) Create(mock Mock) ([]int, error) {
+// Create validates, enables and saves a new mock, returning the indices of
+// mocks it disabled because they had the same method, path and conditions.
+func (s *Store) Create(mock Mock) ([]int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -332,7 +255,9 @@ func (s *MockStore) Create(mock Mock) ([]int, error) {
 	return disabled, nil
 }
 
-func (s *MockStore) Update(index int, mock Mock) ([]int, error) {
+// Update replaces the mock at index, keeping its enabled state and sequence
+// position, and returns the indices of duplicates it disabled.
+func (s *Store) Update(index int, mock Mock) ([]int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -350,7 +275,7 @@ func (s *MockStore) Update(index int, mock Mock) ([]int, error) {
 
 	// Preserve in-memory sequence cursor across edits so callers aren't
 	// surprised by a reset mid-flow. If the step count shrank below the
-	// saved cursor, MatchAndResolve clamps it on the next call.
+	// saved cursor, Resolve clamps it on the next call.
 	if mock.Sequence != nil && s.mocks[index].Sequence != nil {
 		mock.Sequence.CurrentStep = s.mocks[index].Sequence.CurrentStep
 	}
@@ -377,7 +302,8 @@ func (s *MockStore) Update(index int, mock Mock) ([]int, error) {
 	return disabled, nil
 }
 
-func (s *MockStore) Delete(index int) error {
+// Delete removes the mock at index and its file.
+func (s *Store) Delete(index int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -397,7 +323,7 @@ func (s *MockStore) Delete(index int) error {
 // disableDuplicatesLocked auto-disables any other enabled mocks that share
 // method + path + match conditions with the mock at the given index.
 // MUST be called with s.mu held.
-func (s *MockStore) disableDuplicatesLocked(activeIndex int) []int {
+func (s *Store) disableDuplicatesLocked(activeIndex int) []int {
 	active := s.mocks[activeIndex]
 	if !active.Enabled {
 		return nil
@@ -522,140 +448,4 @@ func loadMocksFromDir(dir string) ([]Mock, error) {
 	}
 
 	return mocks, nil
-}
-
-// matchPath supports exact matches and segment wildcards.
-// Examples:
-//   - /api/v1/users/* matches /api/v1/users/123
-//   - /tickets-bff/tkt_* matches /tickets-bff/tkt_8WNAsd8wsRnf0xC0m
-func matchPath(pattern, actualPath string) bool {
-	if pattern == actualPath {
-		return true
-	}
-
-	patternParts := strings.Split(pattern, "/")
-	pathParts := strings.Split(actualPath, "/")
-
-	if len(patternParts) != len(pathParts) {
-		return false
-	}
-
-	for i := range patternParts {
-		ok, err := pathpkg.Match(patternParts[i], pathParts[i])
-		if err != nil || !ok {
-			return false
-		}
-	}
-
-	return true
-}
-
-// pathSpecificity prefers exact paths over wildcard paths when the same
-// request would match multiple mocks with equally specific match conditions.
-func pathSpecificity(pattern string) int {
-	return len(strings.ReplaceAll(pattern, "*", ""))
-}
-
-// matchConditions checks whether the request satisfies the given Match block.
-// An empty Match always matches.
-func matchConditions(m Match, r *http.Request, reqBody []byte) bool {
-	if m.IsEmpty() {
-		return true
-	}
-
-	if !matchQuery(m.Query, r.URL.Query()) {
-		return false
-	}
-	if !matchHeaders(m.Headers, r.Header) {
-		return false
-	}
-	if len(m.Body) > 0 && !matchBody(m.Body, reqBody) {
-		return false
-	}
-	return true
-}
-
-func matchQuery(expected map[string]string, actual url.Values) bool {
-	for k, v := range expected {
-		if actual.Get(k) != v {
-			return false
-		}
-	}
-	return true
-}
-
-func matchHeaders(expected map[string]string, actual http.Header) bool {
-	for k, v := range expected {
-		if actual.Get(k) != v {
-			return false
-		}
-	}
-	return true
-}
-
-// matchBody returns true when every field in expected is present in actual
-// with the same value (partial / subset match).
-func matchBody(expected, actual []byte) bool {
-	if len(actual) == 0 {
-		return false
-	}
-	var exp, got any
-	if err := json.Unmarshal(expected, &exp); err != nil {
-		return false
-	}
-	if err := json.Unmarshal(actual, &got); err != nil {
-		return false
-	}
-	return jsonSubset(exp, got)
-}
-
-// jsonSubset reports whether expected is a subset of actual.
-// Maps are compared field-by-field; non-map values must be deeply equal.
-func jsonSubset(expected, actual any) bool {
-	expMap, expIsMap := expected.(map[string]any)
-	gotMap, gotIsMap := actual.(map[string]any)
-
-	if expIsMap && gotIsMap {
-		for k, v := range expMap {
-			gv, ok := gotMap[k]
-			if !ok || !jsonSubset(v, gv) {
-				return false
-			}
-		}
-		return true
-	}
-
-	return reflect.DeepEqual(expected, actual)
-}
-
-func equalCaseInsensitive(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	lowerA := make(map[string]string, len(a))
-	lowerB := make(map[string]string, len(b))
-	for k, v := range a {
-		lowerA[strings.ToLower(k)] = v
-	}
-	for k, v := range b {
-		lowerB[strings.ToLower(k)] = v
-	}
-	return reflect.DeepEqual(lowerA, lowerB)
-}
-
-func jsonEqual(a, b json.RawMessage) bool {
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	if len(a) == 0 || len(b) == 0 {
-		return false
-	}
-	var av, bv any
-	if err := json.Unmarshal(a, &av); err != nil {
-		return false
-	}
-	if err := json.Unmarshal(b, &bv); err != nil {
-		return false
-	}
-	return reflect.DeepEqual(av, bv)
 }

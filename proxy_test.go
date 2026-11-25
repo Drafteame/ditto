@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"ditto/internal/capture"
+	"ditto/internal/httpmock"
 )
 
 func newHTTPLogTestServer(t *testing.T, target string) *Server {
@@ -45,7 +46,7 @@ func TestHTTPLogCapturesBodiesForEveryMethodAndRequestForm(t *testing.T) {
 		{http.MethodOptions, "application/json", `{"options":true}`, false},
 	}
 	for _, test := range cases {
-		if _, err := srv.Store.Create(Mock{Method: test.method, Path: "/capture", Status: http.StatusCreated,
+		if _, err := srv.Store.Create(httpmock.Mock{Method: test.method, Path: "/capture", Status: http.StatusCreated,
 			Body: json.RawMessage(`{"ok":true}`), Headers: map[string]string{"Content-Type": "application/json", "X-Reply": "mock"}}); err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +101,7 @@ func TestHTTPLogCapturesMultipartAndFileMetadata(t *testing.T) {
 	_ = writer.Close()
 
 	srv := newHTTPLogTestServer(t, "")
-	_, err = srv.Store.Create(Mock{Method: http.MethodPost, Path: "/upload", Status: http.StatusOK, Body: json.RawMessage(`{}`)})
+	_, err = srv.Store.Create(httpmock.Mock{Method: http.MethodPost, Path: "/upload", Status: http.StatusOK, Body: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func (*failReadBody) Close() error { return nil }
 
 func TestHTTPRequestReadErrorReturns400WithoutMatchingPartialBody(t *testing.T) {
 	srv := newHTTPLogTestServer(t, "")
-	_, err := srv.Store.Create(Mock{Method: http.MethodPost, Path: "/read-error", Status: http.StatusCreated, Body: json.RawMessage(`{"matched":true}`)})
+	_, err := srv.Store.Create(httpmock.Mock{Method: http.MethodPost, Path: "/read-error", Status: http.StatusCreated, Body: json.RawMessage(`{"matched":true}`)})
 	if err != nil {
 		t.Fatal(err)
 	}

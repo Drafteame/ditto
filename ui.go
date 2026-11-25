@@ -16,6 +16,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 
 	"ditto/internal/eventlog"
+	"ditto/internal/httpmock"
 )
 
 //go:embed all:frontend/dist
@@ -35,7 +36,7 @@ type ServerInfo struct {
 
 // RegisterUI sets up the dashboard routes on the given mux.
 // If serveUI is true, the embedded static files are served; otherwise only the API is available.
-func RegisterUI(mux *http.ServeMux, store *MockStore, bus *eventlog.Bus, proxyMgr *ProxyManager, liveTarget func() string, info ServerInfo, serveUI bool) {
+func RegisterUI(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, proxyMgr *ProxyManager, liveTarget func() string, info ServerInfo, serveUI bool) {
 	// Serve embedded static files at /__ditto__/ (only when UI is enabled)
 	if serveUI {
 		webContent, _ := fs.Sub(webFS, "frontend/dist")
@@ -180,7 +181,7 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *eventlog.Bus, proxyMg
 				http.Error(w, "failed to read body", http.StatusBadRequest)
 				return
 			}
-			var mock Mock
+			var mock httpmock.Mock
 			if err := json.Unmarshal(body, &mock); err != nil {
 				http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 				return
@@ -256,7 +257,7 @@ func RegisterUI(mux *http.ServeMux, store *MockStore, bus *eventlog.Bus, proxyMg
 				http.Error(w, "failed to read body", http.StatusBadRequest)
 				return
 			}
-			var mock Mock
+			var mock httpmock.Mock
 			if err := json.Unmarshal(body, &mock); err != nil {
 				http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 				return

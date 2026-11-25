@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"syscall"
 	"time"
+
+	"ditto/internal/httpmock"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -147,7 +149,7 @@ func openBrowser(url string) {
 	}
 }
 
-func printStartup(mocks []Mock, port int, target, mocksDir string, https bool, certPath string, ui bool) {
+func printStartup(mocks []httpmock.Mock, port int, target, mocksDir string, https bool, certPath string, ui bool) {
 	scheme := "http"
 	if https {
 		scheme = "https"

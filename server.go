@@ -20,6 +20,7 @@ import (
 
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
+	"ditto/internal/httpmock"
 )
 
 // ProxyManager allows changing the target URL at runtime.
@@ -116,7 +117,7 @@ type ServerConfig struct {
 // Server holds the running server state.
 type Server struct {
 	Mux        *http.ServeMux
-	Store      *MockStore
+	Store      *httpmock.Store
 	Bus        *eventlog.Bus
 	ProxyMgr   *ProxyManager
 	SocketHub  *SocketHub
@@ -162,7 +163,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("server config layout with channel modes dir is required")
 	}
 
-	store := NewMockStore(cfg.MocksDir)
+	store := httpmock.NewStore(cfg.MocksDir)
 	if err := store.Load(); err != nil {
 		return nil, fmt.Errorf("failed to load mocks: %w", err)
 	}
@@ -310,7 +311,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return
 		}
 
-		resolved := store.MatchAndResolve(r, reqBody)
+		resolved := store.Resolve(r, reqBody)
 		if resolved != nil {
 			if resolved.DelayMs > 0 {
 				time.Sleep(time.Duration(resolved.DelayMs) * time.Millisecond)
