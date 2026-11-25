@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"ditto/internal/channelmode"
+	"ditto/internal/socket"
 )
 
 func RegisterChannelModeRoutes(mux *http.ServeMux, registry *channelmode.Registry) {
@@ -13,7 +14,7 @@ func RegisterChannelModeRoutes(mux *http.ServeMux, registry *channelmode.Registr
 		return
 	}
 	mux.HandleFunc("/__ditto__/api/channel-modes", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}

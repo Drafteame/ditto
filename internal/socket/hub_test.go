@@ -1,4 +1,4 @@
-package main
+package socket
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ import (
 )
 
 func TestSubscriptionRegistryTracksClientsByChannel(t *testing.T) {
-	registry := NewSubscriptionRegistry()
+	registry := newSubscriptionRegistry()
 
 	registry.Subscribe("/scores", "client-b")
 	registry.Subscribe("/scores", "client-a")
@@ -54,7 +54,7 @@ func TestSubscriptionRegistryTracksClientsByChannel(t *testing.T) {
 }
 
 func TestRelayAdapterAcksConnectionWithoutInit(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -107,10 +107,10 @@ func TestRelayAdapterAcksConnectionWithoutInit(t *testing.T) {
 }
 
 func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if IsWebSocketRequest(r) {
+		if IsUpgrade(r) {
 			hub.ServeHTTP(w, r)
 			return
 		}
@@ -162,7 +162,7 @@ func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 }
 
 func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hub.ServeHTTP)
 	server := httptest.NewServer(mux)
@@ -196,8 +196,8 @@ func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
 }
 
 func TestSocketHubDispatchAdapterFilter(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
-	rawClient := &SocketClient{
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
+	rawClient := &Client{
 		id:            "raw-1",
 		adapter:       "raw",
 		protocol:      adapter.Raw{},
@@ -206,7 +206,7 @@ func TestSocketHubDispatchAdapterFilter(t *testing.T) {
 		done:          make(chan struct{}),
 		subscriptions: map[string]string{"/scores": "raw-sub"},
 	}
-	appSyncClient := &SocketClient{
+	appSyncClient := &Client{
 		id:            "appsync-1",
 		adapter:       "appsync",
 		protocol:      adapter.AppSync{},
@@ -237,8 +237,8 @@ func TestSocketHubDispatchAdapterFilter(t *testing.T) {
 	}
 }
 
-func addRawTestSubscriber(hub *SocketHub, channel string) *SocketClient {
-	client := &SocketClient{
+func addRawTestSubscriber(hub *Hub, channel string) *Client {
+	client := &Client{
 		id:            "raw-1",
 		adapter:       "raw",
 		protocol:      adapter.Raw{},
@@ -256,7 +256,7 @@ func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
 	bus := eventlog.NewBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	hub := NewSocketHub(SocketHubConfig{Bus: bus})
+	hub := NewHub(Config{Bus: bus})
 	addRawTestSubscriber(hub, "/log")
 
 	hub.dispatchJSON("/log", json.RawMessage(`{"score":7}`), "", "")
@@ -282,7 +282,7 @@ func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
 	bus := eventlog.NewBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	hub := NewSocketHub(SocketHubConfig{Bus: bus})
+	hub := NewHub(Config{Bus: bus})
 	addRawTestSubscriber(hub, "/large")
 
 	large := json.RawMessage(`{"data":"` + strings.Repeat("x", dispatchPayloadMaxBytes+128) + `"}`)
@@ -306,7 +306,7 @@ func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
 }
 
 func TestDispatchLogBodyTruncatesUTF8PayloadsAsValidJSONString(t *testing.T) {
-	result := SocketDispatchResult{Delivered: 1}
+	result := Result{Delivered: 1}
 	payload := json.RawMessage(`{"data":"` + strings.Repeat("ñ", dispatchPayloadMaxBytes) + `"}`)
 	bodyText := buildDispatchLogBody(result, &adapter.Decoded{PayloadJSON: payload}, "")
 	var body DispatchLogBody
@@ -327,7 +327,7 @@ func TestDispatchLogBodyTruncatesUTF8PayloadsAsValidJSONString(t *testing.T) {
 
 func TestDispatchLogIncludesDecodedPayloadWithoutSSESubscribers(t *testing.T) {
 	var out bytes.Buffer
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(eventlog.NewPrinter(&out, true))})
+	hub := NewHub(Config{Bus: eventlog.NewBus(eventlog.NewPrinter(&out, true))})
 	addRawTestSubscriber(hub, "/decoded")
 
 	hub.dispatchJSON("/decoded", json.RawMessage(`{"score":7}`), "", "")
@@ -419,15 +419,15 @@ func TestSocketOriginPolicy(t *testing.T) {
 			if tc.origin != "" {
 				req.Header.Set("Origin", tc.origin)
 			}
-			if got := isAllowedSocketAPIRequest(req); got != tc.want {
-				t.Fatalf("isAllowedSocketAPIRequest() = %v, want %v", got, tc.want)
+			if got := OriginAllowed(req); got != tc.want {
+				t.Fatalf("OriginAllowed() = %v, want %v", got, tc.want)
 			}
 		})
 	}
 }
 
 func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -450,7 +450,7 @@ func TestSocketHubRejectsForbiddenOriginHandshake(t *testing.T) {
 }
 
 func TestSocketHubAllowsLocalhostCrossPortHandshake(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -466,64 +466,24 @@ func TestSocketHubAllowsLocalhostCrossPortHandshake(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 }
 
-func TestWebSocketProxyModeRejectsForbiddenOrigin(t *testing.T) {
-	targetHit := false
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		targetHit = true
-		w.WriteHeader(http.StatusSwitchingProtocols)
-	}))
-	defer target.Close()
-	layout, err := EnsureDataLayout(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	srv, err := NewServer(ServerConfig{
-		Port:     8888,
-		Target:   target.URL,
-		MocksDir: layout.MocksDir,
-		Layout:   layout,
-		ServeUI:  false,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "http://192.168.1.10:8888/events?__ditto_ws=live", nil)
-	req.Host = "192.168.1.10:8888"
-	req.RemoteAddr = "192.168.1.20:55555"
-	req.Header.Set("Origin", "http://192.168.1.10:3000")
-	req.Header.Set("Upgrade", "websocket")
-	rec := httptest.NewRecorder()
-
-	srv.Mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("proxy websocket status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
-	if targetHit {
-		t.Fatalf("forbidden websocket proxy request reached target")
-	}
-}
-
 func TestShouldProxyWebSocket(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/events?__ditto_ws=live", nil)
-	if !shouldProxyWebSocket(req) {
-		t.Fatalf("shouldProxyWebSocket(query live) = false, want true")
+	if !WantsProxy(req) {
+		t.Fatalf("WantsProxy(query live) = false, want true")
 	}
 	req = httptest.NewRequest(http.MethodGet, "/events", nil)
 	req.Header.Set("X-Ditto-WS-Mode", "proxy")
-	if !shouldProxyWebSocket(req) {
-		t.Fatalf("shouldProxyWebSocket(header proxy) = false, want true")
+	if !WantsProxy(req) {
+		t.Fatalf("WantsProxy(header proxy) = false, want true")
 	}
 	req = httptest.NewRequest(http.MethodGet, "/events", nil)
-	if shouldProxyWebSocket(req) {
-		t.Fatalf("shouldProxyWebSocket(default) = true, want false")
+	if WantsProxy(req) {
+		t.Fatalf("WantsProxy(default) = true, want false")
 	}
 }
 
 func TestSocketHubSubscribeMissingChannelSendsError(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
 	defer server.Close()
 
@@ -550,11 +510,11 @@ func TestSocketHubSubscribeMissingChannelSendsError(t *testing.T) {
 
 func TestEnqueueControlPublishesErrorWhenClientClosed(t *testing.T) {
 	bus := eventlog.NewBus(nil)
-	hub := NewSocketHub(SocketHubConfig{Bus: bus})
+	hub := NewHub(Config{Bus: bus})
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 
-	client := &SocketClient{
+	client := &Client{
 		id:            "raw-1",
 		adapter:       "raw",
 		protocol:      adapter.Raw{},
@@ -578,7 +538,7 @@ func TestEnqueueControlPublishesErrorWhenClientClosed(t *testing.T) {
 }
 
 func TestSocketClientEnqueueRejectsEmptyMessageKind(t *testing.T) {
-	client := &SocketClient{
+	client := &Client{
 		send: make(chan adapter.Message, 1),
 		done: make(chan struct{}),
 	}
@@ -588,7 +548,7 @@ func TestSocketClientEnqueueRejectsEmptyMessageKind(t *testing.T) {
 }
 
 func TestSocketClientEnqueueRejectsAfterClose(t *testing.T) {
-	client := &SocketClient{
+	client := &Client{
 		send: make(chan adapter.Message, 1),
 		done: make(chan struct{}),
 	}
@@ -603,8 +563,8 @@ func TestSocketClientEnqueueRejectsAfterClose(t *testing.T) {
 }
 
 func TestSocketClientDropCounterInSnapshot(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
-	client := &SocketClient{
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
+	client := &Client{
 		id:            "raw-1",
 		adapter:       "raw",
 		protocol:      adapter.Raw{},
@@ -625,8 +585,8 @@ func TestSocketClientDropCounterInSnapshot(t *testing.T) {
 }
 
 func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
-	client := &SocketClient{
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
+	client := &Client{
 		id:            "raw-1",
 		adapter:       "raw",
 		protocol:      adapter.Raw{},
@@ -648,9 +608,9 @@ func TestEnqueueControlUsesControlChannelWhenDataFull(t *testing.T) {
 }
 
 func TestDispatchEncodesPayloadOncePerAdapter(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil)})
 	protocol := &countingAdapter{}
-	clientA := &SocketClient{
+	clientA := &Client{
 		id:            "client-a",
 		adapter:       "counting",
 		protocol:      protocol,
@@ -659,7 +619,7 @@ func TestDispatchEncodesPayloadOncePerAdapter(t *testing.T) {
 		done:          make(chan struct{}),
 		subscriptions: map[string]string{"/scores": "sub-a"},
 	}
-	clientB := &SocketClient{
+	clientB := &Client{
 		id:            "client-b",
 		adapter:       "counting",
 		protocol:      protocol,
@@ -720,8 +680,8 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 	if err != nil {
 		t.Fatalf("Protocol(appsync-draftea) error = %v", err)
 	}
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: &schema.Registry{}, Adapters: adapters})
-	client := &SocketClient{
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil), Schemas: &schema.Registry{}, Adapters: adapters})
+	client := &Client{
 		id:            "appsync-draftea-1",
 		adapter:       "appsync-draftea",
 		protocol:      protocol,
@@ -738,7 +698,7 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 		Kind:     websocket.MessageBinary,
 		TypeName: "appsync.recovery.Recovery",
 	}
-	result, err := hub.Dispatch(SocketDispatch{
+	result, err := hub.Dispatch(Dispatch{
 		Channel:  "/test",
 		Adapter:  "appsync-draftea",
 		TypeName: "appsync.recovery.Recovery",
@@ -782,8 +742,8 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
 	}
 
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: &schema.Registry{}, Adapters: adapters})
-	client := &SocketClient{
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil), Schemas: &schema.Registry{}, Adapters: adapters})
+	client := &Client{
 		id:            "relay-draftea-1",
 		adapter:       "relay-draftea",
 		protocol:      protocol,
@@ -800,7 +760,7 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 		Kind:     websocket.MessageBinary,
 		TypeName: "appsync.betinfo.BetEventDto",
 	}
-	result, err := hub.Dispatch(SocketDispatch{
+	result, err := hub.Dispatch(Dispatch{
 		Channel:  "/osb/sport/league/*",
 		Adapter:  "relay-draftea",
 		TypeName: "appsync.betinfo.BetEventDto",
@@ -847,12 +807,12 @@ func TestHubDispatchSuppressedByMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("channelmode.NewRegistry() error = %v", err)
 	}
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Modes: reg})
+	hub := NewHub(Config{Bus: eventlog.NewBus(nil), Modes: reg})
 	for _, mode := range []channelmode.Mode{channelmode.Live, channelmode.Record} {
 		if err := reg.Set(channelmode.Config{Channel: "/blocked", Mode: mode}); err != nil {
 			t.Fatalf("Set(%s) error = %v", mode, err)
 		}
-		result, err := hub.Dispatch(SocketDispatch{
+		result, err := hub.Dispatch(Dispatch{
 			Channel: "/blocked",
 			Payload: json.RawMessage(`{"ok":true}`),
 		})
@@ -867,7 +827,7 @@ func TestHubDispatchSuppressedByMode(t *testing.T) {
 		if err := reg.Set(channelmode.Config{Channel: "/allowed", Mode: mode}); err != nil {
 			t.Fatalf("Set(%s) error = %v", mode, err)
 		}
-		result, err := hub.Dispatch(SocketDispatch{
+		result, err := hub.Dispatch(Dispatch{
 			Channel: "/allowed",
 			Payload: json.RawMessage(`{"ok":true}`),
 		})
@@ -895,7 +855,7 @@ func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recording.NewRecorder() error = %v", err)
 	}
-	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
+	hub := NewHub(Config{Bus: bus, Modes: modes, Recorder: rec})
 	manifest, err := rec.Start("Burst Recording", "")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -938,7 +898,7 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 	}
 
 	bus := eventlog.NewBus(nil)
-	hub := NewSocketHub(SocketHubConfig{Bus: bus})
+	hub := NewHub(Config{Bus: bus})
 	hub.schemas = schemas
 	hub.logSocketFrame(eventlog.Event{Status: 200, Adapter: "appsync"}, envelope, websocket.MessageText, encoded.TypeName)
 	detail, ok := bus.Detail(bus.Summaries()[0].ID)
@@ -950,7 +910,7 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 	}
 
 	bus = eventlog.NewBus(nil)
-	hub = NewSocketHub(SocketHubConfig{Bus: bus})
+	hub = NewHub(Config{Bus: bus})
 	hub.logSocketFrame(eventlog.Event{Status: 200, DeliveryState: "written"}, []byte{0xff, 0x01}, websocket.MessageBinary, "")
 	detail, ok = bus.Detail(bus.Summaries()[0].ID)
 	if !ok {
@@ -975,8 +935,8 @@ func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recording.NewRecorder() error = %v", err)
 	}
-	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
-	client := &SocketClient{
+	hub := NewHub(Config{Bus: bus, Modes: modes, Recorder: rec})
+	client := &Client{
 		id:            "raw-1",
 		adapter:       "raw",
 		protocol:      adapter.Raw{},
@@ -993,7 +953,7 @@ func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	payload := json.RawMessage(`{"local":true}`)
-	result, err := hub.Dispatch(SocketDispatch{Channel: "/mixed", Payload: payload})
+	result, err := hub.Dispatch(Dispatch{Channel: "/mixed", Payload: payload})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}

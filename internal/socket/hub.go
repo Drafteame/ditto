@@ -1,4 +1,8 @@
-package main
+// Package socket is Ditto's WebSocket server: it accepts client
+// connections through a protocol adapter, tracks channel subscriptions,
+// dispatches events to subscribers, bridges live and mixed channels to an
+// upstream, tunnels proxied connections, and logs every frame.
+package socket
 
 import (
 	"context"
@@ -25,16 +29,16 @@ import (
 	"ditto/internal/schema"
 )
 
-type SubscriptionRegistry struct {
+type subscriptionRegistry struct {
 	mu       sync.RWMutex
 	channels map[string]map[string]struct{}
 }
 
-func NewSubscriptionRegistry() *SubscriptionRegistry {
-	return &SubscriptionRegistry{channels: make(map[string]map[string]struct{})}
+func newSubscriptionRegistry() *subscriptionRegistry {
+	return &subscriptionRegistry{channels: make(map[string]map[string]struct{})}
 }
 
-func (r *SubscriptionRegistry) Subscribe(channel, clientID string) {
+func (r *subscriptionRegistry) Subscribe(channel, clientID string) {
 	channel = strings.TrimSpace(channel)
 	if channel == "" || clientID == "" {
 		return
@@ -47,7 +51,7 @@ func (r *SubscriptionRegistry) Subscribe(channel, clientID string) {
 	r.channels[channel][clientID] = struct{}{}
 }
 
-func (r *SubscriptionRegistry) Unsubscribe(channel, clientID string) {
+func (r *subscriptionRegistry) Unsubscribe(channel, clientID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	clients := r.channels[channel]
@@ -60,7 +64,7 @@ func (r *SubscriptionRegistry) Unsubscribe(channel, clientID string) {
 	}
 }
 
-func (r *SubscriptionRegistry) RemoveClient(clientID string) {
+func (r *subscriptionRegistry) RemoveClient(clientID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for channel, clients := range r.channels {
@@ -71,7 +75,7 @@ func (r *SubscriptionRegistry) RemoveClient(clientID string) {
 	}
 }
 
-func (r *SubscriptionRegistry) Clients(channel string) []string {
+func (r *subscriptionRegistry) Clients(channel string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	clients := r.channels[channel]
@@ -86,22 +90,25 @@ func (r *SubscriptionRegistry) Clients(channel string) []string {
 	return ids
 }
 
-type SocketHub struct {
-	registry *SubscriptionRegistry
+// Hub serves WebSocket clients and delivers events to the channels they
+// subscribe to. It is safe for concurrent use.
+type Hub struct {
+	registry *subscriptionRegistry
 	bus      *eventlog.Bus
 	modes    *channelmode.Registry
-	live     *LiveBridge
+	live     *liveBridge
 	recorder *recording.Recorder
 	schemas  *schema.Registry
 	adapters *adapter.Registry
 	events   *eventlog.Coalescer
 
 	mu      sync.RWMutex
-	clients map[string]*SocketClient
+	clients map[string]*Client
 	nextID  atomic.Uint64
 }
 
-type SocketClient struct {
+// Client is one connected WebSocket client.
+type Client struct {
 	id              string
 	adapter         string
 	protocol        adapter.Protocol
@@ -126,7 +133,8 @@ type SocketClient struct {
 	subscriptions map[string]string
 }
 
-type SocketClientSnapshot struct {
+// ClientSnapshot describes a connected client for the dashboard.
+type ClientSnapshot struct {
 	ID              string   `json:"id"`
 	Adapter         string   `json:"adapter"`
 	RemoteAddr      string   `json:"remote_addr"`
@@ -135,14 +143,8 @@ type SocketClientSnapshot struct {
 	DroppedToClient uint64   `json:"dropped_to_client"`
 }
 
-type socketDispatchRequest struct {
-	Channel  string          `json:"channel"`
-	Payload  json.RawMessage `json:"payload"`
-	Adapter  string          `json:"adapter,omitempty"`
-	TypeName string          `json:"type_name,omitempty"`
-}
-
-type SocketDispatchResult struct {
+// Result reports how a dispatch was delivered.
+type Result struct {
 	Delivered int      `json:"delivered"`
 	Queued    int      `json:"queued"`
 	Dropped   []string `json:"dropped,omitempty"`
@@ -178,7 +180,7 @@ var nextSocketDispatchID atomic.Uint64
 
 func newSocketDispatchID() string { return fmt.Sprintf("dispatch-%d", nextSocketDispatchID.Add(1)) }
 
-func (h *SocketHub) currentSocketMode(channel string) string {
+func (h *Hub) currentSocketMode(channel string) string {
 	if h == nil || h.modes == nil || channel == "" {
 		return ""
 	}
@@ -204,7 +206,7 @@ func truncateSocketPreview(preview string) string {
 	return preview
 }
 
-func (h *SocketHub) logSocketFrame(event eventlog.Event, data []byte, kind websocket.MessageType, typeName string) {
+func (h *Hub) logSocketFrame(event eventlog.Event, data []byte, kind websocket.MessageType, typeName string) {
 	event.Type = "SOCKET"
 	event.FrameKind = adapter.FrameKind(kind)
 	event.TypeName = typeName
@@ -228,7 +230,7 @@ func (h *SocketHub) logSocketFrame(event eventlog.Event, data []byte, kind webso
 	h.events.Publish(event)
 }
 
-func (h *SocketHub) decodeSocketFrame(kind websocket.MessageType, data []byte, adapterName, typeName string) (*adapter.Decoded, string) {
+func (h *Hub) decodeSocketFrame(kind websocket.MessageType, data []byte, adapterName, typeName string) (*adapter.Decoded, string) {
 	if kind == websocket.MessageBinary && typeName != "" {
 		decoded := &adapter.Decoded{TypeName: typeName}
 		if h.schemas == nil {
@@ -249,8 +251,8 @@ type adapterPayload struct {
 	err     error
 }
 
-// SocketDispatch is one event to deliver to a channel's subscribers.
-type SocketDispatch struct {
+// Dispatch is one event to deliver to a channel's subscribers.
+type Dispatch struct {
 	Channel string
 	// Adapter limits delivery to clients using that adapter; empty means all.
 	Adapter string
@@ -263,31 +265,33 @@ type SocketDispatch struct {
 	Encoded *adapter.Payload
 }
 
-// SocketHubConfig holds the hub's collaborators. Bus is required; every other
+// Config holds the hub's collaborators. Bus is required; every other
 // field is optional and its zero value disables the matching feature.
-type SocketHubConfig struct {
+type Config struct {
 	Bus      *eventlog.Bus
 	Modes    *channelmode.Registry
 	Schemas  *schema.Registry
 	Adapters *adapter.Registry
 	Recorder *recording.Recorder
 	// LiveTargets enables live/mixed channel forwarding to an upstream.
-	LiveTargets *LiveTargetManager
+	LiveTargets *LiveTargets
 }
 
-func NewSocketHub(cfg SocketHubConfig) *SocketHub {
-	hub := &SocketHub{
-		registry: NewSubscriptionRegistry(),
+// NewHub returns a hub and, when cfg.LiveTargets is set, its live bridge.
+// The hub follows cfg.Modes' changes to attach and detach live channels.
+func NewHub(cfg Config) *Hub {
+	hub := &Hub{
+		registry: newSubscriptionRegistry(),
 		bus:      cfg.Bus,
 		modes:    cfg.Modes,
 		recorder: cfg.Recorder,
 		schemas:  cfg.Schemas,
 		adapters: cfg.Adapters,
 		events:   eventlog.NewCoalescer(cfg.Bus),
-		clients:  make(map[string]*SocketClient),
+		clients:  make(map[string]*Client),
 	}
 	if cfg.LiveTargets != nil {
-		hub.live = NewLiveBridge(cfg.LiveTargets, hub)
+		hub.live = newLiveBridge(cfg.LiveTargets, hub)
 	}
 	if cfg.Modes != nil {
 		cfg.Modes.OnChange(func(change channelmode.Config) {
@@ -304,71 +308,8 @@ func NewSocketHub(cfg SocketHubConfig) *SocketHub {
 	return hub
 }
 
-func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
-	mux.HandleFunc("/__ditto__/socket", hub.ServeHTTP)
-	mux.HandleFunc("/__ditto__/ws", hub.ServeHTTP)
-	mux.HandleFunc("/__ditto__/api/socket/clients", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !isAllowedSocketAPIRequest(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"clients": hub.Snapshot()})
-	})
-	mux.HandleFunc("/__ditto__/api/socket/adapter-profiles", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !isAllowedSocketAPIRequest(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(hub.adapters.Summaries())
-	})
-	mux.HandleFunc("/__ditto__/api/socket/dispatch", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !isAllowedSocketAPIRequest(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		if !hasJSONContentType(r) {
-			http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
-			return
-		}
-		var req socketDispatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if len(req.Payload) == 0 {
-			req.Payload = json.RawMessage(`{}`)
-		}
-		result, err := hub.Dispatch(SocketDispatch{
-			Channel:  req.Channel,
-			Adapter:  req.Adapter,
-			TypeName: req.TypeName,
-			Payload:  req.Payload,
-			Source:   "manual",
-		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
-	})
-}
-
-func IsWebSocketRequest(r *http.Request) bool {
+// IsUpgrade reports whether r asks to upgrade to a WebSocket.
+func IsUpgrade(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
@@ -443,24 +384,22 @@ func clientIPFromRemoteAddr(addr string) string {
 	return host
 }
 
-func shouldProxyWebSocket(r *http.Request) bool {
+// WantsProxy reports whether a WebSocket request asks to be tunnelled to
+// the HTTP target (X-Ditto-WS-Mode or __ditto_ws set to proxy or live)
+// instead of being served by the hub.
+func WantsProxy(r *http.Request) bool {
 	mode := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Ditto-WS-Mode")))
 	queryMode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("__ditto_ws")))
 	return mode == "proxy" || mode == "live" || queryMode == "proxy" || queryMode == "live"
-}
-
-func hasJSONContentType(r *http.Request) bool {
-	contentType := strings.ToLower(r.Header.Get("Content-Type"))
-	return contentType == "application/json" || strings.HasPrefix(contentType, "application/json;")
 }
 
 // Dispatch validates d against the channel mode and adapter, encodes it when
 // it names a protobuf type, and fans it out to the channel's subscribers.
 // A mode that suppresses local dispatch is reported in the result, not as an
 // error. Every rejection is logged.
-func (h *SocketHub) Dispatch(d SocketDispatch) (SocketDispatchResult, error) {
+func (h *Hub) Dispatch(d Dispatch) (Result, error) {
 	if h == nil {
-		return SocketDispatchResult{}, fmt.Errorf("socket hub is not available")
+		return Result{}, fmt.Errorf("socket hub is not available")
 	}
 	channel := strings.TrimSpace(d.Channel)
 	fail := func(reason string, suppressed bool) {
@@ -469,30 +408,30 @@ func (h *SocketHub) Dispatch(d SocketDispatch) (SocketDispatchResult, error) {
 	if channel == "" {
 		err := fmt.Errorf("channel is required")
 		fail(err.Error(), false)
-		return SocketDispatchResult{}, err
+		return Result{}, err
 	}
 	if strings.ContainsAny(channel, "\r\n") {
 		err := fmt.Errorf("channel cannot contain newlines")
 		fail(err.Error(), false)
-		return SocketDispatchResult{}, err
+		return Result{}, err
 	}
 	if h.modes != nil && !h.modes.AllowsLocalDispatch(channel) {
 		mode := h.modes.Get(channel).Mode
 		msg := fmt.Sprintf("channel mode %s suppressed local dispatch", mode)
 		fail(msg, true)
-		return SocketDispatchResult{Errors: []string{msg}}, nil
+		return Result{Errors: []string{msg}}, nil
 	}
 	adapterName := adapter.Normalize(d.Adapter)
 	if _, err := h.adapters.Protocol(adapterName); err != nil {
 		fail(err.Error(), false)
-		return SocketDispatchResult{}, err
+		return Result{}, err
 	}
 	typeName := strings.TrimSpace(d.TypeName)
 	if typeName != "" {
 		if h.schemas == nil {
 			err := fmt.Errorf("schema registry is not available")
 			fail(err.Error(), false)
-			return SocketDispatchResult{}, err
+			return Result{}, err
 		}
 		encoded := d.Encoded
 		if encoded == nil {
@@ -500,7 +439,7 @@ func (h *SocketHub) Dispatch(d SocketDispatch) (SocketDispatchResult, error) {
 			if err != nil {
 				wrapped := fmt.Errorf("protobuf encode failed: %w", err)
 				fail(wrapped.Error(), false)
-				return SocketDispatchResult{}, wrapped
+				return Result{}, wrapped
 			}
 			next := adapter.ProtobufPayload(typeName, data)
 			encoded = &next
@@ -514,7 +453,7 @@ func (h *SocketHub) Dispatch(d SocketDispatch) (SocketDispatchResult, error) {
 	return h.dispatchJSON(channel, payload, adapterName, d.Source), nil
 }
 
-func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload json.RawMessage, reason string, suppressed bool) {
+func (h *Hub) logDispatchFailure(channel, source, typeName string, payload json.RawMessage, reason string, suppressed bool) {
 	method, state := "DISPATCH_FAILED", "error"
 	if suppressed {
 		method, state = "DISPATCH_SUPPRESSED", "suppressed"
@@ -541,7 +480,10 @@ func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload
 	h.events.Publish(event)
 }
 
-func isAllowedSocketAPIRequest(r *http.Request) bool {
+// OriginAllowed reports whether a dashboard or socket request comes from an
+// allowed origin: the same host, or a localhost origin from a loopback
+// address. Requests with no Origin or Referer must come from loopback.
+func OriginAllowed(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		origin = r.Header.Get("Referer")
@@ -592,7 +534,9 @@ func isLoopbackRemote(remoteAddr string) bool {
 	return strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost")
 }
 
-func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP accepts a client connection, using the adapter named by the
+// ?adapter= query parameter (raw by default), and runs it until it closes.
+func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	connectionID := fmt.Sprintf("ws-%d", h.nextID.Add(1))
 	requestURI := r.RequestURI
@@ -625,7 +569,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logHandshakeFailure(err)
 		return
 	}
-	if !isAllowedSocketAPIRequest(r) {
+	if !OriginAllowed(r) {
 		err := errors.New("origin not allowed")
 		http.Error(cw, err.Error(), http.StatusForbidden)
 		logHandshakeFailure(err)
@@ -642,7 +586,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &SocketClient{
+	client := &Client{
 		id:              connectionID,
 		adapter:         adapterName,
 		protocol:        protocol,
@@ -734,27 +678,27 @@ func socketCloseDetails(err error) (int, string) {
 
 // dispatchJSON fans a JSON payload out without mode or adapter validation;
 // Dispatch is the validating entry point.
-func (h *SocketHub) dispatchJSON(channel string, payload json.RawMessage, adapterFilter, source string) SocketDispatchResult {
-	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{Payload: payload}, func(client *SocketClient) (adapter.Payload, error) {
+func (h *Hub) dispatchJSON(channel string, payload json.RawMessage, adapterFilter, source string) Result {
+	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{Payload: payload}, func(client *Client) (adapter.Payload, error) {
 		return client.protocol.EncodePayload(payload)
 	})
 }
 
 // dispatchEncoded fans out a pre-encoded payload. logicalPayload is the JSON
 // it was encoded from, used only for logging.
-func (h *SocketHub) dispatchEncoded(channel string, payload adapter.Payload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
+func (h *Hub) dispatchEncoded(channel string, payload adapter.Payload, adapterFilter, source string, logicalPayload json.RawMessage) Result {
 	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{TypeName: payload.TypeName, Payload: logicalPayload,
-		RawData: payload.Data, RawKind: payload.Kind, RawContentType: payload.ContentType}, func(client *SocketClient) (adapter.Payload, error) {
+		RawData: payload.Data, RawKind: payload.Kind, RawContentType: payload.ContentType}, func(client *Client) (adapter.Payload, error) {
 		return payload, nil
 	})
 }
 
-func (h *SocketHub) dispatch(channel string, adapterFilter string, source string, hint dispatchDecodeHint, encode func(client *SocketClient) (adapter.Payload, error)) SocketDispatchResult {
+func (h *Hub) dispatch(channel string, adapterFilter string, source string, hint dispatchDecodeHint, encode func(client *Client) (adapter.Payload, error)) Result {
 	channel = strings.TrimSpace(channel)
 	adapterFilter = adapter.Normalize(adapterFilter)
 	dispatchID := newSocketDispatchID()
 	ids := h.registry.Clients(channel)
-	result := SocketDispatchResult{Queued: 0}
+	result := Result{Queued: 0}
 	payloadCache := make(map[string]adapterPayload)
 	recordedAdapters := make(map[string]struct{})
 	for _, id := range ids {
@@ -837,7 +781,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 	return result
 }
 
-func (h *SocketHub) logClientDelivery(client *SocketClient, msg adapter.Message, state string, err error) {
+func (h *Hub) logClientDelivery(client *Client, msg adapter.Message, state string, err error) {
 	event := h.clientSocketEvent(client, "FRAME", msg.Channel)
 	event.Status, event.SubscriptionID, event.Source, event.Target = http.StatusOK, msg.SubscriptionID, msg.Source, msg.Target
 	event.DeliveryState, event.ControlType, event.DispatchID = state, msg.ControlType, msg.DispatchID
@@ -868,7 +812,7 @@ func boundedSocketJSON(raw []byte) (string, bool) {
 	return string(raw), false
 }
 
-func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCache map[string]adapterPayload) (*adapter.Decoded, string) {
+func (h *Hub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCache map[string]adapterPayload) (*adapter.Decoded, string) {
 	if hint.TypeName != "" {
 		decoded := &adapter.Decoded{TypeName: hint.TypeName}
 		if h.schemas == nil {
@@ -902,9 +846,10 @@ func (h *SocketHub) decodeDispatchLogPayload(hint dispatchDecodeHint, payloadCac
 	return nil, ""
 }
 
-func (h *SocketHub) Snapshot() []SocketClientSnapshot {
+// Snapshot lists the connected clients.
+func (h *Hub) Snapshot() []ClientSnapshot {
 	h.mu.RLock()
-	clients := make([]*SocketClient, 0, len(h.clients))
+	clients := make([]*Client, 0, len(h.clients))
 	for _, client := range h.clients {
 		clients = append(clients, client)
 	}
@@ -914,9 +859,9 @@ func (h *SocketHub) Snapshot() []SocketClientSnapshot {
 		return clients[i].connected.Before(clients[j].connected)
 	})
 
-	snapshots := make([]SocketClientSnapshot, 0, len(clients))
+	snapshots := make([]ClientSnapshot, 0, len(clients))
 	for _, client := range clients {
-		snapshots = append(snapshots, SocketClientSnapshot{
+		snapshots = append(snapshots, ClientSnapshot{
 			ID:              client.id,
 			Adapter:         client.adapter,
 			RemoteAddr:      client.remoteAddr,
@@ -928,13 +873,13 @@ func (h *SocketHub) Snapshot() []SocketClientSnapshot {
 	return snapshots
 }
 
-func (h *SocketHub) addClient(client *SocketClient) {
+func (h *Hub) addClient(client *Client) {
 	h.mu.Lock()
 	h.clients[client.id] = client
 	h.mu.Unlock()
 }
 
-func (h *SocketHub) removeClient(client *SocketClient) {
+func (h *Hub) removeClient(client *Client) {
 	for _, channel := range client.subscriptionList() {
 		if h.live != nil {
 			h.live.Detach(channel, client.id)
@@ -946,13 +891,13 @@ func (h *SocketHub) removeClient(client *SocketClient) {
 	h.mu.Unlock()
 }
 
-func (h *SocketHub) client(id string) *SocketClient {
+func (h *Hub) client(id string) *Client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.clients[id]
 }
 
-func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) error {
+func (h *Hub) readLoop(ctx context.Context, client *Client) error {
 	for {
 		typ, data, err := client.conn.Read(ctx)
 		if err != nil {
@@ -1047,14 +992,14 @@ func (h *SocketHub) readLoop(ctx context.Context, client *SocketClient) error {
 	}
 }
 
-func (h *SocketHub) clientSocketEvent(client *SocketClient, method, channel string) eventlog.Event {
+func (h *Hub) clientSocketEvent(client *Client, method, channel string) eventlog.Event {
 	return eventlog.Event{Type: "SOCKET", Method: method, Path: channel, Channel: channel, Status: http.StatusOK,
 		URL: client.url, Host: client.host, RemoteAddr: client.remoteAddr, Protocol: client.protocolName,
 		ConnectionID: client.id, ClientID: client.id, Adapter: client.adapter, Subprotocol: client.subprotocol,
 		Mode: h.currentSocketMode(channel)}
 }
 
-func (h *SocketHub) forwardToLiveSubscriptions(ctx context.Context, client *SocketClient, typ websocket.MessageType, data []byte, dispatchID string) bool {
+func (h *Hub) forwardToLiveSubscriptions(ctx context.Context, client *Client, typ websocket.MessageType, data []byte, dispatchID string) bool {
 	for _, channel := range client.subscriptionList() {
 		if h.isLiveMode(channel) {
 			h.forwardLiveFromClient(ctx, client, channel, typ, data, dispatchID)
@@ -1064,7 +1009,7 @@ func (h *SocketHub) forwardToLiveSubscriptions(ctx context.Context, client *Sock
 	return false
 }
 
-func (h *SocketHub) isLiveMode(channel string) bool {
+func (h *Hub) isLiveMode(channel string) bool {
 	if h.modes == nil {
 		return false
 	}
@@ -1072,7 +1017,7 @@ func (h *SocketHub) isLiveMode(channel string) bool {
 	return mode == channelmode.Live || mode == channelmode.Mixed
 }
 
-func (h *SocketHub) isRecordingMode(channel string) bool {
+func (h *Hub) isRecordingMode(channel string) bool {
 	if h.modes == nil {
 		return false
 	}
@@ -1080,7 +1025,7 @@ func (h *SocketHub) isRecordingMode(channel string) bool {
 	return mode == channelmode.Record || mode == channelmode.Mixed
 }
 
-func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketClient, channel string, typ websocket.MessageType, data []byte, dispatchID string) {
+func (h *Hub) forwardLiveFromClient(ctx context.Context, client *Client, channel string, typ websocket.MessageType, data []byte, dispatchID string) {
 	if !h.isLiveMode(channel) {
 		return
 	}
@@ -1097,7 +1042,7 @@ func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketCli
 	h.live.ForwardFromClientWithID(ctx, channel, typ, data, client, dispatchID)
 }
 
-func (h *SocketHub) attachLiveSubscribers(channel string) {
+func (h *Hub) attachLiveSubscribers(channel string) {
 	if h.live == nil {
 		return
 	}
@@ -1109,7 +1054,7 @@ func (h *SocketHub) attachLiveSubscribers(channel string) {
 	}
 }
 
-func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) error {
+func (h *Hub) writeLoop(ctx context.Context, client *Client) error {
 	heartbeat, heartbeatEvery := client.protocol.Heartbeat()
 	var heartbeatC <-chan time.Time
 	var heartbeatTicker *time.Ticker
@@ -1189,7 +1134,7 @@ func (h *SocketHub) writeLoop(ctx context.Context, client *SocketClient) error {
 	}
 }
 
-func (h *SocketHub) enqueueControl(client *SocketClient, msg adapter.ServerMessage) {
+func (h *Hub) enqueueControl(client *Client, msg adapter.ServerMessage) {
 	data, err := client.protocol.EncodeServerMessage(msg)
 	if err != nil {
 		event := h.clientSocketEvent(client, "ERROR", msg.Channel)
@@ -1216,7 +1161,7 @@ func (h *SocketHub) enqueueControl(client *SocketClient, msg adapter.ServerMessa
 	}
 }
 
-func (h *SocketHub) publishSocketEventWithSource(method, path string, status int, body string, duration int64, source string) {
+func (h *Hub) publishSocketEventWithSource(method, path string, status int, body string, duration int64, source string) {
 	event := eventlog.Event{
 		Type:         "SOCKET",
 		Method:       method,
@@ -1229,7 +1174,8 @@ func (h *SocketHub) publishSocketEventWithSource(method, path string, status int
 	h.events.Publish(event)
 }
 
-func dispatchSummary(result SocketDispatchResult) string {
+// Summary is a short JSON description of the result for player events.
+func (result Result) Summary() string {
 	data, err := json.Marshal(map[string]any{
 		"delivered": result.Delivered,
 		"dropped":   len(result.Dropped),
@@ -1241,11 +1187,11 @@ func dispatchSummary(result SocketDispatchResult) string {
 	return string(data)
 }
 
-func buildDispatchLogBody(result SocketDispatchResult, decoded *adapter.Decoded, decodeErr string) string {
+func buildDispatchLogBody(result Result, decoded *adapter.Decoded, decodeErr string) string {
 	return buildDispatchLogBodyWithID(result, decoded, decodeErr, "")
 }
 
-func buildDispatchLogBodyWithID(result SocketDispatchResult, decoded *adapter.Decoded, decodeErr, dispatchID string) string {
+func buildDispatchLogBodyWithID(result Result, decoded *adapter.Decoded, decodeErr, dispatchID string) string {
 	body := DispatchLogBody{
 		Delivered:  result.Delivered,
 		Queued:     result.Queued,
@@ -1271,30 +1217,30 @@ func buildDispatchLogBodyWithID(result SocketDispatchResult, decoded *adapter.De
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return dispatchSummary(result)
+		return result.Summary()
 	}
 	return string(data)
 }
 
-func (c *SocketClient) addSubscription(channel, subID string) {
+func (c *Client) addSubscription(channel, subID string) {
 	c.mu.Lock()
 	c.subscriptions[channel] = subID
 	c.mu.Unlock()
 }
 
-func (c *SocketClient) removeSubscription(channel string) {
+func (c *Client) removeSubscription(channel string) {
 	c.mu.Lock()
 	delete(c.subscriptions, channel)
 	c.mu.Unlock()
 }
 
-func (c *SocketClient) subscriptionID(channel string) string {
+func (c *Client) subscriptionID(channel string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.subscriptions[channel]
 }
 
-func (c *SocketClient) channelForSubscription(subID string) string {
+func (c *Client) channelForSubscription(subID string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for channel, id := range c.subscriptions {
@@ -1305,7 +1251,7 @@ func (c *SocketClient) channelForSubscription(subID string) string {
 	return ""
 }
 
-func (c *SocketClient) subscriptionList() []string {
+func (c *Client) subscriptionList() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	channels := make([]string, 0, len(c.subscriptions))
@@ -1316,18 +1262,18 @@ func (c *SocketClient) subscriptionList() []string {
 	return channels
 }
 
-func (c *SocketClient) close() {
+func (c *Client) close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
 		close(c.done)
 	})
 }
 
-func (c *SocketClient) enqueue(msg adapter.Message, timeout time.Duration) bool {
+func (c *Client) enqueue(msg adapter.Message, timeout time.Duration) bool {
 	return c.enqueueOn(c.send, msg, timeout)
 }
 
-func (c *SocketClient) enqueueOn(ch chan adapter.Message, msg adapter.Message, timeout time.Duration) bool {
+func (c *Client) enqueueOn(ch chan adapter.Message, msg adapter.Message, timeout time.Duration) bool {
 	if msg.Kind == 0 {
 		return false
 	}

@@ -9,6 +9,7 @@ import (
 
 	"ditto/internal/eventtemplate"
 	"ditto/internal/jsonfile"
+	"ditto/internal/socket"
 )
 
 const maxEventTemplateBodyBytes = 1 << 20
@@ -24,7 +25,7 @@ type eventTemplateDispatchRequest struct {
 }
 
 type eventTemplateDispatchResponse struct {
-	SocketDispatchResult
+	socket.Result
 	ResolvedPayload  json.RawMessage             `json:"resolved_payload"`
 	MissingVariables []string                    `json:"missing_variables,omitempty"`
 	InvalidCasts     []eventtemplate.InvalidCast `json:"invalid_casts,omitempty"`
@@ -34,12 +35,12 @@ type eventTemplateDispatchResponse struct {
 // adapter or schema type unknown to adapters or schemas are skipped, so both
 // must be loaded first.
 
-func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *eventtemplate.Store, hub *SocketHub) {
+func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *eventtemplate.Store, hub *socket.Hub) {
 	if registry == nil {
 		return
 	}
 	mux.HandleFunc("/__ditto__/api/event-templates", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -69,7 +70,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *eventtemplate.Sto
 		}
 	})
 	mux.HandleFunc("/__ditto__/api/event-templates/", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -124,7 +125,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *eventtemplate.Sto
 	})
 }
 
-func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registry *eventtemplate.Store, hub *SocketHub, id string) {
+func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registry *eventtemplate.Store, hub *socket.Hub, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -161,7 +162,7 @@ func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registr
 		})
 		return
 	}
-	dispatch := SocketDispatch{
+	dispatch := socket.Dispatch{
 		Channel:  rendered.Channel,
 		Adapter:  rendered.Adapter,
 		TypeName: rendered.TypeName,
@@ -181,8 +182,8 @@ func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registr
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(eventTemplateDispatchResponse{
-		SocketDispatchResult: result,
-		ResolvedPayload:      rendered.Payload,
+		Result:          result,
+		ResolvedPayload: rendered.Payload,
 	})
 }
 

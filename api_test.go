@@ -17,6 +17,7 @@ import (
 	"ditto/internal/eventlog"
 	"ditto/internal/eventtemplate"
 	"ditto/internal/schema"
+	"ditto/internal/socket"
 )
 
 func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
@@ -44,7 +45,7 @@ func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	RegisterSocketRoutes(mux, NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Adapters: adapters}))
+	RegisterSocketRoutes(mux, socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil), Adapters: adapters}), adapters)
 	req := httptest.NewRequest(http.MethodGet, "/__ditto__/api/socket/adapter-profiles", nil)
 	req.RemoteAddr = "127.0.0.1:55555"
 	rec := httptest.NewRecorder()
@@ -111,7 +112,7 @@ func TestEventTemplateRoutesRejectInvalidPayloadAndPathTraversal(t *testing.T) {
 		t.Fatalf("eventtemplate.NewStore() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)}))
+	RegisterEventTemplateRoutes(mux, reg, socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad","channel":"x","payload":`))
 	req.Header.Set("Content-Type", "application/json")
@@ -168,7 +169,7 @@ func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
 		t.Fatalf("eventtemplate.NewStore() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: schemas}))
+	RegisterEventTemplateRoutes(mux, reg, socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil), Schemas: schemas}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad Type","channel":"x","type_name":"ditto.Missing","payload":{}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -217,7 +218,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: schemas}))
+	RegisterEventTemplateRoutes(mux, reg, socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil), Schemas: schemas}))
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"ticketId":"abc"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -256,7 +257,7 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 		t.Fatalf("Create(builtins) error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)}))
+	RegisterEventTemplateRoutes(mux, reg, socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+missing.ID+"/dispatch", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -291,7 +292,7 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 	}
 	mux := http.NewServeMux()
 	bus := eventlog.NewBus(nil)
-	hub := NewSocketHub(SocketHubConfig{Bus: bus})
+	hub := socket.NewHub(socket.Config{Bus: bus})
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	RegisterEventTemplateRoutes(mux, reg, hub)
@@ -403,7 +404,7 @@ func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +431,7 @@ func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
 	mux := http.NewServeMux()
 	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
 
@@ -467,7 +468,7 @@ func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
 	mux := http.NewServeMux()
 	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
 
@@ -481,9 +482,9 @@ func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
 }
 
 func TestSocketAPIRejectsCrossOriginTextPlainDispatch(t *testing.T) {
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil)})
+	hub := socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)})
 	mux := http.NewServeMux()
-	RegisterSocketRoutes(mux, hub)
+	RegisterSocketRoutes(mux, hub, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/socket/dispatch", strings.NewReader(`{"channel":"/scores","payload":{}}`))
 	req.Header.Set("Origin", "https://evil.example")

@@ -1,4 +1,4 @@
-package main
+package socket
 
 import (
 	"bytes"
@@ -21,24 +21,31 @@ import (
 	"ditto/internal/recording"
 )
 
-type LiveTargetManager struct {
+// LiveTargets holds the upstream WebSocket URL that live and mixed channels
+// connect to, and signals changes so live channels reconnect.
+type LiveTargets struct {
 	mu      sync.RWMutex
 	target  string
-	store   *ConfigStore
+	persist func(string) error
 	changed chan struct{}
 }
 
-func NewLiveTargetManager(target string, store *ConfigStore) *LiveTargetManager {
-	return &LiveTargetManager{target: strings.TrimSpace(target), store: store, changed: make(chan struct{})}
+// NewLiveTargets returns the upstream WebSocket target, initially target.
+// persist, when non-nil, saves every change.
+func NewLiveTargets(target string, persist func(string) error) *LiveTargets {
+	return &LiveTargets{target: strings.TrimSpace(target), persist: persist, changed: make(chan struct{})}
 }
 
-func (m *LiveTargetManager) Target() string {
+// Target returns the current upstream URL, or "" when none is set.
+func (m *LiveTargets) Target() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.target
 }
 
-func (m *LiveTargetManager) SetTarget(target string) error {
+// SetTarget validates and stores a ws:// or wss:// URL ("" clears it),
+// persists it and wakes live channels so they reconnect.
+func (m *LiveTargets) SetTarget(target string) error {
 	target = strings.TrimSpace(target)
 	if target != "" {
 		u, err := url.Parse(target)
@@ -51,46 +58,48 @@ func (m *LiveTargetManager) SetTarget(target string) error {
 	close(m.changed)
 	m.changed = make(chan struct{})
 	m.mu.Unlock()
-	if m.store != nil {
-		return m.store.SetLiveTarget(target)
+	if m.persist != nil {
+		return m.persist(target)
 	}
 	return nil
 }
 
-func (m *LiveTargetManager) Snapshot() (string, <-chan struct{}) {
+// Snapshot returns the current target and a channel closed on its next
+// change.
+func (m *LiveTargets) Snapshot() (string, <-chan struct{}) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.target, m.changed
 }
 
-type LiveBridge struct {
+type liveBridge struct {
 	mu      sync.Mutex
-	targets *LiveTargetManager
-	hub     *SocketHub
+	targets *LiveTargets
+	hub     *Hub
 	chans   map[string]*liveChannel
 }
 
 type liveChannel struct {
 	channel string
-	bridge  *LiveBridge
+	bridge  *liveBridge
 	ctx     context.Context
 	cancel  context.CancelFunc
 	out     chan adapter.Message
 
 	mu            sync.RWMutex
-	clients       map[string]*SocketClient
+	clients       map[string]*Client
 	connected     bool
 	connectionID  string
 	currentTarget string
 }
 
-func NewLiveBridge(targets *LiveTargetManager, hub *SocketHub) *LiveBridge {
-	return &LiveBridge{targets: targets, hub: hub, chans: make(map[string]*liveChannel)}
+func newLiveBridge(targets *LiveTargets, hub *Hub) *liveBridge {
+	return &liveBridge{targets: targets, hub: hub, chans: make(map[string]*liveChannel)}
 }
 
 // Attach binds a client to a bridge-owned channel lifecycle. The caller's
 // request context is intentionally not used to cancel the shared upstream.
-func (b *LiveBridge) Attach(channel string, client *SocketClient) {
+func (b *liveBridge) Attach(channel string, client *Client) {
 	if b == nil || client == nil {
 		return
 	}
@@ -108,7 +117,7 @@ func (b *LiveBridge) Attach(channel string, client *SocketClient) {
 			ctx:     ctx,
 			cancel:  cancel,
 			out:     make(chan adapter.Message, 128),
-			clients: make(map[string]*SocketClient),
+			clients: make(map[string]*Client),
 		}
 		b.chans[channel] = ch
 		go ch.run()
@@ -119,7 +128,7 @@ func (b *LiveBridge) Attach(channel string, client *SocketClient) {
 	b.mu.Unlock()
 }
 
-func (b *LiveBridge) Detach(channel, clientID string) {
+func (b *liveBridge) Detach(channel, clientID string) {
 	b.mu.Lock()
 	ch := b.chans[channel]
 	if ch == nil {
@@ -139,7 +148,7 @@ func (b *LiveBridge) Detach(channel, clientID string) {
 	b.mu.Unlock()
 }
 
-func (b *LiveBridge) DetachChannel(channel string) {
+func (b *liveBridge) DetachChannel(channel string) {
 	b.mu.Lock()
 	ch := b.chans[channel]
 	delete(b.chans, channel)
@@ -149,7 +158,7 @@ func (b *LiveBridge) DetachChannel(channel string) {
 	}
 }
 
-func (b *LiveBridge) ForwardFromClientWithID(ctx context.Context, channel string, typ websocket.MessageType, data []byte, client *SocketClient, dispatchID string) {
+func (b *liveBridge) ForwardFromClientWithID(ctx context.Context, channel string, typ websocket.MessageType, data []byte, client *Client, dispatchID string) {
 	b.mu.Lock()
 	ch := b.chans[channel]
 	b.mu.Unlock()
@@ -367,7 +376,7 @@ func (ch *liveChannel) writeUpstream(ctx context.Context, conn *websocket.Conn, 
 	}
 }
 
-func (ch *liveChannel) firstClient() *SocketClient {
+func (ch *liveChannel) firstClient() *Client {
 	ch.mu.RLock()
 	defer ch.mu.RUnlock()
 	for _, client := range ch.clients {
@@ -376,11 +385,11 @@ func (ch *liveChannel) firstClient() *SocketClient {
 	return nil
 }
 
-func (h *SocketHub) forwardFromUpstream(channel string, typ websocket.MessageType, data []byte) {
+func (h *Hub) forwardFromUpstream(channel string, typ websocket.MessageType, data []byte) {
 	h.forwardFromUpstreamID(channel, typ, data, newSocketDispatchID(), "", "")
 }
 
-func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageType, data []byte, dispatchID, connectionID, target string) {
+func (h *Hub) forwardFromUpstreamID(channel string, typ websocket.MessageType, data []byte, dispatchID, connectionID, target string) {
 	adapterName := ""
 	if ids := h.registry.Clients(channel); len(ids) > 0 {
 		if client := h.client(ids[0]); client != nil {
@@ -394,7 +403,7 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 			Adapter: adapterName, RateCapHz: cfg.RateCapHz,
 		})
 	}
-	result := SocketDispatchResult{}
+	result := Result{}
 	for _, id := range h.registry.Clients(channel) {
 		client := h.client(id)
 		if client == nil {
@@ -425,14 +434,14 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 	h.events.Publish(event)
 }
 
-func adapterNameForClient(client *SocketClient) string {
+func adapterNameForClient(client *Client) string {
 	if client == nil {
 		return ""
 	}
 	return client.adapter
 }
 
-func clientID(client *SocketClient) string {
+func clientID(client *Client) string {
 	if client == nil {
 		return ""
 	}
@@ -460,7 +469,7 @@ func errorText(err error) string {
 // (the reverse proxy's director, which rewrites the URL and headers) and
 // pipes complete messages both ways with nhooyr's streaming Reader and Writer
 // APIs. It logs the handshake, the close and a bounded prefix of each message.
-func (h *SocketHub) Tunnel(w http.ResponseWriter, r *http.Request, target string, direct func(*http.Request)) {
+func (h *Hub) Tunnel(w http.ResponseWriter, r *http.Request, target string, direct func(*http.Request)) {
 	upstreamReq := r.Clone(r.Context())
 	upstreamReq.URL = cloneURL(r.URL)
 	upstreamReq.Header = extractUpstreamHeaders(r.Header)
@@ -602,7 +611,7 @@ func (w *boundedLogWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub *SocketHub, req *http.Request, target, connectionID, adapterName, subprotocol, direction string, errCh chan<- error) {
+func tunnelWebSocketMessages(ctx context.Context, src, dst *websocket.Conn, hub *Hub, req *http.Request, target, connectionID, adapterName, subprotocol, direction string, errCh chan<- error) {
 	for {
 		typ, reader, err := src.Reader(ctx)
 		if err != nil {
@@ -739,40 +748,4 @@ func isSecureTarget(target string) bool {
 	}
 	scheme := strings.ToLower(u.Scheme)
 	return scheme == "wss" || scheme == "https"
-}
-
-func RegisterLiveTargetRoutes(mux *http.ServeMux, manager *LiveTargetManager) {
-	if manager == nil {
-		return
-	}
-	mux.HandleFunc("/__ditto__/api/socket/live-target", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"live_target": manager.Target()})
-		case http.MethodPut:
-			if !hasJSONContentType(r) {
-				http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
-				return
-			}
-			var req struct {
-				LiveTarget string `json:"live_target"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			if err := manager.SetTarget(req.LiveTarget); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
 }

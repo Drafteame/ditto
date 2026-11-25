@@ -10,6 +10,7 @@ import (
 
 	"ditto/internal/jsonfile"
 	"ditto/internal/recording"
+	"ditto/internal/socket"
 )
 
 func RegisterRecordingRoutes(mux *http.ServeMux, recorder *recording.Recorder) {
@@ -17,7 +18,7 @@ func RegisterRecordingRoutes(mux *http.ServeMux, recorder *recording.Recorder) {
 		return
 	}
 	mux.HandleFunc("/__ditto__/api/recordings", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -60,7 +61,7 @@ func RegisterRecordingRoutes(mux *http.ServeMux, recorder *recording.Recorder) {
 		}
 	})
 	mux.HandleFunc("/__ditto__/api/recordings/", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}

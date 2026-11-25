@@ -26,6 +26,7 @@ import (
 	"ditto/internal/httpmock"
 	"ditto/internal/recording"
 	"ditto/internal/schema"
+	"ditto/internal/socket"
 )
 
 // ProxyManager allows changing the target URL at runtime.
@@ -125,10 +126,10 @@ type Server struct {
 	Store      *httpmock.Store
 	Bus        *eventlog.Bus
 	ProxyMgr   *ProxyManager
-	SocketHub  *SocketHub
+	SocketHub  *socket.Hub
 	Modes      *channelmode.Registry
 	Recorder   *recording.Recorder
-	LiveTarget *LiveTargetManager
+	LiveTarget *socket.LiveTargets
 	Schemas    *schema.Registry
 	Templates  *eventtemplate.Store
 	Sequences  *EventSequenceRegistry
@@ -202,8 +203,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load recorder: %w", err)
 	}
-	liveTargets := NewLiveTargetManager(cfg.LiveTarget, cfg.ConfigStore)
-	socketHub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modeRegistry, Schemas: schemaRegistry,
+	var persistLiveTarget func(string) error
+	if cfg.ConfigStore != nil {
+		persistLiveTarget = cfg.ConfigStore.SetLiveTarget
+	}
+	liveTargets := socket.NewLiveTargets(cfg.LiveTarget, persistLiveTarget)
+	socketHub := socket.NewHub(socket.Config{Bus: bus, Modes: modeRegistry, Schemas: schemaRegistry,
 		Adapters: adapters, Recorder: recorder, LiveTargets: liveTargets})
 	// Registered after the hub's own listener to keep the original call order.
 	modeRegistry.OnChange(recorder.HandleModeChange)
@@ -236,7 +241,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	RegisterUI(mux, store, bus, proxyMgr, liveTargets.Target, info, cfg.ServeUI)
-	RegisterSocketRoutes(mux, socketHub)
+	RegisterSocketRoutes(mux, socketHub, adapters)
 	RegisterChannelModeRoutes(mux, modeRegistry)
 	RegisterLiveTargetRoutes(mux, liveTargets)
 	RegisterRecordingRoutes(mux, recorder)
@@ -249,12 +254,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if strings.HasPrefix(r.URL.Path, "/__ditto__/") {
 			return
 		}
-		if IsWebSocketRequest(r) {
-			if !isAllowedSocketAPIRequest(r) {
+		if socket.IsUpgrade(r) {
+			if !socket.OriginAllowed(r) {
 				http.Error(w, "origin not allowed", http.StatusForbidden)
 				return
 			}
-			if shouldProxyWebSocket(r) {
+			if socket.WantsProxy(r) {
 				if direct, target := proxyMgr.Director(); direct != nil {
 					socketHub.Tunnel(w, r, target, direct)
 					return

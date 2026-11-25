@@ -20,6 +20,7 @@ import (
 	"ditto/internal/eventtemplate"
 	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
+	"ditto/internal/socket"
 )
 
 const (
@@ -267,10 +268,10 @@ func (r *EventSequenceRegistry) Delete(id string) error {
 // ResolveStep renders step with the sequence, step and runtime variables
 // (later ones win) and returns it ready to dispatch. A step that references a
 // template starts from the template's render and applies the step overrides.
-func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenceStep, runtimeVars map[string]string, index int) (SocketDispatch, error) {
+func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenceStep, runtimeVars map[string]string, index int) (socket.Dispatch, error) {
 	vars, err := sequenceVariablesToStrings(seq.Vars, step.VarsOverride)
 	if err != nil {
-		return SocketDispatch{}, err
+		return socket.Dispatch{}, err
 	}
 	for key, value := range runtimeVars {
 		vars[key] = value
@@ -280,11 +281,11 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 	if step.TemplateRef != "" {
 		tmpl, err := r.templates.Get(step.TemplateRef)
 		if err != nil {
-			return SocketDispatch{}, err
+			return socket.Dispatch{}, err
 		}
 		rendered, err = r.templates.Render(step.TemplateRef, vars)
 		if err != nil {
-			return SocketDispatch{}, err
+			return socket.Dispatch{}, err
 		}
 		if strings.TrimSpace(step.Channel) != "" {
 			rendered.Channel = strings.TrimSpace(step.Channel)
@@ -299,7 +300,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 			defaults := templateDefaults(tmpl)
 			payload, missing, invalid, err := eventtemplate.Resolve(step.Payload, vars, defaults)
 			if err != nil {
-				return SocketDispatch{}, err
+				return socket.Dispatch{}, err
 			}
 			rendered.Payload = payload
 			rendered.Missing = missing
@@ -308,7 +309,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 	} else {
 		payload, missing, invalid, err := eventtemplate.Resolve(step.Payload, vars, nil)
 		if err != nil {
-			return SocketDispatch{}, err
+			return socket.Dispatch{}, err
 		}
 		rendered = eventtemplate.Rendered{
 			Channel:      strings.TrimSpace(step.Channel),
@@ -320,12 +321,12 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 		}
 	}
 	if len(rendered.Missing) > 0 {
-		return SocketDispatch{}, fmt.Errorf("missing variables: %s", strings.Join(rendered.Missing, ", "))
+		return socket.Dispatch{}, fmt.Errorf("missing variables: %s", strings.Join(rendered.Missing, ", "))
 	}
 	if len(rendered.InvalidCasts) > 0 {
-		return SocketDispatch{}, fmt.Errorf("invalid template casts: %s", eventtemplate.DescribeInvalidCasts(rendered.InvalidCasts))
+		return socket.Dispatch{}, fmt.Errorf("invalid template casts: %s", eventtemplate.DescribeInvalidCasts(rendered.InvalidCasts))
 	}
-	return SocketDispatch{
+	return socket.Dispatch{
 		Channel:  rendered.Channel,
 		Adapter:  rendered.Adapter,
 		TypeName: rendered.TypeName,
@@ -650,7 +651,7 @@ func RegisterSequenceRoutes(mux *http.ServeMux, registry *EventSequenceRegistry,
 		return
 	}
 	mux.HandleFunc("/__ditto__/api/sequences", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -684,7 +685,7 @@ func RegisterSequenceRoutes(mux *http.ServeMux, registry *EventSequenceRegistry,
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -696,7 +697,7 @@ func RegisterSequenceRoutes(mux *http.ServeMux, registry *EventSequenceRegistry,
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -707,7 +708,7 @@ func RegisterSequenceRoutes(mux *http.ServeMux, registry *EventSequenceRegistry,
 		broadcaster.ServeHTTP(w, r)
 	})
 	mux.HandleFunc("/__ditto__/api/sequences/", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}

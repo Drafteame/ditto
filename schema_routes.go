@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"ditto/internal/schema"
+	"ditto/internal/socket"
 )
 
 type schemaPacksResponse struct {
@@ -22,7 +23,7 @@ func RegisterSchemaRoutes(mux *http.ServeMux, schemas *schema.Registry) {
 		return
 	}
 	mux.HandleFunc("/__ditto__/api/schemas/packs", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -60,7 +61,7 @@ func RegisterSchemaRoutes(mux *http.ServeMux, schemas *schema.Registry) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
@@ -80,7 +81,7 @@ func RegisterSchemaRoutes(mux *http.ServeMux, schemas *schema.Registry) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !isAllowedSocketAPIRequest(r) {
+		if !socket.OriginAllowed(r) {
 			http.Error(w, "origin not allowed", http.StatusForbidden)
 			return
 		}

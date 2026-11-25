@@ -15,6 +15,7 @@ import (
 	"ditto/internal/adapter"
 	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
+	"ditto/internal/socket"
 )
 
 var ErrSequencePlayerActive = errors.New("sequence has an active player")
@@ -150,7 +151,7 @@ func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type SequencePlayer struct {
 	reg         *EventSequenceRegistry
 	schemas     *schema.Registry
-	hub         *SocketHub
+	hub         *socket.Hub
 	broadcaster *PlayerBroadcaster
 	clock       Clock
 
@@ -164,7 +165,7 @@ type SequencePlayer struct {
 type SequencePlayerConfig struct {
 	Sequences   *EventSequenceRegistry
 	Schemas     *schema.Registry
-	Hub         *SocketHub
+	Hub         *socket.Hub
 	Broadcaster *PlayerBroadcaster
 	Clock       Clock
 }
@@ -683,7 +684,7 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 		r.fail(err)
 		return
 	}
-	summary := dispatchSummary(result)
+	summary := result.Summary()
 	r.setState(func(s *PlayerState) {
 		s.CurrentStep = index + 1
 		s.LastDispatchSummary = summary
@@ -693,7 +694,7 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 
 // encodeStep pre-encodes a protobuf step, reusing the cached bytes while the
 // step's type and payload are unchanged.
-func (r *sequenceRunner) encodeStep(step EventSequenceStep, dispatch SocketDispatch) (SocketDispatch, error) {
+func (r *sequenceRunner) encodeStep(step EventSequenceStep, dispatch socket.Dispatch) (socket.Dispatch, error) {
 	typeName := strings.TrimSpace(dispatch.TypeName)
 	if typeName == "" {
 		return dispatch, nil
