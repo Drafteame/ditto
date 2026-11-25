@@ -184,13 +184,13 @@ func (r *EventTemplateRegistry) Get(id string) (EventTemplate, error) {
 	return cloneEventTemplate(tmpl), nil
 }
 
-func (r *EventTemplateRegistry) Create(tmpl EventTemplate, schemas *SchemaRegistry) (EventTemplate, error) {
+func (r *EventTemplateRegistry) Create(tmpl EventTemplate) (EventTemplate, error) {
 	tmpl = normalizeEventTemplate(tmpl)
 	now := time.Now().UTC()
 	tmpl.ID = ""
 	tmpl.CreatedAt = now
 	tmpl.UpdatedAt = now
-	if err := validateEventTemplate(tmpl, schemas, r.adapters); err != nil {
+	if err := validateEventTemplate(tmpl, r.schemas, r.adapters); err != nil {
 		return EventTemplate{}, err
 	}
 
@@ -211,12 +211,12 @@ func (r *EventTemplateRegistry) Create(tmpl EventTemplate, schemas *SchemaRegist
 	return cloneEventTemplate(tmpl), nil
 }
 
-func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate, schemas *SchemaRegistry) (EventTemplate, error) {
+func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate) (EventTemplate, error) {
 	if !isSafeEventTemplateID(id) {
 		return EventTemplate{}, fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	tmpl = normalizeEventTemplate(tmpl)
-	if err := validateEventTemplate(tmpl, schemas, r.adapters); err != nil {
+	if err := validateEventTemplate(tmpl, r.schemas, r.adapters); err != nil {
 		return EventTemplate{}, err
 	}
 
@@ -529,7 +529,7 @@ func newTemplateUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegistry, hub *SocketHub, schemas *SchemaRegistry) {
+func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegistry, hub *SocketHub) {
 	if registry == nil {
 		return
 	}
@@ -551,7 +551,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegi
 			if ok := decodeEventTemplateJSON(w, r, &tmpl, false); !ok {
 				return
 			}
-			created, err := registry.Create(tmpl, schemas)
+			created, err := registry.Create(tmpl)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -596,7 +596,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegi
 			if ok := decodeEventTemplateJSON(w, r, &tmpl, false); !ok {
 				return
 			}
-			updated, err := registry.Update(id, tmpl, schemas)
+			updated, err := registry.Update(id, tmpl)
 			if err != nil {
 				status := http.StatusBadRequest
 				if errors.Is(err, ErrEventTemplateNotFound) {

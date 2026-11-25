@@ -199,7 +199,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	// Registered after the hub's own listener to keep the original call order.
 	modeRegistry.OnChange(recorder.HandleModeChange)
 	playerBroadcaster := NewPlayerBroadcaster()
-	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster, nil)
+	sequencePlayer := NewSequencePlayer(SequencePlayerConfig{Sequences: eventSequences, Schemas: schemaRegistry, Hub: socketHub, Broadcaster: playerBroadcaster})
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
@@ -232,7 +232,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	RegisterLiveTargetRoutes(mux, liveTargets)
 	RegisterRecordingRoutes(mux, recorder)
 	RegisterSchemaRoutes(mux, schemaRegistry)
-	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub, schemaRegistry)
+	RegisterEventTemplateRoutes(mux, eventTemplates, socketHub)
 	RegisterSequenceRoutes(mux, eventSequences, sequencePlayer, playerBroadcaster)
 
 	// Main proxy/mock handler

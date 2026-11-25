@@ -42,7 +42,7 @@ func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
@@ -97,7 +97,7 @@ func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestSequencePlayerTerminalControlsReturnErrors(t *testing.T) {
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestSequencePlayerRejectsZeroStepSnapshot(t *testing.T) {
 		Steps:   []EventSequenceStep{},
 	}
 	reg.mu.Unlock()
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: NewPlayerBroadcaster()})
 	if _, err := player.Play("empty-00000000", PlayOptions{}); err == nil {
 		t.Fatal("expected zero-step sequence to be rejected")
 	}
@@ -246,7 +246,7 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
@@ -302,7 +302,7 @@ func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -355,7 +355,7 @@ func TestSequencePlayerSpeedZeroDuringWaitDispatchesImmediately(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -391,7 +391,7 @@ func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -437,7 +437,7 @@ func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -480,7 +480,7 @@ func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -520,7 +520,7 @@ func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -557,7 +557,7 @@ func TestSequencePlayerEmitsWaitingEventBeforeStep(t *testing.T) {
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, clock)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -585,7 +585,7 @@ func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 		Name:    "Gone",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"ok":true}`),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +606,7 @@ func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -653,7 +653,7 @@ func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T)
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(okSeq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
@@ -707,7 +707,7 @@ func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: NewPlayerBroadcaster()})
 	defer player.Shutdown(t.Context())
 
 	var wg sync.WaitGroup
@@ -756,7 +756,7 @@ func TestSequencePlayerShutdownPublishesStoppedAndReleasesRunner(t *testing.T) {
 	broadcaster := NewPlayerBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), broadcaster, nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), Broadcaster: broadcaster})
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -816,7 +816,7 @@ func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	player := NewSequencePlayer(reg, templates, nil, hub, NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: hub, Broadcaster: NewPlayerBroadcaster()})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)

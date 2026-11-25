@@ -145,7 +145,6 @@ func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type SequencePlayer struct {
 	reg         *EventSequenceRegistry
-	templates   *EventTemplateRegistry
 	schemas     *SchemaRegistry
 	hub         *SocketHub
 	broadcaster *PlayerBroadcaster
@@ -155,16 +154,27 @@ type SequencePlayer struct {
 	runners map[string]*sequenceRunner
 }
 
-func NewSequencePlayer(reg *EventSequenceRegistry, templates *EventTemplateRegistry, schemas *SchemaRegistry, hub *SocketHub, broadcaster *PlayerBroadcaster, clock Clock) *SequencePlayer {
+// SequencePlayerConfig holds the player's collaborators. Sequences, Hub and
+// Broadcaster are required; Schemas is needed only for protobuf steps and a
+// nil Clock uses the system clock.
+type SequencePlayerConfig struct {
+	Sequences   *EventSequenceRegistry
+	Schemas     *SchemaRegistry
+	Hub         *SocketHub
+	Broadcaster *PlayerBroadcaster
+	Clock       Clock
+}
+
+func NewSequencePlayer(cfg SequencePlayerConfig) *SequencePlayer {
+	clock := cfg.Clock
 	if clock == nil {
 		clock = systemClock
 	}
 	return &SequencePlayer{
-		reg:         reg,
-		templates:   templates,
-		schemas:     schemas,
-		hub:         hub,
-		broadcaster: broadcaster,
+		reg:         cfg.Sequences,
+		schemas:     cfg.Schemas,
+		hub:         cfg.Hub,
+		broadcaster: cfg.Broadcaster,
 		clock:       clock,
 		runners:     make(map[string]*sequenceRunner),
 	}

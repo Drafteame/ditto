@@ -25,7 +25,7 @@ func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 		Channel: "tickets",
 		Adapter: "raw",
 		Payload: json.RawMessage(`{"ticketId":"{{ticketId}}"}`),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -48,14 +48,14 @@ func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
-	first, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: " tickets ", Payload: json.RawMessage(`{"id":1}`)}, nil)
+	first, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: " tickets ", Payload: json.RawMessage(`{"id":1}`)})
 	if err != nil {
 		t.Fatalf("Create(first) error = %v", err)
 	}
 	if first.Version != 1 {
 		t.Fatalf("Version = %d, want 1", first.Version)
 	}
-	second, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":2}`)}, nil)
+	second, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":2}`)})
 	if err != nil {
 		t.Fatalf("Create(second) error = %v", err)
 	}
@@ -66,7 +66,7 @@ func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
 		t.Fatalf("ids = %q %q, want slug-derived ids", first.ID, second.ID)
 	}
 
-	updated, err := reg.Update(first.ID, EventTemplate{Name: "Ticket Updated", Channel: "updates", Payload: json.RawMessage(`{"ok":true}`)}, nil)
+	updated, err := reg.Update(first.ID, EventTemplate{Name: "Ticket Updated", Channel: "updates", Payload: json.RawMessage(`{"ok":true}`)})
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
@@ -92,7 +92,7 @@ func TestEventTemplateRegistryCreateAvoidsOrphanedFileCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	created, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":"x"}`)}, nil)
+	created, err := reg.Create(EventTemplate{Name: "Ticket Created", Channel: "tickets", Payload: json.RawMessage(`{"id":"x"}`)})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestEventTemplateRegistryGetReturnsSnapshot(t *testing.T) {
 			Name:    "ticketId",
 			Default: &defaultValue,
 		}},
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -282,7 +282,7 @@ func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -291,7 +291,7 @@ func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T)
 		Channel:  "tickets",
 		TypeName: "ditto.events.Ticket",
 		Payload:  json.RawMessage(`{"ticketId":"{{ticketId}}","attempt":"{{int:attempt}}"}`),
-	}, schemas)
+	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -318,7 +318,7 @@ func TestEventTemplateRoutesRejectInvalidPayloadAndPathTraversal(t *testing.T) {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), nil)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad","channel":"x","payload":`))
 	req.Header.Set("Content-Type", "application/json")
@@ -370,12 +370,12 @@ func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: schemas}), schemas)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: schemas}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad Type","channel":"x","type_name":"ditto.Missing","payload":{}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -403,7 +403,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -412,7 +412,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 		Channel:  " tickets ",
 		TypeName: "ditto.events.Ticket",
 		Payload:  json.RawMessage(`{"ticketId":"{{ticketId}}"}`),
-	}, schemas)
+	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -424,7 +424,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: schemas}), schemas)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: schemas}))
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"ticketId":"abc"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -450,7 +450,7 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 		Variables: []EventTemplateVariable{
 			{Name: "ticketId"},
 		},
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("Create(missing) error = %v", err)
 	}
@@ -458,12 +458,12 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 		Name:    "Builtins",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"now":"{{now}}","uuid":"{{uuid}}"}`),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("Create(builtins) error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), nil)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}))
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+missing.ID+"/dispatch", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -492,7 +492,7 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 		Name:    "Typed",
 		Channel: "tickets",
 		Payload: json.RawMessage(`{"age":"{{int:age}}","obj":"{{json:obj}}","maybe":"{{json:maybe}}"}`),
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -501,7 +501,7 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	RegisterEventTemplateRoutes(mux, reg, hub, nil)
+	RegisterEventTemplateRoutes(mux, reg, hub)
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"age":"abc","obj":{"score":7},"maybe":null}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -538,7 +538,7 @@ func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
-	tmpl, err := reg.Create(EventTemplate{Name: "Race", Channel: "tickets", Payload: json.RawMessage(`{"v":0}`)}, nil)
+	tmpl, err := reg.Create(EventTemplate{Name: "Race", Channel: "tickets", Payload: json.RawMessage(`{"v":0}`)})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -553,7 +553,7 @@ func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
 				Name:    "Race",
 				Channel: "tickets",
 				Payload: json.RawMessage(`{"v":` + strconv.Itoa(i) + `}`),
-			}, nil)
+			})
 			if err != nil {
 				t.Errorf("Update(%d) error = %v", i, err)
 			}
