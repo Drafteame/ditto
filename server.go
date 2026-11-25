@@ -120,7 +120,6 @@ type Server struct {
 	SocketHub  *SocketHub
 	Modes      *ChannelModeRegistry
 	Recorder   *Recorder
-	Live       *LiveBridge
 	LiveTarget *LiveTargetManager
 	Schemas    *SchemaRegistry
 	Templates  *EventTemplateRegistry
@@ -171,33 +170,34 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load channel mode registry: %w", err)
 	}
-	socketHub := NewSocketHub(bus, jsonLogs, modeRegistry)
-	descriptorsDir := cfg.Layout.DescriptorsDir
-	schemaRegistry, err := NewSchemaRegistry(descriptorsDir)
+	// Load order matters: templates skip entries whose adapter or schema type
+	// is unknown, and sequences skip entries whose template is unknown.
+	schemaRegistry, err := NewSchemaRegistry(cfg.Layout.DescriptorsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)
 	}
-	socketHub.SetSchemas(schemaRegistry)
-	if err := LoadAdapterProfiles(cfg.Layout.AdapterProfilesDir); err != nil {
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(cfg.Layout.AdapterProfilesDir); err != nil {
 		return nil, fmt.Errorf("failed to load adapter profiles: %w", err)
 	}
-	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir, schemaRegistry)
+	eventTemplates, err := NewEventTemplateRegistry(cfg.Layout.EventTemplatesDir, schemaRegistry, adapters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event template registry: %w", err)
 	}
-	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry)
+	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry, adapters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
 	}
-	recorder, err := NewRecorder(cfg.Layout.RecordingsDir, schemaRegistry, modeRegistry, bus, jsonLogs)
+	recorder, err := NewRecorder(RecorderConfig{Dir: cfg.Layout.RecordingsDir, Schemas: schemaRegistry,
+		Adapters: adapters, Modes: modeRegistry, Bus: bus, JSONLogs: jsonLogs})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load recorder: %w", err)
 	}
-	modeRegistry.OnChange(recorder.HandleModeChange)
-	socketHub.SetRecorder(recorder)
 	liveTargets := NewLiveTargetManager(cfg.LiveTarget, cfg.ConfigStore)
-	liveBridge := NewLiveBridge(liveTargets, socketHub)
-	socketHub.SetLiveBridge(liveBridge)
+	socketHub := NewSocketHub(SocketHubConfig{Bus: bus, JSONLogs: jsonLogs, Modes: modeRegistry, Schemas: schemaRegistry,
+		Adapters: adapters, Recorder: recorder, LiveTargets: liveTargets})
+	// Registered after the hub's own listener to keep the original call order.
+	modeRegistry.OnChange(recorder.HandleModeChange)
 	playerBroadcaster := NewPlayerBroadcaster()
 	sequencePlayer := NewSequencePlayer(eventSequences, eventTemplates, schemaRegistry, socketHub, playerBroadcaster, nil)
 
@@ -227,7 +227,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	RegisterUI(mux, store, bus, proxyMgr, liveTargets.Target, info, cfg.ServeUI)
-	RegisterSocketRoutes(mux, socketHub, schemaRegistry)
+	RegisterSocketRoutes(mux, socketHub)
 	RegisterChannelModeRoutes(mux, modeRegistry)
 	RegisterLiveTargetRoutes(mux, liveTargets)
 	RegisterRecordingRoutes(mux, recorder)
@@ -382,7 +382,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		SocketHub:  socketHub,
 		Modes:      modeRegistry,
 		Recorder:   recorder,
-		Live:       liveBridge,
 		LiveTarget: liveTargets,
 		Schemas:    schemaRegistry,
 		Templates:  eventTemplates,

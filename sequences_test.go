@@ -12,11 +12,11 @@ import (
 
 func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +65,11 @@ func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 
 func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,11 +186,11 @@ func TestSequenceIDsRejectDotsAndSlashesInPath(t *testing.T) {
 
 func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), NewPlayerBroadcaster(), nil)
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -225,15 +225,15 @@ func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 
 func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(reg, templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), NewPlayerBroadcaster(), nil)
 	mux := http.NewServeMux()
 	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
 
@@ -270,7 +270,7 @@ func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(reg, reg.templates, nil, NewSocketHub(NewEventBus(), false, nil), NewPlayerBroadcaster(), nil)
+	player := NewSequencePlayer(reg, reg.templates, nil, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), NewPlayerBroadcaster(), nil)
 	mux := http.NewServeMux()
 	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
 
@@ -286,11 +286,11 @@ func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
 func newTestSequenceRegistry(t *testing.T) *EventSequenceRegistry {
 	t.Helper()
 	dir := t.TempDir()
-	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil)
+	templates, err := NewEventTemplateRegistry(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil)
+	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

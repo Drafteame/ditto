@@ -54,6 +54,7 @@ type EventSequenceRegistry struct {
 	sequences map[string]EventSequence
 	templates *EventTemplateRegistry
 	schemas   *SchemaRegistry
+	adapters  *AdapterRegistry
 }
 
 type eventSequencesResponse struct {
@@ -74,7 +75,10 @@ type sequenceSpeedRequest struct {
 	Speed float64 `json:"speed"`
 }
 
-func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *SchemaRegistry) (*EventSequenceRegistry, error) {
+// NewEventSequenceRegistry loads the sequences in dir. Sequences that reference
+// unknown templates, adapters or schema types are skipped, so those
+// registries must be loaded first.
+func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *SchemaRegistry, adapters *AdapterRegistry) (*EventSequenceRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -87,6 +91,7 @@ func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, sche
 		sequences: make(map[string]EventSequence),
 		templates: templates,
 		schemas:   schemas,
+		adapters:  adapters,
 	}
 	if err := reg.Load(); err != nil {
 		return nil, err
@@ -371,7 +376,7 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 			// TODO: M7 — support channel templating for triggers.
 			return fmt.Errorf("step %d channel variables are not supported", i+1)
 		}
-		if _, err := NewProtocolAdapter(step.Adapter); err != nil {
+		if _, err := r.adapters.Protocol(step.Adapter); err != nil {
 			return err
 		}
 		if len(step.Payload) > 0 {

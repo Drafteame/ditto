@@ -93,6 +93,7 @@ type Recorder struct {
 	mu       sync.Mutex
 	dir      string
 	schemas  *SchemaRegistry
+	adapters *AdapterRegistry
 	modes    *ChannelModeRegistry
 	bus      *EventBus
 	jsonLogs bool
@@ -131,19 +132,28 @@ type rateLimiter struct {
 	count int
 }
 
-func NewRecorder(dir string, schemas *SchemaRegistry, modes *ChannelModeRegistry, bus *EventBus, jsonLogs bool) (*Recorder, error) {
-	return NewRecorderWithOptions(dir, schemas, modes, bus, jsonLogs, RecorderOptions{})
+// RecorderConfig holds the recorder's collaborators. Dir is required; the
+// other fields are optional.
+type RecorderConfig struct {
+	Dir      string
+	Schemas  *SchemaRegistry
+	Adapters *AdapterRegistry
+	Modes    *ChannelModeRegistry
+	Bus      *EventBus
+	JSONLogs bool
+	// Options tunes queueing and flushing; zero fields use the defaults.
+	Options RecorderOptions
 }
 
-func NewRecorderWithOptions(dir string, schemas *SchemaRegistry, modes *ChannelModeRegistry, bus *EventBus, jsonLogs bool, options RecorderOptions) (*Recorder, error) {
-	if strings.TrimSpace(dir) == "" {
+func NewRecorder(cfg RecorderConfig) (*Recorder, error) {
+	if strings.TrimSpace(cfg.Dir) == "" {
 		return nil, fmt.Errorf("recordings dir is required")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
 		return nil, err
 	}
-	options = normalizeRecorderOptions(options)
-	r := &Recorder{dir: dir, schemas: schemas, modes: modes, bus: bus, jsonLogs: jsonLogs, options: options}
+	r := &Recorder{dir: cfg.Dir, schemas: cfg.Schemas, adapters: cfg.Adapters, modes: cfg.Modes, bus: cfg.Bus,
+		jsonLogs: cfg.JSONLogs, options: normalizeRecorderOptions(cfg.Options)}
 	if err := r.recoverInterrupted(); err != nil {
 		return nil, err
 	}
@@ -456,14 +466,16 @@ func (r *Recorder) recoverInterrupted() error {
 func (r *Recorder) decodeFrame(channel, kind string, data []byte, adapter string) (*DecodedFrame, string) {
 	// See docs/adr/0004-recording-decoder-strategy.md: M5 records raw frames
 	// first and treats decoder output as optional metadata.
-	return DecodeWireFrame(r.schemas, kind, data, adapter)
+	return r.adapters.DecodeFrame(r.schemas, kind, data, adapter)
 }
 
 func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*DecodedFrame, string) {
 	return decodeAppSyncEnvelope(r.schemas, profile, data)
 }
 
-func DecodeWireFrame(schemas *SchemaRegistry, kind string, data []byte, adapter string) (*DecodedFrame, string) {
+// DecodeFrame decodes a text frame's envelope for the named adapter so logs
+// and recordings can show the logical payload. Binary frames are not decoded.
+func (r *AdapterRegistry) DecodeFrame(schemas *SchemaRegistry, kind string, data []byte, adapter string) (*DecodedFrame, string) {
 	if kind == "binary" {
 		return nil, "binary frame has no envelope decoder"
 	}
@@ -471,7 +483,7 @@ func DecodeWireFrame(schemas *SchemaRegistry, kind string, data []byte, adapter 
 	if profileName == "" {
 		profileName = "raw"
 	}
-	if profile, ok := adapterProfile(profileName); ok && hasEnvelopeDecoder(profile.BaseAdapter) {
+	if profile, ok := r.Profile(profileName); ok && hasEnvelopeDecoder(profile.BaseAdapter) {
 		return decodeAppSyncEnvelope(schemas, profile, data)
 	}
 	if hasEnvelopeDecoder(profileName) {

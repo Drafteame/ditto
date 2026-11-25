@@ -183,7 +183,7 @@ func TestDispatchRenderedSuppressedByMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
 	}
-	hub := NewSocketHub(NewEventBus(), false, reg)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Modes: reg})
 	for _, mode := range []ChannelMode{ModeLive, ModeRecord} {
 		if err := reg.Set(ChannelConfig{Channel: "/blocked", Mode: mode}); err != nil {
 			t.Fatalf("Set(%s) error = %v", mode, err)

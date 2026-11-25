@@ -236,10 +236,7 @@ func TestProfileAdapterWrapDataDoesNotEvaluateJSONVarsForBinaryPayload(t *testin
 	}
 }
 
-func TestLoadAdapterProfilesRegistersValidFilesAndSkipsInvalidFiles(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-
+func TestAdapterRegistryLoadRegistersValidFilesAndSkipsInvalidFiles(t *testing.T) {
 	var logs bytes.Buffer
 	oldOutput := log.Writer()
 	log.SetOutput(&logs)
@@ -265,14 +262,15 @@ func TestLoadAdapterProfilesRegistersValidFilesAndSkipsInvalidFiles(t *testing.T
 		Envelope:        testProfileEnvelope(),
 	})
 
-	if err := LoadAdapterProfiles(dir); err != nil {
-		t.Fatalf("LoadAdapterProfiles() error = %v", err)
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(dir); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
-	if _, err := NewProtocolAdapter("custom-profile"); err != nil {
+	if _, err := adapters.Protocol("custom-profile"); err != nil {
 		t.Fatalf("custom profile was not registered: %v", err)
 	}
 	for _, name := range []string{"bad-version", "missing-name"} {
-		if _, ok := adapterProfile(name); ok {
+		if _, ok := adapters.Profile(name); ok {
 			t.Fatalf("invalid profile %q was registered", name)
 		}
 	}
@@ -366,18 +364,15 @@ func TestReadAdapterProfileRejectsOversizedFile(t *testing.T) {
 }
 
 func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-
-	dir := t.TempDir()
-	if err := LoadAdapterProfiles(dir); err != nil {
-		t.Fatalf("LoadAdapterProfiles() error = %v", err)
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(t.TempDir()); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
-	protocol, err := NewProtocolAdapter("appsync-draftea")
+	protocol, err := adapters.Protocol("appsync-draftea")
 	if err != nil {
-		t.Fatalf("NewProtocolAdapter(appsync-draftea) error = %v", err)
+		t.Fatalf("Protocol(appsync-draftea) error = %v", err)
 	}
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Adapters: adapters})
 	client := &SocketClient{
 		id:            "appsync-draftea-1",
 		adapter:       "appsync-draftea",
@@ -424,16 +419,13 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 }
 
 func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-
-	dir := t.TempDir()
-	if err := LoadAdapterProfiles(dir); err != nil {
-		t.Fatalf("LoadAdapterProfiles() error = %v", err)
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(t.TempDir()); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
-	protocol, err := NewProtocolAdapter("relay-draftea")
+	protocol, err := adapters.Protocol("relay-draftea")
 	if err != nil {
-		t.Fatalf("NewProtocolAdapter(relay-draftea) error = %v", err)
+		t.Fatalf("Protocol(relay-draftea) error = %v", err)
 	}
 	if !adapterGreetsOnConnect(protocol) {
 		t.Fatalf("relay-draftea does not greet on connect")
@@ -442,7 +434,7 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
 	}
 
-	hub := NewSocketHub(NewEventBus(), false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Adapters: adapters})
 	client := &SocketClient{
 		id:            "relay-draftea-1",
 		adapter:       "relay-draftea",
@@ -503,16 +495,15 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 }
 
 func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-	setAdapterProfiles(map[string]AdapterProfile{
+	adapters := &AdapterRegistry{}
+	adapters.setProfiles(map[string]AdapterProfile{
 		"custom-profile": testAdapterProfile("custom-profile", map[string]string{
 			"appsync.recovery.Recovery": "recovery",
 		}),
 	})
 
 	mux := http.NewServeMux()
-	RegisterSocketRoutes(mux, NewSocketHub(NewEventBus(), false, nil))
+	RegisterSocketRoutes(mux, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Adapters: adapters}))
 	req := httptest.NewRequest(http.MethodGet, "/__ditto__/api/socket/adapter-profiles", nil)
 	req.RemoteAddr = "127.0.0.1:55555"
 	rec := httptest.NewRecorder()
@@ -595,13 +586,5 @@ func writeProfileFile(t *testing.T, dir, name string, profile AdapterProfile) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", name, err)
-	}
-}
-
-func preserveAdapterProfiles() func() {
-	// Adapter profile tests mutate a package-global registry; keep them serial.
-	snapshot := snapshotAdapterProfiles()
-	return func() {
-		setAdapterProfiles(snapshot)
 	}
 }

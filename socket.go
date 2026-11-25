@@ -140,6 +140,7 @@ type SocketHub struct {
 	live     *LiveBridge
 	recorder *Recorder
 	schemas  *SchemaRegistry
+	adapters *AdapterRegistry
 	events   *CoalescingPublisher
 
 	mu      sync.RWMutex
@@ -287,7 +288,7 @@ func (h *SocketHub) decodeSocketFrame(kind websocket.MessageType, data []byte, a
 		decoded.PayloadJSON = payload
 		return decoded, ""
 	}
-	return DecodeWireFrame(h.schemas, frameKind(kind), data, adapter)
+	return h.adapters.DecodeFrame(h.schemas, frameKind(kind), data, adapter)
 }
 
 type adapterPayload struct {
@@ -307,47 +308,50 @@ type RenderedDispatch struct {
 	InvalidCasts   []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
 }
 
-func NewSocketHub(bus *EventBus, jsonLogs bool, modeRegistry *ChannelModeRegistry) *SocketHub {
+// SocketHubConfig holds the hub's collaborators. Bus is required; every other
+// field is optional and its zero value disables the matching feature.
+type SocketHubConfig struct {
+	Bus      *EventBus
+	JSONLogs bool
+	Modes    *ChannelModeRegistry
+	Schemas  *SchemaRegistry
+	Adapters *AdapterRegistry
+	Recorder *Recorder
+	// LiveTargets enables live/mixed channel forwarding to an upstream.
+	LiveTargets *LiveTargetManager
+}
+
+func NewSocketHub(cfg SocketHubConfig) *SocketHub {
 	hub := &SocketHub{
 		registry: NewSubscriptionRegistry(),
-		bus:      bus,
-		jsonLogs: jsonLogs,
-		modes:    modeRegistry,
-		events:   NewCoalescingPublisher(bus, jsonLogs),
+		bus:      cfg.Bus,
+		jsonLogs: cfg.JSONLogs,
+		modes:    cfg.Modes,
+		recorder: cfg.Recorder,
+		schemas:  cfg.Schemas,
+		adapters: cfg.Adapters,
+		events:   NewCoalescingPublisher(cfg.Bus, cfg.JSONLogs),
 		clients:  make(map[string]*SocketClient),
 	}
-	if modeRegistry != nil {
-		modeRegistry.OnChange(func(cfg ChannelConfig) {
+	if cfg.LiveTargets != nil {
+		hub.live = NewLiveBridge(cfg.LiveTargets, hub)
+	}
+	if cfg.Modes != nil {
+		cfg.Modes.OnChange(func(change ChannelConfig) {
 			if hub.live == nil {
 				return
 			}
-			if cfg.Mode == ModeLive || cfg.Mode == ModeMixed {
-				hub.attachLiveSubscribers(cfg.Channel)
+			if change.Mode == ModeLive || change.Mode == ModeMixed {
+				hub.attachLiveSubscribers(change.Channel)
 				return
 			}
-			hub.live.DetachChannel(cfg.Channel)
+			hub.live.DetachChannel(change.Channel)
 		})
 	}
 	return hub
 }
 
-func (h *SocketHub) SetLiveBridge(live *LiveBridge) {
-	h.live = live
-}
-
-func (h *SocketHub) SetRecorder(recorder *Recorder) {
-	h.recorder = recorder
-}
-
-func (h *SocketHub) SetSchemas(schemas *SchemaRegistry) {
-	h.schemas = schemas
-}
-
-func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*SchemaRegistry) {
-	var schemas *SchemaRegistry
-	if len(registries) > 0 {
-		schemas = registries[0]
-	}
+func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
 	mux.HandleFunc("/__ditto__/socket", hub.ServeHTTP)
 	mux.HandleFunc("/__ditto__/ws", hub.ServeHTTP)
 	mux.HandleFunc("/__ditto__/api/socket/clients", func(w http.ResponseWriter, r *http.Request) {
@@ -372,7 +376,7 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*Sch
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(AdapterProfileSummaries())
+		json.NewEncoder(w).Encode(hub.adapters.Summaries())
 	})
 	mux.HandleFunc("/__ditto__/api/socket/dispatch", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -402,7 +406,7 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub, registries ...*Sch
 			Payload:  req.Payload,
 			Source:   "manual",
 		}
-		result, err := dispatchRendered(hub, schemas, rendered, nil)
+		result, err := dispatchRendered(hub, hub.schemas, rendered, nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -537,7 +541,7 @@ func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered Rendered
 		return SocketDispatchResult{Errors: []string{msg}}, nil
 	}
 	adapter = normalizeAdapter(adapter)
-	if _, err := NewProtocolAdapter(adapter); err != nil {
+	if _, err := hub.adapters.Protocol(adapter); err != nil {
 		fail(err.Error(), false)
 		return SocketDispatchResult{}, err
 	}
@@ -582,7 +586,7 @@ func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload
 	if len(payload) > 0 {
 		preview, metadata := captureLogPayload(payload, int64(len(payload)), "application/json", "", nil)
 		event.RequestBody, event.RequestPayload = preview, metadata
-		decoded, decodeErr := DecodeWireFrame(h.schemas, "text", payload, "raw")
+		decoded, decodeErr := h.adapters.DecodeFrame(h.schemas, "text", payload, "raw")
 		if decoded != nil {
 			event.TypeName, event.Alias = decoded.TypeName, decoded.Alias
 			event.DecodedPayload, event.DecodedTruncated = boundedSocketJSON(decoded.PayloadJSON)
@@ -672,7 +676,7 @@ func (h *SocketHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if adapterName == "" {
 		adapterName = "raw"
 	}
-	adapter, err := NewProtocolAdapter(adapterName)
+	adapter, err := h.adapters.Protocol(adapterName)
 	if err != nil {
 		http.Error(capture, err.Error(), http.StatusBadRequest)
 		logHandshakeFailure(err)
@@ -1462,17 +1466,6 @@ func appSyncErrorPayload(raw json.RawMessage) any {
 	return map[string]any{
 		"errors": []map[string]string{{"message": message}},
 	}
-}
-
-func NewProtocolAdapter(name string) (ProtocolAdapter, error) {
-	adapterName := normalizeAdapter(name)
-	if adapterName == "" {
-		adapterName = "raw"
-	}
-	if profile, ok := adapterProfile(adapterName); ok {
-		return NewProfileAdapter(profile)
-	}
-	return newBuiltinProtocolAdapter(adapterName)
 }
 
 func newBuiltinProtocolAdapter(name string) (ProtocolAdapter, error) {

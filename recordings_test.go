@@ -14,19 +14,16 @@ import (
 	"nhooyr.io/websocket"
 )
 
-func TestDecodeWireFrameReadsRelayEnvelope(t *testing.T) {
-	restore := preserveAdapterProfiles()
-	defer restore()
-
-	dir := t.TempDir()
-	if err := LoadAdapterProfiles(dir); err != nil {
-		t.Fatalf("LoadAdapterProfiles() error = %v", err)
+func TestDecodeFrameReadsRelayEnvelope(t *testing.T) {
+	adapters := &AdapterRegistry{}
+	if err := adapters.Load(t.TempDir()); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
 
 	frame := []byte(`{"type":"data","channel":"/osb/s/l/*","event":"{\"t\":\"betInfo\",\"e\":\"AQID\"}"}`)
-	decoded, decodeErr := DecodeWireFrame(nil, "text", frame, "relay-draftea")
+	decoded, decodeErr := adapters.DecodeFrame(nil, "text", frame, "relay-draftea")
 	if decodeErr != "" {
-		t.Fatalf("DecodeWireFrame() error = %s", decodeErr)
+		t.Fatalf("DecodeFrame() error = %s", decodeErr)
 	}
 	if decoded == nil || decoded.Alias != "betInfo" {
 		t.Fatalf("decoded = %#v, want alias betInfo", decoded)
@@ -35,7 +32,7 @@ func TestDecodeWireFrameReadsRelayEnvelope(t *testing.T) {
 
 func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(dir, nil, nil, NewEventBus(), false)
+	rec, err := NewRecorder(RecorderConfig{Dir: dir, Bus: NewEventBus()})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -73,7 +70,7 @@ func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 }
 
 func TestRecorderListReturnsEmptySlice(t *testing.T) {
-	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -90,7 +87,7 @@ func TestRecorderListReturnsEmptySlice(t *testing.T) {
 }
 
 func TestRecorderRateCapDrops(t *testing.T) {
-	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -114,12 +111,12 @@ func TestRecorderRateCapDrops(t *testing.T) {
 
 func TestRecorderRecordConcurrentWithStopDoesNotPanic(t *testing.T) {
 	for i := 0; i < 1000; i++ {
-		rec, err := NewRecorderWithOptions(t.TempDir(), nil, nil, nil, false, RecorderOptions{
+		rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir(), Options: RecorderOptions{
 			FrameQueueCapacity: 8,
 			QueueSendTimeout:   time.Millisecond,
-		})
+		}})
 		if err != nil {
-			t.Fatalf("NewRecorderWithOptions() error = %v", err)
+			t.Fatalf("NewRecorder() error = %v", err)
 		}
 		manifest, err := rec.Start("Concurrent Stop", "")
 		if err != nil {
@@ -146,11 +143,11 @@ func TestRecorderRecordConcurrentWithStopDoesNotPanic(t *testing.T) {
 
 func TestRecorderStopTimeoutForceStopsDrain(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorderWithOptions(dir, nil, nil, nil, false, RecorderOptions{
+	rec, err := NewRecorder(RecorderConfig{Dir: dir, Options: RecorderOptions{
 		StopTimeout: 10 * time.Millisecond,
-	})
+	}})
 	if err != nil {
-		t.Fatalf("NewRecorderWithOptions() error = %v", err)
+		t.Fatalf("NewRecorder() error = %v", err)
 	}
 	id := "stuck-drain-12345678"
 	sessionDir := filepath.Join(dir, id)
@@ -206,12 +203,11 @@ func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
 	if err := modes.Set(ChannelConfig{Channel: "/burst-record", Mode: ModeRecord}); err != nil {
 		t.Fatalf("Set() error = %v", err)
 	}
-	rec, err := NewRecorder(t.TempDir(), nil, modes, bus, false)
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir(), Modes: modes, Bus: bus})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
-	hub := NewSocketHub(bus, false, modes)
-	hub.SetRecorder(rec)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
 	manifest, err := rec.Start("Burst Recording", "")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -258,12 +254,12 @@ func waitForBurstSummary(t *testing.T, events <-chan LogEvent, channel string) i
 
 func TestRecorderQueueDropsAreSeparateFromRateCapDrops(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorderWithOptions(dir, nil, nil, nil, false, RecorderOptions{
+	rec, err := NewRecorder(RecorderConfig{Dir: dir, Options: RecorderOptions{
 		FrameQueueCapacity: 1,
 		QueueSendTimeout:   time.Nanosecond,
-	})
+	}})
 	if err != nil {
-		t.Fatalf("NewRecorderWithOptions() error = %v", err)
+		t.Fatalf("NewRecorder() error = %v", err)
 	}
 	id := "queue-drop-12345678"
 	session := &recordingSession{
@@ -298,7 +294,7 @@ func TestRecorderQueueDropsAreSeparateFromRateCapDrops(t *testing.T) {
 }
 
 func TestAppSyncDecoderKeepsBuiltInAliasWhenSchemaMissing(t *testing.T) {
-	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -315,7 +311,7 @@ func TestAppSyncDecoderKeepsBuiltInAliasWhenSchemaMissing(t *testing.T) {
 }
 
 func TestAppSyncDecoderReportsMissingPayload(t *testing.T) {
-	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -329,7 +325,7 @@ func TestAppSyncDecoderReportsMissingPayload(t *testing.T) {
 }
 
 func TestAppSyncDecoderTreatsControlFramesAsBenign(t *testing.T) {
-	rec, err := NewRecorder(t.TempDir(), nil, nil, nil, false)
+	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -368,7 +364,7 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 	}
 
 	bus := NewEventBus()
-	hub := NewSocketHub(bus, false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.schemas = schemas
 	hub.logSocketFrame(LogEvent{Status: 200, Adapter: "appsync"}, envelope, websocket.MessageText, encoded.TypeName)
 	detail, ok := bus.LogDetail(bus.LogSummaries()[0].ID)
@@ -380,7 +376,7 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 	}
 
 	bus = NewEventBus()
-	hub = NewSocketHub(bus, false, nil)
+	hub = NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.logSocketFrame(LogEvent{Status: 200, DeliveryState: "written"}, []byte{0xff, 0x01}, websocket.MessageBinary, "")
 	detail, ok = bus.LogDetail(bus.LogSummaries()[0].ID)
 	if !ok {
@@ -401,12 +397,11 @@ func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
 		t.Fatalf("Set mixed mode: %v", err)
 	}
 	recDir := t.TempDir()
-	rec, err := NewRecorder(recDir, nil, modes, bus, false)
+	rec, err := NewRecorder(RecorderConfig{Dir: recDir, Modes: modes, Bus: bus})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
-	hub := NewSocketHub(bus, false, modes)
-	hub.SetRecorder(rec)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
 	client := &SocketClient{
 		id:            "raw-1",
 		adapter:       "raw",
@@ -464,7 +459,7 @@ func TestRecorderMarksInterruptedManifest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-	if _, err := NewRecorder(dir, nil, nil, nil, false); err != nil {
+	if _, err := NewRecorder(RecorderConfig{Dir: dir}); err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
 	manifest, err := readRecordingManifest(recDir)

@@ -408,7 +408,7 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 			h.logClientDelivery(client, msg, "dropped", fmt.Errorf("client queue full or disconnected"))
 		}
 	}
-	decoded, decodeErr := DecodeWireFrame(h.schemas, frameKind(typ), data, adapterName)
+	decoded, decodeErr := h.adapters.DecodeFrame(h.schemas, frameKind(typ), data, adapterName)
 	body := buildDispatchLogBodyWithID(result, decoded, decodeErr, dispatchID)
 	event := LogEvent{Type: "SOCKET", Method: "DISPATCH", Path: channel, Channel: channel, Status: http.StatusOK,
 		Source: "live", DispatchID: dispatchID, Queued: result.Queued, ResponseBody: body, ConnectionID: connectionID, Target: target,

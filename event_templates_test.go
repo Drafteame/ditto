@@ -16,7 +16,7 @@ import (
 
 func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewEventTemplateRegistry(dir, nil)
+	reg, err := NewEventTemplateRegistry(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -33,7 +33,7 @@ func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reloaded, err := NewEventTemplateRegistry(dir, nil)
+	reloaded, err := NewEventTemplateRegistry(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("reload error = %v", err)
 	}
@@ -44,7 +44,7 @@ func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
 }
 
 func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -83,7 +83,7 @@ func TestEventTemplateRegistryCRUDAndCollisionIDs(t *testing.T) {
 
 func TestEventTemplateRegistryCreateAvoidsOrphanedFileCollision(t *testing.T) {
 	dir := t.TempDir()
-	reg, err := NewEventTemplateRegistry(dir, nil)
+	reg, err := NewEventTemplateRegistry(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -110,7 +110,7 @@ func TestEventTemplateRegistryCreateAvoidsOrphanedFileCollision(t *testing.T) {
 
 func TestEventTemplateRegistryGetReturnsSnapshot(t *testing.T) {
 	defaultValue := "fallback"
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -256,7 +256,7 @@ func TestValidateTemplateRejectsUnsupportedAndInlineCasts(t *testing.T) {
 				Name:    name,
 				Channel: "tickets",
 				Payload: payload,
-			}, nil)
+			}, nil, nil)
 			if err == nil {
 				t.Fatalf("validateEventTemplate() unexpectedly succeeded")
 			}
@@ -282,7 +282,7 @@ func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -313,12 +313,12 @@ func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T)
 }
 
 func TestEventTemplateRoutesRejectInvalidPayloadAndPathTraversal(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(NewEventBus(), false, nil), nil)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad","channel":"x","payload":`))
 	req.Header.Set("Content-Type", "application/json")
@@ -370,12 +370,12 @@ func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(NewEventBus(), false, nil), schemas)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), schemas)
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad Type","channel":"x","type_name":"ditto.Missing","payload":{}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -403,7 +403,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSchemaRegistry() error = %v", err)
 	}
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -424,7 +424,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(NewEventBus(), false, nil), schemas)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), schemas)
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"ticketId":"abc"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -439,7 +439,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 }
 
 func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -463,7 +463,7 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 		t.Fatalf("Create(builtins) error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(NewEventBus(), false, nil), nil)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+missing.ID+"/dispatch", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -484,7 +484,7 @@ func TestEventTemplateDispatchMissingVariablesAndBuiltins(t *testing.T) {
 }
 
 func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
@@ -498,7 +498,7 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 	}
 	mux := http.NewServeMux()
 	bus := NewEventBus()
-	hub := NewSocketHub(bus, false, nil)
+	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
 	RegisterEventTemplateRoutes(mux, reg, hub, nil)
@@ -534,7 +534,7 @@ func TestEventTemplateDispatchReportsInvalidCastsAndAcceptsJSONVariables(t *test
 }
 
 func TestEventTemplateRegistryConcurrentUpdatesLastWriterWins(t *testing.T) {
-	reg, err := NewEventTemplateRegistry(t.TempDir(), nil)
+	reg, err := NewEventTemplateRegistry(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}

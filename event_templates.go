@@ -63,6 +63,7 @@ type EventTemplateRegistry struct {
 	dir       string
 	templates map[string]EventTemplate
 	schemas   *SchemaRegistry
+	adapters  *AdapterRegistry
 }
 
 type eventTemplatesResponse struct {
@@ -82,7 +83,10 @@ type eventTemplateDispatchResponse struct {
 	InvalidCasts     []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
 }
 
-func NewEventTemplateRegistry(dir string, schemas *SchemaRegistry) (*EventTemplateRegistry, error) {
+// NewEventTemplateRegistry loads the templates in dir. Templates that name an
+// adapter or schema type unknown to adapters or schemas are skipped, so both
+// must be loaded first.
+func NewEventTemplateRegistry(dir string, schemas *SchemaRegistry, adapters *AdapterRegistry) (*EventTemplateRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -94,6 +98,7 @@ func NewEventTemplateRegistry(dir string, schemas *SchemaRegistry) (*EventTempla
 		dir:       absDir,
 		templates: make(map[string]EventTemplate),
 		schemas:   schemas,
+		adapters:  adapters,
 	}
 	if err := reg.Load(); err != nil {
 		return nil, err
@@ -139,7 +144,7 @@ func (r *EventTemplateRegistry) Load() error {
 			log.Printf("event template %s skipped: id mismatch", entry.Name())
 			continue
 		}
-		if err := validateEventTemplate(tmpl, r.schemas); err != nil {
+		if err := validateEventTemplate(tmpl, r.schemas, r.adapters); err != nil {
 			log.Printf("event template %s skipped: %v", entry.Name(), err)
 			continue
 		}
@@ -185,7 +190,7 @@ func (r *EventTemplateRegistry) Create(tmpl EventTemplate, schemas *SchemaRegist
 	tmpl.ID = ""
 	tmpl.CreatedAt = now
 	tmpl.UpdatedAt = now
-	if err := validateEventTemplate(tmpl, schemas); err != nil {
+	if err := validateEventTemplate(tmpl, schemas, r.adapters); err != nil {
 		return EventTemplate{}, err
 	}
 
@@ -211,7 +216,7 @@ func (r *EventTemplateRegistry) Update(id string, tmpl EventTemplate, schemas *S
 		return EventTemplate{}, fmt.Errorf("%w: %q", ErrEventTemplateNotFound, id)
 	}
 	tmpl = normalizeEventTemplate(tmpl)
-	if err := validateEventTemplate(tmpl, schemas); err != nil {
+	if err := validateEventTemplate(tmpl, schemas, r.adapters); err != nil {
 		return EventTemplate{}, err
 	}
 
@@ -713,7 +718,7 @@ func splitEventTemplatePath(rest string) (id string, action string, ok bool) {
 	return "", "", false
 }
 
-func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry) error {
+func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry, adapters *AdapterRegistry) error {
 	if tmpl.Version != 1 {
 		return fmt.Errorf("unsupported event template version %d", tmpl.Version)
 	}
@@ -731,7 +736,7 @@ func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry) error {
 		return fmt.Errorf("channel variables are not supported")
 	}
 	adapter := normalizeAdapter(tmpl.Adapter)
-	if _, err := NewProtocolAdapter(adapter); err != nil {
+	if _, err := adapters.Protocol(adapter); err != nil {
 		return err
 	}
 	if len(tmpl.Payload) == 0 {
