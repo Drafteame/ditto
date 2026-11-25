@@ -475,9 +475,3 @@ func TestRecorderMarksInterruptedManifest(t *testing.T) {
 		t.Fatalf("manifest = %#v, want interrupted", manifest)
 	}
 }
-
-func TestConvertRecordingToSequenceM6(t *testing.T) {
-	t.Skip("M6")
-	rec, _ := NewRecorder(t.TempDir(), nil, nil, nil, false)
-	_, _ = rec.ConvertRecordingToSequence("recording-12345678", nil)
-}

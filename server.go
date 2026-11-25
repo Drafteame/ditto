@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -524,11 +523,6 @@ func SuggestPorts(exclude int) []int {
 		}
 	}
 	return available
-}
-
-// portStr helper for API responses
-func portStr(port int) string {
-	return strconv.Itoa(port)
 }
 
 const MaxLogPayloadCaptureBytes = 1 << 20

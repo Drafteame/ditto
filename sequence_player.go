@@ -670,12 +670,11 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 		return
 	}
 	summary := dispatchSummary(result)
-	next := r.setState(func(s *PlayerState) {
+	r.setState(func(s *PlayerState) {
 		s.CurrentStep = index + 1
 		s.LastDispatchSummary = summary
 	})
 	r.publishStep(step.ID, index, summary)
-	_ = next
 }
 
 func (r *sequenceRunner) prepareRenderedStep(step EventSequenceStep, rendered RenderedDispatch) (RenderedDispatch, error) {

@@ -795,14 +795,6 @@ func (h *SocketHub) DispatchWithSource(channel string, payload json.RawMessage, 
 	})
 }
 
-func (h *SocketHub) DispatchEncoded(channel string, payload EncodedPayload, adapterFilter string) SocketDispatchResult {
-	return h.DispatchEncodedWithSource(channel, payload, adapterFilter, "")
-}
-
-func (h *SocketHub) DispatchEncodedWithSource(channel string, payload EncodedPayload, adapterFilter, source string) SocketDispatchResult {
-	return h.DispatchEncodedWithSourcePayload(channel, payload, adapterFilter, source, nil)
-}
-
 func (h *SocketHub) DispatchEncodedWithSourcePayload(channel string, payload EncodedPayload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
 	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{TypeName: payload.TypeName, Payload: logicalPayload,
 		RawData: payload.Data, RawKind: payload.Kind, RawContentType: payload.ContentType}, func(client *SocketClient) (EncodedPayload, error) {
@@ -1275,10 +1267,6 @@ func (h *SocketHub) enqueueControl(client *SocketClient, msg ServerMsg) {
 		h.events.Publish(event)
 		h.logClientDelivery(client, data, "dropped", err)
 	}
-}
-
-func (h *SocketHub) publishSocketEvent(method, path string, status int, body string, duration int64) {
-	h.publishSocketEventWithSource(method, path, status, body, duration, "")
 }
 
 func (h *SocketHub) publishSocketEventWithSource(method, path string, status int, body string, duration int64, source string) {

@@ -42,26 +42,13 @@ func checkForUpdate() (latestVersion, downloadURL string, err error) {
 	downloadURL = release.HTMLURL // fallback to release page
 	platformSuffix := fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH)
 	for _, asset := range release.Assets {
-		if contains(asset.Name, platformSuffix) {
+		if strings.Contains(asset.Name, platformSuffix) {
 			downloadURL = asset.BrowserDownloadURL
 			break
 		}
 	}
 
 	return release.TagName, downloadURL, nil
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // isNewerVersion returns true if `latest` is strictly newer than `current`.

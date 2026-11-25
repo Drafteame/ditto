@@ -144,10 +144,6 @@ func (b *LiveBridge) DetachChannel(channel string) {
 	}
 }
 
-func (b *LiveBridge) ForwardFromClient(ctx context.Context, channel string, typ websocket.MessageType, data []byte) {
-	b.ForwardFromClientWithID(ctx, channel, typ, data, nil, newSocketDispatchID())
-}
-
 func (b *LiveBridge) ForwardFromClientWithID(ctx context.Context, channel string, typ websocket.MessageType, data []byte, client *SocketClient, dispatchID string) {
 	b.mu.Lock()
 	ch := b.chans[channel]
@@ -743,38 +739,6 @@ func isSecureTarget(target string) bool {
 	}
 	scheme := strings.ToLower(u.Scheme)
 	return scheme == "wss" || scheme == "https"
-}
-
-// summarizeHeaders returns a one-line redacted view of the headers Ditto
-// forwards to the upstream live target. Authorization / Cookie / API key
-// values are truncated so logs do not leak credentials but still indicate
-// whether the header was present.
-func summarizeHeaders(h http.Header) string {
-	if len(h) == 0 {
-		return "{}"
-	}
-	keys := make([]string, 0, len(h))
-	for k := range h {
-		keys = append(keys, k)
-	}
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		vs := h.Values(k)
-		v := ""
-		if len(vs) > 0 {
-			v = vs[0]
-		}
-		kl := strings.ToLower(k)
-		if kl == "authorization" || kl == "cookie" || strings.Contains(kl, "api-key") || strings.Contains(kl, "token") {
-			if len(v) > 12 {
-				v = v[:8] + "…(" + fmt.Sprintf("%d", len(v)) + "b)"
-			} else if v != "" {
-				v = "…(" + fmt.Sprintf("%d", len(v)) + "b)"
-			}
-		}
-		parts = append(parts, fmt.Sprintf("%s=%q", k, v))
-	}
-	return "{" + strings.Join(parts, " ") + "}"
 }
 
 func RegisterLiveTargetRoutes(mux *http.ServeMux, manager *LiveTargetManager) {

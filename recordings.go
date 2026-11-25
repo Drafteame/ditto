@@ -888,21 +888,6 @@ func writeRecordingManifest(dir string, manifest RecordingManifest) error {
 	return atomicWriteFile(filepath.Join(dir, "manifest.json"), data, 0o644)
 }
 
-func updateManifestAtomic(root, id string, fn func(*RecordingManifest) error) error {
-	if !isSafeEventTemplateID(id) {
-		return fmt.Errorf("invalid recording id")
-	}
-	dir := filepath.Join(root, id)
-	manifest, err := readRecordingManifest(dir)
-	if err != nil {
-		return err
-	}
-	if err := fn(&manifest); err != nil {
-		return err
-	}
-	return writeRecordingManifest(dir, manifest)
-}
-
 func (r *Recorder) publish(method, path string, status int, body string) {
 	if r.bus == nil {
 		return
@@ -1073,8 +1058,4 @@ func RegisterRecordingRoutes(mux *http.ServeMux, recorder *Recorder) {
 		}
 		http.NotFound(w, r)
 	})
-}
-
-func (r *Recorder) ConvertRecordingToSequence(recordingID string, channels []string) (EventSequence, error) {
-	return EventSequence{}, errors.New("not implemented (M6)")
 }

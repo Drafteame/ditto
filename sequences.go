@@ -308,7 +308,6 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 		InvalidCasts: invalid,
 		Source:       fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID),
 	}
-	_ = index
 	return validateRenderedSequenceStep(rendered)
 }
 
