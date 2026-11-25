@@ -1,4 +1,5 @@
-package main
+// Package update checks GitHub Releases for a newer Ditto build.
+package update
 
 import (
 	"encoding/json"
@@ -12,9 +13,9 @@ import (
 
 const githubReleasesAPI = "https://api.github.com/repos/Drafteame/ditto/releases/latest"
 
-// checkForUpdate queries GitHub Releases and returns the latest version tag
+// Check queries GitHub Releases and returns the latest version tag
 // and a download URL for the current platform.
-func checkForUpdate() (latestVersion, downloadURL string, err error) {
+func Check() (latestVersion, downloadURL string, err error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(githubReleasesAPI)
 	if err != nil {
@@ -51,11 +52,11 @@ func checkForUpdate() (latestVersion, downloadURL string, err error) {
 	return release.TagName, downloadURL, nil
 }
 
-// isNewerVersion returns true if `latest` is strictly newer than `current`.
+// IsNewer returns true if `latest` is strictly newer than `current`.
 // Accepts versions in the format "v1.2.3" (the leading "v" is optional, extra
 // pre-release suffixes are ignored). Returns false if either version can't be
 // parsed or they're equal.
-func isNewerVersion(latest, current string) bool {
+func IsNewer(latest, current string) bool {
 	lp := parseVersion(latest)
 	cp := parseVersion(current)
 	if lp == nil || cp == nil {

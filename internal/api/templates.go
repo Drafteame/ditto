@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"encoding/json"
@@ -35,7 +35,7 @@ type eventTemplateDispatchResponse struct {
 // adapter or schema type unknown to adapters or schemas are skipped, so both
 // must be loaded first.
 
-func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *eventtemplate.Store, hub *socket.Hub) {
+func registerEventTemplateRoutes(mux *http.ServeMux, registry *eventtemplate.Store, hub *socket.Hub) {
 	if registry == nil {
 		return
 	}

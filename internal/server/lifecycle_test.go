@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bufio"
@@ -20,7 +20,7 @@ func TestServerRestartSwapsListenerAndShutdownEndsStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, second := freePort(t), freePort(t)
-	srv, err := NewServer(ServerConfig{Port: first, MocksDir: layout.MocksDir, Layout: layout})
+	srv, err := New(Config{Port: first, MocksDir: layout.MocksDir, Layout: layout})
 	if err != nil {
 		t.Fatal(err)
 	}

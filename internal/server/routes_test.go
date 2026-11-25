@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"ditto/internal/appdata"
 	"ditto/internal/golden"
@@ -114,11 +115,10 @@ func serveCharacterizationRequest(t *testing.T, method, path, remoteAddr, origin
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServer(ServerConfig{MocksDir: layout.MocksDir, Layout: layout, ServeUI: true})
+	srv, err := New(Config{MocksDir: layout.MocksDir, Layout: layout, UI: testDashboard})
 	if err != nil {
 		t.Fatal(err)
 	}
-	RegisterPortRoutes(srv.Mux, srv, srv.ProxyMgr, nil)
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -137,3 +137,7 @@ func serveCharacterizationRequest(t *testing.T, method, path, remoteAddr, origin
 	}
 	return rec.Code, body
 }
+
+// testDashboard stands in for the built dashboard: the route table only
+// records status codes for static paths.
+var testDashboard = fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Ditto</title>")}}

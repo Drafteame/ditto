@@ -1,12 +1,10 @@
-package main
+package api
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -15,18 +13,15 @@ import (
 
 	qrcode "github.com/skip2/go-qrcode"
 
-	"ditto/internal/appdata"
+	"ditto/internal/browser"
 	"ditto/internal/eventlog"
 	"ditto/internal/httpmock"
 	"ditto/internal/proxy"
+	"ditto/internal/update"
 )
 
-//go:embed all:frontend/dist
-var webFS embed.FS
-
-// eventlog.Event represents a single request passing through Ditto.
-// ServerInfo holds metadata shown in the UI footer and connect panel.
-type ServerInfo struct {
+// Info holds metadata shown in the UI footer and connect panel.
+type Info struct {
 	Port       int      `json:"port"`
 	Target     string   `json:"target"`
 	LiveTarget string   `json:"live_target,omitempty"`
@@ -36,14 +31,12 @@ type ServerInfo struct {
 	Version    string   `json:"version"`
 }
 
-// RegisterUI sets up the dashboard routes on the given mux.
+// registerDashboardRoutes sets up the dashboard routes on the given mux.
 // If serveUI is true, the embedded static files are served; otherwise only the API is available.
-func RegisterUI(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, proxyMgr *proxy.Upstream, liveTarget func() string, info ServerInfo, serveUI bool) {
-	// Serve embedded static files at /__ditto__/ (only when UI is enabled)
-	if serveUI {
-		webContent, _ := fs.Sub(webFS, "frontend/dist")
-		fileServer := http.FileServer(http.FS(webContent))
-		mux.Handle("/__ditto__/", http.StripPrefix("/__ditto__/", fileServer))
+func registerDashboardRoutes(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, proxyMgr *proxy.Upstream, liveTarget func() string, info Info, ui fs.FS) {
+	// Serve the dashboard assets at /__ditto__/ when there are any.
+	if ui != nil {
+		mux.Handle("/__ditto__/", http.StripPrefix("/__ditto__/", http.FileServer(http.FS(ui))))
 	}
 
 	// SSE endpoint
@@ -165,7 +158,7 @@ func RegisterUI(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, pr
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"mocks": store.All(),
-				"info": ServerInfo{
+				"info": Info{
 					Port:       actualPort,
 					Target:     proxyMgr.Target(),
 					LiveTarget: currentLiveTarget,
@@ -328,19 +321,19 @@ func RegisterUI(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, pr
 	// Update check endpoint
 	mux.HandleFunc("/__ditto__/api/update-check", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		latest, downloadURL, err := checkForUpdate()
+		latest, downloadURL, err := update.Check()
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{
-				"current":   version,
+				"current":   info.Version,
 				"latest":    "",
 				"available": false,
 				"error":     err.Error(),
 			})
 			return
 		}
-		available := latest != "" && version != "dev" && isNewerVersion(latest, version)
+		available := latest != "" && info.Version != "dev" && update.IsNewer(latest, info.Version)
 		json.NewEncoder(w).Encode(map[string]any{
-			"current":      version,
+			"current":      info.Version,
 			"latest":       latest,
 			"available":    available,
 			"download_url": downloadURL,
@@ -381,7 +374,7 @@ func RegisterUI(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, pr
 			scheme = "https"
 		}
 		dashURL := fmt.Sprintf("%s://localhost:%d/__ditto__/", scheme, info.Port)
-		openBrowser(dashURL)
+		browser.Open(dashURL)
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -405,7 +398,7 @@ func RegisterUI(mux *http.ServeMux, store *httpmock.Store, bus *eventlog.Bus, pr
 			http.Error(w, "url must start with http:// or https://", http.StatusBadRequest)
 			return
 		}
-		openBrowser(req.URL)
+		browser.Open(req.URL)
 		w.WriteHeader(http.StatusOK)
 	})
 }
@@ -422,126 +415,4 @@ func writeSSELogEvent(w http.ResponseWriter, flusher http.Flusher, event eventlo
 	}
 	flusher.Flush()
 	return nil
-}
-
-// RegisterPortRoutes adds port management and config persistence endpoints.
-// Called after the server is created so the server reference is available.
-func RegisterPortRoutes(mux *http.ServeMux, srv *Server, proxyMgr *proxy.Upstream, cfgStore *appdata.SettingsStore) {
-	// Port check — probe if a port is available
-	mux.HandleFunc("/__ditto__/api/port/check", func(w http.ResponseWriter, r *http.Request) {
-		portStr := r.URL.Query().Get("port")
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			http.Error(w, "invalid port", http.StatusBadRequest)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := CheckPort(port); err != nil {
-			json.NewEncoder(w).Encode(map[string]any{
-				"port":        port,
-				"available":   false,
-				"error":       err.Error(),
-				"suggestions": SuggestPorts(port),
-			})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"port":      port,
-			"available": true,
-		})
-	})
-
-	// Port get/change
-	mux.HandleFunc("/__ditto__/api/port", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"port":        srv.Port(),
-				"suggestions": SuggestPorts(srv.Port()),
-			})
-
-		case http.MethodPut:
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				http.Error(w, "failed to read body", http.StatusBadRequest)
-				return
-			}
-			var req struct {
-				Port int `json:"port"`
-			}
-			if err := json.Unmarshal(body, &req); err != nil {
-				http.Error(w, "invalid JSON", http.StatusBadRequest)
-				return
-			}
-			if err := CheckPort(req.Port); err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]any{
-					"error":       err.Error(),
-					"suggestions": SuggestPorts(req.Port),
-				})
-				return
-			}
-			// Respond before restarting; this connection survives the
-			// listener swap, so the client still reads the response.
-			if cfgStore != nil {
-				cfgStore.SetPort(req.Port)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"port": req.Port,
-			})
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-			if err := srv.Restart(req.Port); err != nil {
-				log.Printf("Failed to restart on port %d: %v", req.Port, err)
-			}
-
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-
-	// Target change with auto-save (overrides the basic target endpoint)
-	mux.HandleFunc("/__ditto__/api/target/save", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "failed to read body", http.StatusBadRequest)
-			return
-		}
-		var req struct {
-			Target string `json:"target"`
-		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			http.Error(w, "invalid JSON", http.StatusBadRequest)
-			return
-		}
-		if err := proxyMgr.SetTarget(req.Target); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if cfgStore != nil {
-			cfgStore.SetTarget(req.Target)
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// Config reset
-	mux.HandleFunc("/__ditto__/api/config/reset", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if cfgStore != nil {
-			cfgStore.Reset()
-		}
-		w.WriteHeader(http.StatusOK)
-	})
 }

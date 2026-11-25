@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ type schemaTypesResponse struct {
 	Types []schema.Type `json:"types"`
 }
 
-func RegisterSchemaRoutes(mux *http.ServeMux, schemas *schema.Registry) {
+func registerSchemaRoutes(mux *http.ServeMux, schemas *schema.Registry) {
 	if schemas == nil {
 		return
 	}
