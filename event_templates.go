@@ -255,10 +255,22 @@ func (r *EventTemplateRegistry) Delete(id string) error {
 	return nil
 }
 
-func (r *EventTemplateRegistry) Render(id string, vars map[string]string) (RenderedDispatch, error) {
+// RenderedTemplate is a template with its variables substituted. Missing and
+// InvalidCasts report variables that could not be resolved; callers must not
+// dispatch a render that has either.
+type RenderedTemplate struct {
+	Channel      string
+	Adapter      string
+	TypeName     string
+	Payload      json.RawMessage
+	Missing      []string
+	InvalidCasts []EventTemplateInvalidCast
+}
+
+func (r *EventTemplateRegistry) Render(id string, vars map[string]string) (RenderedTemplate, error) {
 	tmpl, err := r.Get(id)
 	if err != nil {
-		return RenderedDispatch{}, err
+		return RenderedTemplate{}, err
 	}
 	defaults := make(map[string]*string)
 	for _, variable := range tmpl.Variables {
@@ -272,16 +284,15 @@ func (r *EventTemplateRegistry) Render(id string, vars map[string]string) (Rende
 	}
 	payload, missing, invalidCasts, err := resolveTemplateDetailed(tmpl.Payload, vars, defaults)
 	if err != nil {
-		return RenderedDispatch{}, err
+		return RenderedTemplate{}, err
 	}
-	return RenderedDispatch{
+	return RenderedTemplate{
 		Channel:      strings.TrimSpace(tmpl.Channel),
 		Adapter:      tmpl.Adapter,
 		TypeName:     tmpl.TypeName,
 		Payload:      payload,
 		Missing:      missing,
 		InvalidCasts: invalidCasts,
-		Source:       "template:" + tmpl.ID,
 	}, nil
 }
 
@@ -564,7 +575,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegi
 			return
 		}
 		if action == "dispatch" {
-			handleEventTemplateDispatch(w, r, registry, hub, schemas, id)
+			handleEventTemplateDispatch(w, r, registry, hub, id)
 			return
 		}
 		switch r.Method {
@@ -608,7 +619,7 @@ func RegisterEventTemplateRoutes(mux *http.ServeMux, registry *EventTemplateRegi
 	})
 }
 
-func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registry *EventTemplateRegistry, hub *SocketHub, schemas *SchemaRegistry, id string) {
+func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registry *EventTemplateRegistry, hub *SocketHub, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -645,10 +656,20 @@ func handleEventTemplateDispatch(w http.ResponseWriter, r *http.Request, registr
 		})
 		return
 	}
-	result, err := dispatchRendered(hub, schemas, rendered, &dispatchOverrides{
-		Channel: req.ChannelOverride,
-		Adapter: req.AdapterOverride,
-	})
+	dispatch := SocketDispatch{
+		Channel:  rendered.Channel,
+		Adapter:  rendered.Adapter,
+		TypeName: rendered.TypeName,
+		Payload:  rendered.Payload,
+		Source:   "template:" + id,
+	}
+	if override := strings.TrimSpace(req.ChannelOverride); override != "" {
+		dispatch.Channel = override
+	}
+	if strings.TrimSpace(req.AdapterOverride) != "" {
+		dispatch.Adapter = req.AdapterOverride
+	}
+	result, err := hub.Dispatch(dispatch)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

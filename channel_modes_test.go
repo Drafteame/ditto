@@ -178,7 +178,7 @@ func TestChannelModeRouteDelete(t *testing.T) {
 	}
 }
 
-func TestDispatchRenderedSuppressedByMode(t *testing.T) {
+func TestHubDispatchSuppressedByMode(t *testing.T) {
 	reg, err := NewChannelModeRegistry(t.TempDir(), nil, false)
 	if err != nil {
 		t.Fatalf("NewChannelModeRegistry() error = %v", err)
@@ -188,30 +188,30 @@ func TestDispatchRenderedSuppressedByMode(t *testing.T) {
 		if err := reg.Set(ChannelConfig{Channel: "/blocked", Mode: mode}); err != nil {
 			t.Fatalf("Set(%s) error = %v", mode, err)
 		}
-		result, err := dispatchRendered(hub, nil, RenderedDispatch{
+		result, err := hub.Dispatch(SocketDispatch{
 			Channel: "/blocked",
 			Payload: json.RawMessage(`{"ok":true}`),
-		}, nil)
+		})
 		if err != nil {
-			t.Fatalf("dispatchRendered(%s) fatal error = %v", mode, err)
+			t.Fatalf("Dispatch(%s) fatal error = %v", mode, err)
 		}
 		if len(result.Errors) != 1 {
-			t.Fatalf("dispatchRendered(%s) errors = %#v, want suppression", mode, result.Errors)
+			t.Fatalf("Dispatch(%s) errors = %#v, want suppression", mode, result.Errors)
 		}
 	}
 	for _, mode := range []ChannelMode{ModeMock, ModeMixed} {
 		if err := reg.Set(ChannelConfig{Channel: "/allowed", Mode: mode}); err != nil {
 			t.Fatalf("Set(%s) error = %v", mode, err)
 		}
-		result, err := dispatchRendered(hub, nil, RenderedDispatch{
+		result, err := hub.Dispatch(SocketDispatch{
 			Channel: "/allowed",
 			Payload: json.RawMessage(`{"ok":true}`),
-		}, nil)
+		})
 		if err != nil {
-			t.Fatalf("dispatchRendered(%s) error = %v", mode, err)
+			t.Fatalf("Dispatch(%s) error = %v", mode, err)
 		}
 		if len(result.Errors) != 0 {
-			t.Fatalf("dispatchRendered(%s) errors = %#v, want none", mode, result.Errors)
+			t.Fatalf("Dispatch(%s) errors = %#v, want none", mode, result.Errors)
 		}
 	}
 }

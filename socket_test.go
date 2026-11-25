@@ -203,7 +203,7 @@ func TestRelayAdapterAcksConnectionWithoutInit(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), ""); result.Delivered != 1 {
+	if result := hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "", ""); result.Delivered != 1 {
 		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
 	}
 
@@ -286,7 +286,7 @@ func TestSocketHubDispatchesToRawSubscriber(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+	result := hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "", "")
 	if result.Delivered != 1 {
 		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
 	}
@@ -326,7 +326,7 @@ func TestSocketHubDispatchDuringDisconnectDoesNotPanic(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 200; i++ {
-			hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+			hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "", "")
 		}
 	}()
 
@@ -359,7 +359,7 @@ func TestSocketHubDispatchAdapterFilter(t *testing.T) {
 	hub.registry.Subscribe("/scores", rawClient.id)
 	hub.registry.Subscribe("/scores", appSyncClient.id)
 
-	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "appsync")
+	result := hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "appsync", "")
 	if result.Delivered != 1 {
 		t.Fatalf("Dispatch() delivered %d clients, want 1", result.Delivered)
 	}
@@ -420,7 +420,7 @@ func TestDispatchLogBodyIncludesDecodedPayload(t *testing.T) {
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	addRawTestSubscriber(hub, "/log")
 
-	hub.Dispatch("/log", json.RawMessage(`{"score":7}`), "")
+	hub.dispatchJSON("/log", json.RawMessage(`{"score":7}`), "", "")
 
 	event := waitForSocketMethod(t, events, "DISPATCH", "/log", time.Second)
 	var body DispatchLogBody
@@ -447,7 +447,7 @@ func TestDispatchLogBodyTruncatesLargePayloads(t *testing.T) {
 	addRawTestSubscriber(hub, "/large")
 
 	large := json.RawMessage(`{"data":"` + strings.Repeat("x", dispatchPayloadMaxBytes+128) + `"}`)
-	hub.Dispatch("/large", large, "")
+	hub.dispatchJSON("/large", large, "", "")
 
 	event := waitForSocketMethod(t, events, "DISPATCH", "/large", time.Second)
 	var body DispatchLogBody
@@ -492,7 +492,7 @@ func TestDispatchLogIncludesDecodedPayloadWithoutSSESubscribers(t *testing.T) {
 	addRawTestSubscriber(hub, "/decoded")
 
 	output := captureStdout(t, func() {
-		hub.Dispatch("/decoded", json.RawMessage(`{"score":7}`), "")
+		hub.dispatchJSON("/decoded", json.RawMessage(`{"score":7}`), "", "")
 	})
 	var event LogEvent
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
@@ -894,7 +894,7 @@ func TestDispatchEncodesPayloadOncePerAdapter(t *testing.T) {
 	hub.registry.Subscribe("/scores", clientA.id)
 	hub.registry.Subscribe("/scores", clientB.id)
 
-	result := hub.Dispatch("/scores", json.RawMessage(`{"score":7}`), "")
+	result := hub.dispatchJSON("/scores", json.RawMessage(`{"score":7}`), "", "")
 	if result.Delivered != 2 {
 		t.Fatalf("Dispatch() delivered %d clients, want 2", result.Delivered)
 	}

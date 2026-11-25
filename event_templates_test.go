@@ -375,7 +375,7 @@ func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
 		t.Fatalf("NewEventTemplateRegistry() error = %v", err)
 	}
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), schemas)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: schemas}), schemas)
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates", bytes.NewBufferString(`{"name":"Bad Type","channel":"x","type_name":"ditto.Missing","payload":{}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -424,7 +424,7 @@ func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus()}), schemas)
+	RegisterEventTemplateRoutes(mux, reg, NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: schemas}), schemas)
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/event-templates/"+tmpl.ID+"/dispatch", bytes.NewBufferString(`{"variables":{"ticketId":"abc"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:12345"

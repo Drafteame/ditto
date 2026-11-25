@@ -372,7 +372,7 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 	if err != nil {
 		t.Fatalf("Protocol(appsync-draftea) error = %v", err)
 	}
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Adapters: adapters})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: &SchemaRegistry{}, Adapters: adapters})
 	client := &SocketClient{
 		id:            "appsync-draftea-1",
 		adapter:       "appsync-draftea",
@@ -390,15 +390,15 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 		Kind:     websocket.MessageBinary,
 		TypeName: "appsync.recovery.Recovery",
 	}
-	result, err := dispatchRendered(hub, &SchemaRegistry{}, RenderedDispatch{
-		Channel:        "/test",
-		Adapter:        "appsync-draftea",
-		TypeName:       "appsync.recovery.Recovery",
-		Payload:        json.RawMessage(`{"recoveryId":"r1"}`),
-		EncodedPayload: &encodedPayload,
-	}, nil)
+	result, err := hub.Dispatch(SocketDispatch{
+		Channel:  "/test",
+		Adapter:  "appsync-draftea",
+		TypeName: "appsync.recovery.Recovery",
+		Payload:  json.RawMessage(`{"recoveryId":"r1"}`),
+		Encoded:  &encodedPayload,
+	})
 	if err != nil {
-		t.Fatalf("dispatchRendered() error = %v", err)
+		t.Fatalf("Dispatch() error = %v", err)
 	}
 	if result.Delivered != 1 {
 		t.Fatalf("delivered = %d, want 1; errors=%v", result.Delivered, result.Errors)
@@ -434,7 +434,7 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
 	}
 
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Adapters: adapters})
+	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(), Schemas: &SchemaRegistry{}, Adapters: adapters})
 	client := &SocketClient{
 		id:            "relay-draftea-1",
 		adapter:       "relay-draftea",
@@ -452,15 +452,15 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 		Kind:     websocket.MessageBinary,
 		TypeName: "appsync.betinfo.BetEventDto",
 	}
-	result, err := dispatchRendered(hub, &SchemaRegistry{}, RenderedDispatch{
-		Channel:        "/osb/sport/league/*",
-		Adapter:        "relay-draftea",
-		TypeName:       "appsync.betinfo.BetEventDto",
-		Payload:        json.RawMessage(`{"id":"bet-1"}`),
-		EncodedPayload: &encodedPayload,
-	}, nil)
+	result, err := hub.Dispatch(SocketDispatch{
+		Channel:  "/osb/sport/league/*",
+		Adapter:  "relay-draftea",
+		TypeName: "appsync.betinfo.BetEventDto",
+		Payload:  json.RawMessage(`{"id":"bet-1"}`),
+		Encoded:  &encodedPayload,
+	})
 	if err != nil {
-		t.Fatalf("dispatchRendered() error = %v", err)
+		t.Fatalf("Dispatch() error = %v", err)
 	}
 	if result.Delivered != 1 {
 		t.Fatalf("delivered = %d, want 1; errors=%v", result.Delivered, result.Errors)

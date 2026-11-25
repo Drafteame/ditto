@@ -308,16 +308,18 @@ type adapterPayload struct {
 	err     error
 }
 
-type RenderedDispatch struct {
-	Channel  string          `json:"channel"`
-	Adapter  string          `json:"adapter,omitempty"`
-	TypeName string          `json:"type_name,omitempty"`
-	Payload  json.RawMessage `json:"payload"`
-	Source   string          `json:"source,omitempty"`
-	// EncodedPayload is an M4 hook for sequence players that pre-encode a step.
-	EncodedPayload *EncodedPayload            `json:"-"`
-	Missing        []string                   `json:"missing,omitempty"`
-	InvalidCasts   []EventTemplateInvalidCast `json:"invalid_casts,omitempty"`
+// SocketDispatch is one event to deliver to a channel's subscribers.
+type SocketDispatch struct {
+	Channel string
+	// Adapter limits delivery to clients using that adapter; empty means all.
+	Adapter string
+	// TypeName selects protobuf encoding; empty sends Payload as JSON.
+	TypeName string
+	Payload  json.RawMessage
+	Source   string
+	// Encoded is a pre-encoded protobuf payload (the sequence player caches
+	// one per step); when set, Payload is not encoded again.
+	Encoded *EncodedPayload
 }
 
 // SocketHubConfig holds the hub's collaborators. Bus is required; every other
@@ -411,14 +413,13 @@ func RegisterSocketRoutes(mux *http.ServeMux, hub *SocketHub) {
 		if len(req.Payload) == 0 {
 			req.Payload = json.RawMessage(`{}`)
 		}
-		rendered := RenderedDispatch{
+		result, err := hub.Dispatch(SocketDispatch{
 			Channel:  req.Channel,
 			Adapter:  req.Adapter,
 			TypeName: req.TypeName,
 			Payload:  req.Payload,
 			Source:   "manual",
-		}
-		result, err := dispatchRendered(hub, hub.schemas, rendered, nil)
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -514,27 +515,17 @@ func hasJSONContentType(r *http.Request) bool {
 	return contentType == "application/json" || strings.HasPrefix(contentType, "application/json;")
 }
 
-type dispatchOverrides struct {
-	Channel string
-	Adapter string
-}
-
-func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered RenderedDispatch, overrides *dispatchOverrides) (SocketDispatchResult, error) {
-	if hub == nil {
+// Dispatch validates d against the channel mode and adapter, encodes it when
+// it names a protobuf type, and fans it out to the channel's subscribers.
+// A mode that suppresses local dispatch is reported in the result, not as an
+// error. Every rejection is logged.
+func (h *SocketHub) Dispatch(d SocketDispatch) (SocketDispatchResult, error) {
+	if h == nil {
 		return SocketDispatchResult{}, fmt.Errorf("socket hub is not available")
 	}
-	channel := strings.TrimSpace(rendered.Channel)
+	channel := strings.TrimSpace(d.Channel)
 	fail := func(reason string, suppressed bool) {
-		hub.logDispatchFailure(channel, rendered.Source, rendered.TypeName, rendered.Payload, reason, suppressed)
-	}
-	adapter := rendered.Adapter
-	if overrides != nil {
-		if strings.TrimSpace(overrides.Channel) != "" {
-			channel = strings.TrimSpace(overrides.Channel)
-		}
-		if strings.TrimSpace(overrides.Adapter) != "" {
-			adapter = overrides.Adapter
-		}
+		h.logDispatchFailure(channel, d.Source, d.TypeName, d.Payload, reason, suppressed)
 	}
 	if channel == "" {
 		err := fmt.Errorf("channel is required")
@@ -546,27 +537,27 @@ func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered Rendered
 		fail(err.Error(), false)
 		return SocketDispatchResult{}, err
 	}
-	if hub.modes != nil && !hub.modes.AllowsLocalDispatch(channel) {
-		mode := hub.modes.Get(channel).Mode
+	if h.modes != nil && !h.modes.AllowsLocalDispatch(channel) {
+		mode := h.modes.Get(channel).Mode
 		msg := fmt.Sprintf("channel mode %s suppressed local dispatch", mode)
 		fail(msg, true)
 		return SocketDispatchResult{Errors: []string{msg}}, nil
 	}
-	adapter = normalizeAdapter(adapter)
-	if _, err := hub.adapters.Protocol(adapter); err != nil {
+	adapter := normalizeAdapter(d.Adapter)
+	if _, err := h.adapters.Protocol(adapter); err != nil {
 		fail(err.Error(), false)
 		return SocketDispatchResult{}, err
 	}
-	typeName := strings.TrimSpace(rendered.TypeName)
+	typeName := strings.TrimSpace(d.TypeName)
 	if typeName != "" {
-		if schemas == nil {
+		if h.schemas == nil {
 			err := fmt.Errorf("schema registry is not available")
 			fail(err.Error(), false)
 			return SocketDispatchResult{}, err
 		}
-		encoded := rendered.EncodedPayload
+		encoded := d.Encoded
 		if encoded == nil {
-			data, err := schemas.Encode(typeName, rendered.Payload)
+			data, err := h.schemas.Encode(typeName, d.Payload)
 			if err != nil {
 				wrapped := fmt.Errorf("protobuf encode failed: %w", err)
 				fail(wrapped.Error(), false)
@@ -575,13 +566,13 @@ func dispatchRendered(hub *SocketHub, schemas *SchemaRegistry, rendered Rendered
 			next := ProtobufPayload(typeName, data)
 			encoded = &next
 		}
-		return hub.DispatchEncodedWithSourcePayload(channel, *encoded, adapter, rendered.Source, rendered.Payload), nil
+		return h.dispatchEncoded(channel, *encoded, adapter, d.Source, d.Payload), nil
 	}
-	payload := rendered.Payload
+	payload := d.Payload
 	if len(payload) == 0 {
 		payload = json.RawMessage(`{}`)
 	}
-	return hub.DispatchWithSource(channel, payload, adapter, rendered.Source), nil
+	return h.dispatchJSON(channel, payload, adapter, d.Source), nil
 }
 
 func (h *SocketHub) logDispatchFailure(channel, source, typeName string, payload json.RawMessage, reason string, suppressed bool) {
@@ -802,17 +793,17 @@ func socketCloseDetails(err error) (int, string) {
 	return -1, err.Error()
 }
 
-func (h *SocketHub) Dispatch(channel string, payload json.RawMessage, adapterFilter string) SocketDispatchResult {
-	return h.DispatchWithSource(channel, payload, adapterFilter, "")
-}
-
-func (h *SocketHub) DispatchWithSource(channel string, payload json.RawMessage, adapterFilter, source string) SocketDispatchResult {
+// dispatchJSON fans a JSON payload out without mode or adapter validation;
+// Dispatch is the validating entry point.
+func (h *SocketHub) dispatchJSON(channel string, payload json.RawMessage, adapterFilter, source string) SocketDispatchResult {
 	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{Payload: payload}, func(client *SocketClient) (EncodedPayload, error) {
 		return client.protocol.EncodePayload(payload)
 	})
 }
 
-func (h *SocketHub) DispatchEncodedWithSourcePayload(channel string, payload EncodedPayload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
+// dispatchEncoded fans out a pre-encoded payload. logicalPayload is the JSON
+// it was encoded from, used only for logging.
+func (h *SocketHub) dispatchEncoded(channel string, payload EncodedPayload, adapterFilter, source string, logicalPayload json.RawMessage) SocketDispatchResult {
 	return h.dispatch(channel, adapterFilter, source, dispatchDecodeHint{TypeName: payload.TypeName, Payload: logicalPayload,
 		RawData: payload.Data, RawKind: payload.Kind, RawContentType: payload.ContentType}, func(client *SocketClient) (EncodedPayload, error) {
 		return payload, nil

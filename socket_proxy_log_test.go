@@ -316,7 +316,7 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 	bus := NewEventBus()
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	hub.schemas = schemas
-	result := hub.DispatchEncodedWithSourcePayload("/proto", encoded, "", "manual", json.RawMessage(`{"name":"without-subscriber"}`))
+	result := hub.dispatchEncoded("/proto", encoded, "", "manual", json.RawMessage(`{"name":"without-subscriber"}`))
 	if result.Queued != 0 || result.Delivered != 0 {
 		t.Fatalf("dispatch result = %#v, want no recipients", result)
 	}
@@ -347,7 +347,7 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 	if err := modes.Set(ChannelConfig{Channel: "/suppressed", Mode: ModeLive}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = dispatchRendered(suppressedHub, nil, RenderedDispatch{Channel: "/suppressed", Source: "sequence", Payload: json.RawMessage(`{"visible":true}`)}, nil)
+	_, err = suppressedHub.Dispatch(SocketDispatch{Channel: "/suppressed", Source: "sequence", Payload: json.RawMessage(`{"visible":true}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestDispatchLogsPerClientQueueDrop(t *testing.T) {
 	client.send <- EncodedServerMessage{Kind: websocket.MessageText, Data: []byte("already queued")}
 	hub.addClient(client)
 	hub.registry.Subscribe("/drop", client.id)
-	result := hub.Dispatch("/drop", json.RawMessage(`{"drop":true}`), "")
+	result := hub.dispatchJSON("/drop", json.RawMessage(`{"drop":true}`), "", "")
 	if result.Delivered != 0 || len(result.Dropped) != 1 {
 		t.Fatalf("dispatch result = %#v", result)
 	}

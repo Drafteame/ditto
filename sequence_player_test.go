@@ -163,35 +163,35 @@ func TestSequenceRunnerCachesEncodedPayloadByStepAndPayload(t *testing.T) {
 		cache:  make(map[string]stepCacheEntry),
 	}
 	step := EventSequenceStep{ID: "step-cache"}
-	rendered := RenderedDispatch{
+	rendered := SocketDispatch{
 		TypeName: "ditto.cache.Event",
 		Payload:  json.RawMessage(`{"id":"a"}`),
 	}
-	first, err := runner.prepareRenderedStep(step, rendered)
+	first, err := runner.encodeStep(step, rendered)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.EncodedPayload == nil || len(runner.cache) != 1 {
+	if first.Encoded == nil || len(runner.cache) != 1 {
 		t.Fatal("expected first encode to populate cache")
 	}
 	entry := runner.cache[step.ID]
 	entry.encoded.Data = []byte("cached")
 	runner.cache[step.ID] = entry
-	second, err := runner.prepareRenderedStep(step, rendered)
+	second, err := runner.encodeStep(step, rendered)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.EncodedPayload == nil || string(second.EncodedPayload.Data) != "cached" {
-		t.Fatalf("expected cached payload, got %#v", second.EncodedPayload)
+	if second.Encoded == nil || string(second.Encoded.Data) != "cached" {
+		t.Fatalf("expected cached payload, got %#v", second.Encoded)
 	}
-	third, err := runner.prepareRenderedStep(step, RenderedDispatch{
+	third, err := runner.encodeStep(step, SocketDispatch{
 		TypeName: "ditto.cache.Event",
 		Payload:  json.RawMessage(`{"id":"b"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(third.EncodedPayload.Data) == "cached" {
+	if string(third.Encoded.Data) == "cached" {
 		t.Fatal("expected payload change to invalidate cache")
 	}
 }

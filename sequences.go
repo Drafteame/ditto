@@ -259,23 +259,27 @@ func (r *EventSequenceRegistry) Delete(id string) error {
 	return nil
 }
 
-func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenceStep, runtimeVars map[string]string, index int) (RenderedDispatch, error) {
+// ResolveStep renders step with the sequence, step and runtime variables
+// (later ones win) and returns it ready to dispatch. A step that references a
+// template starts from the template's render and applies the step overrides.
+func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenceStep, runtimeVars map[string]string, index int) (SocketDispatch, error) {
 	vars, err := sequenceVariablesToStrings(seq.Vars, step.VarsOverride)
 	if err != nil {
-		return RenderedDispatch{}, err
+		return SocketDispatch{}, err
 	}
 	for key, value := range runtimeVars {
 		vars[key] = value
 	}
 
+	var rendered RenderedTemplate
 	if step.TemplateRef != "" {
 		tmpl, err := r.templates.Get(step.TemplateRef)
 		if err != nil {
-			return RenderedDispatch{}, err
+			return SocketDispatch{}, err
 		}
-		rendered, err := r.templates.Render(step.TemplateRef, vars)
+		rendered, err = r.templates.Render(step.TemplateRef, vars)
 		if err != nil {
-			return RenderedDispatch{}, err
+			return SocketDispatch{}, err
 		}
 		if strings.TrimSpace(step.Channel) != "" {
 			rendered.Channel = strings.TrimSpace(step.Channel)
@@ -290,40 +294,39 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 			defaults := templateDefaults(tmpl)
 			payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, defaults)
 			if err != nil {
-				return RenderedDispatch{}, err
+				return SocketDispatch{}, err
 			}
 			rendered.Payload = payload
 			rendered.Missing = missing
 			rendered.InvalidCasts = invalid
 		}
-		rendered.Source = fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID)
-		return validateRenderedSequenceStep(rendered)
+	} else {
+		payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, nil)
+		if err != nil {
+			return SocketDispatch{}, err
+		}
+		rendered = RenderedTemplate{
+			Channel:      strings.TrimSpace(step.Channel),
+			Adapter:      normalizeAdapter(step.Adapter),
+			TypeName:     strings.TrimSpace(step.TypeName),
+			Payload:      payload,
+			Missing:      missing,
+			InvalidCasts: invalid,
+		}
 	}
-
-	payload, missing, invalid, err := resolveTemplateDetailed(step.Payload, vars, nil)
-	if err != nil {
-		return RenderedDispatch{}, err
-	}
-	rendered := RenderedDispatch{
-		Channel:      strings.TrimSpace(step.Channel),
-		Adapter:      normalizeAdapter(step.Adapter),
-		TypeName:     strings.TrimSpace(step.TypeName),
-		Payload:      payload,
-		Missing:      missing,
-		InvalidCasts: invalid,
-		Source:       fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID),
-	}
-	return validateRenderedSequenceStep(rendered)
-}
-
-func validateRenderedSequenceStep(rendered RenderedDispatch) (RenderedDispatch, error) {
 	if len(rendered.Missing) > 0 {
-		return rendered, fmt.Errorf("missing variables: %s", strings.Join(rendered.Missing, ", "))
+		return SocketDispatch{}, fmt.Errorf("missing variables: %s", strings.Join(rendered.Missing, ", "))
 	}
 	if len(rendered.InvalidCasts) > 0 {
-		return rendered, fmt.Errorf("invalid template casts: %s", describeInvalidCasts(rendered.InvalidCasts))
+		return SocketDispatch{}, fmt.Errorf("invalid template casts: %s", describeInvalidCasts(rendered.InvalidCasts))
 	}
-	return rendered, nil
+	return SocketDispatch{
+		Channel:  rendered.Channel,
+		Adapter:  rendered.Adapter,
+		TypeName: rendered.TypeName,
+		Payload:  rendered.Payload,
+		Source:   fmt.Sprintf("sequence:%s:step:%s", seq.ID, step.ID),
+	}, nil
 }
 
 func (r *EventSequenceRegistry) validate(seq EventSequence) error {

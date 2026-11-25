@@ -420,9 +420,9 @@ func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	payload := json.RawMessage(`{"local":true}`)
-	result, err := dispatchRendered(hub, nil, RenderedDispatch{Channel: "/mixed", Payload: payload}, nil)
+	result, err := hub.Dispatch(SocketDispatch{Channel: "/mixed", Payload: payload})
 	if err != nil {
-		t.Fatalf("dispatchRendered() error = %v", err)
+		t.Fatalf("Dispatch() error = %v", err)
 	}
 	if result.Delivered != 1 {
 		t.Fatalf("delivered = %d, want 1", result.Delivered)
