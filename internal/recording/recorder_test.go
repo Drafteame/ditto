@@ -1,4 +1,4 @@
-package main
+package recording
 
 import (
 	"bufio"
@@ -14,7 +14,7 @@ import (
 
 func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(RecorderConfig{Dir: dir, Bus: eventlog.NewBus(nil)})
+	rec, err := NewRecorder(Config{Dir: dir, Bus: eventlog.NewBus(nil)})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -22,7 +22,7 @@ func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	rec.Record(RecordFrameInput{
+	rec.Record(Input{
 		Channel: "/games/123", Direction: "upstream", Kind: "text", Data: []byte(`{"score":1}`),
 	})
 	stopped, err := rec.Stop(manifest.ID)
@@ -42,7 +42,7 @@ func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	if !scanner.Scan() {
 		t.Fatalf("missing jsonl frame")
 	}
-	var frame RecordedFrame
+	var frame Frame
 	if err := json.Unmarshal(scanner.Bytes(), &frame); err != nil {
 		t.Fatalf("frame JSON invalid: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 }
 
 func TestRecorderListReturnsEmptySlice(t *testing.T) {
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
+	rec, err := NewRecorder(Config{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRecorderListReturnsEmptySlice(t *testing.T) {
 }
 
 func TestRecorderRateCapDrops(t *testing.T) {
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
+	rec, err := NewRecorder(Config{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
@@ -78,7 +78,7 @@ func TestRecorderRateCapDrops(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	for i := 0; i < 5; i++ {
-		rec.Record(RecordFrameInput{
+		rec.Record(Input{
 			Channel: "/fast", Direction: "upstream", Kind: "text", Data: []byte(`{"n":1}`), RateCapHz: 1,
 		})
 	}
@@ -93,7 +93,7 @@ func TestRecorderRateCapDrops(t *testing.T) {
 
 func TestRecorderRecordConcurrentWithStopDoesNotPanic(t *testing.T) {
 	for i := 0; i < 1000; i++ {
-		rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir(), Options: RecorderOptions{
+		rec, err := NewRecorder(Config{Dir: t.TempDir(), Options: Options{
 			FrameQueueCapacity: 8,
 			QueueSendTimeout:   time.Millisecond,
 		}})
@@ -110,7 +110,7 @@ func TestRecorderRecordConcurrentWithStopDoesNotPanic(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for j := 0; j < 25; j++ {
-					rec.Record(RecordFrameInput{
+					rec.Record(Input{
 						Channel: "/race", Direction: "upstream", Kind: "text", Data: []byte(`{"n":1}`),
 					})
 				}
@@ -125,7 +125,7 @@ func TestRecorderRecordConcurrentWithStopDoesNotPanic(t *testing.T) {
 
 func TestRecorderStopTimeoutForceStopsDrain(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(RecorderConfig{Dir: dir, Options: RecorderOptions{
+	rec, err := NewRecorder(Config{Dir: dir, Options: Options{
 		StopTimeout: 10 * time.Millisecond,
 	}})
 	if err != nil {
@@ -136,18 +136,18 @@ func TestRecorderStopTimeoutForceStopsDrain(t *testing.T) {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	session := &recordingSession{
-		manifest: RecordingManifest{
-			Version: 1, ID: id, Name: "Stuck Drain", StartedAt: time.Now().UTC(), Channels: []RecordingChannelManifest{},
+	session := &session{
+		manifest: Manifest{
+			Version: 1, ID: id, Name: "Stuck Drain", StartedAt: time.Now().UTC(), Channels: []ChannelManifest{},
 		},
 		dir:           sessionDir,
 		start:         time.Now().UTC(),
-		frames:        make(chan RecordedFrame, 1),
+		frames:        make(chan Frame, 1),
 		closing:       make(chan struct{}),
 		forceStop:     make(chan struct{}),
 		done:          make(chan struct{}),
 		producersDone: make(chan struct{}),
-		writers:       make(map[string]*recordingWriter),
+		writers:       make(map[string]*channelWriter),
 		limits:        make(map[string]*rateLimiter),
 		recorder:      rec,
 		options:       rec.options,
@@ -174,31 +174,9 @@ func TestRecorderStopTimeoutForceStopsDrain(t *testing.T) {
 	}
 }
 
-func waitForBurstSummary(t *testing.T, events <-chan eventlog.Event, channel string) int {
-	t.Helper()
-	deadline := time.After(1500 * time.Millisecond)
-	for {
-		select {
-		case event := <-events:
-			if event.Type != "SOCKET" || event.Method != "DISPATCH_BURST" || event.Path != channel {
-				continue
-			}
-			var body struct {
-				TotalFrames int `json:"total_frames"`
-			}
-			if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
-				t.Fatalf("summary body invalid JSON: %v", err)
-			}
-			return body.TotalFrames
-		case <-deadline:
-			t.Fatalf("timed out waiting for DISPATCH_BURST")
-		}
-	}
-}
-
 func TestRecorderQueueDropsAreSeparateFromRateCapDrops(t *testing.T) {
 	dir := t.TempDir()
-	rec, err := NewRecorder(RecorderConfig{Dir: dir, Options: RecorderOptions{
+	rec, err := NewRecorder(Config{Dir: dir, Options: Options{
 		FrameQueueCapacity: 1,
 		QueueSendTimeout:   time.Nanosecond,
 	}})
@@ -206,25 +184,25 @@ func TestRecorderQueueDropsAreSeparateFromRateCapDrops(t *testing.T) {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
 	id := "queue-drop-12345678"
-	session := &recordingSession{
-		manifest: RecordingManifest{
-			Version: 1, ID: id, Name: "Queue Drop", StartedAt: time.Now().UTC(), Channels: []RecordingChannelManifest{},
+	session := &session{
+		manifest: Manifest{
+			Version: 1, ID: id, Name: "Queue Drop", StartedAt: time.Now().UTC(), Channels: []ChannelManifest{},
 		},
 		dir:     filepath.Join(dir, id),
 		start:   time.Now().UTC(),
-		frames:  make(chan RecordedFrame, 1),
+		frames:  make(chan Frame, 1),
 		done:    make(chan struct{}),
-		writers: make(map[string]*recordingWriter),
+		writers: make(map[string]*channelWriter),
 		limits:  make(map[string]*rateLimiter),
-		options: normalizeRecorderOptions(RecorderOptions{FrameQueueCapacity: 1, QueueSendTimeout: time.Nanosecond}),
+		options: normalizeOptions(Options{FrameQueueCapacity: 1, QueueSendTimeout: time.Nanosecond}),
 	}
 	if err := os.MkdirAll(session.dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	session.frames <- RecordedFrame{Channel: "/full", FrameKind: "text", RawB64: "e30="}
+	session.frames <- Frame{Channel: "/full", FrameKind: "text", RawB64: "e30="}
 	rec.active = session
 
-	rec.Record(RecordFrameInput{Channel: "/full", Direction: "upstream", Kind: "text", Data: []byte(`{"n":1}`)})
+	rec.Record(Input{Channel: "/full", Direction: "upstream", Kind: "text", Data: []byte(`{"n":1}`)})
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
@@ -245,15 +223,15 @@ func TestRecorderMarksInterruptedManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Now().UTC().Add(-time.Minute)
-	if err := writeRecordingManifest(recDir, RecordingManifest{
-		Version: 1, ID: id, Name: "Interrupted", StartedAt: started, Channels: []RecordingChannelManifest{},
+	if err := writeManifest(recDir, Manifest{
+		Version: 1, ID: id, Name: "Interrupted", StartedAt: started, Channels: []ChannelManifest{},
 	}); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-	if _, err := NewRecorder(RecorderConfig{Dir: dir}); err != nil {
+	if _, err := NewRecorder(Config{Dir: dir}); err != nil {
 		t.Fatalf("NewRecorder() error = %v", err)
 	}
-	manifest, err := readRecordingManifest(recDir)
+	manifest, err := readManifest(recDir)
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}

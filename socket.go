@@ -21,6 +21,7 @@ import (
 	"ditto/internal/capture"
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
+	"ditto/internal/recording"
 	"ditto/internal/schema"
 )
 
@@ -90,7 +91,7 @@ type SocketHub struct {
 	bus      *eventlog.Bus
 	modes    *channelmode.Registry
 	live     *LiveBridge
-	recorder *Recorder
+	recorder *recording.Recorder
 	schemas  *schema.Registry
 	adapters *adapter.Registry
 	events   *eventlog.Coalescer
@@ -269,7 +270,7 @@ type SocketHubConfig struct {
 	Modes    *channelmode.Registry
 	Schemas  *schema.Registry
 	Adapters *adapter.Registry
-	Recorder *Recorder
+	Recorder *recording.Recorder
 	// LiveTargets enables live/mixed channel forwarding to an upstream.
 	LiveTargets *LiveTargetManager
 }
@@ -788,7 +789,7 @@ func (h *SocketHub) dispatch(channel string, adapterFilter string, source string
 		if h.recorder != nil && h.isRecordingMode(channel) {
 			if _, recorded := recordedAdapters[client.adapter]; !recorded {
 				cfg := h.modes.Get(channel)
-				h.recorder.Record(RecordFrameInput{
+				h.recorder.Record(recording.Input{
 					Channel: channel, Direction: "local", Kind: adapter.FrameKind(data.Kind), Data: data.Data,
 					Adapter: client.adapter, RateCapHz: cfg.RateCapHz,
 				})
@@ -1084,7 +1085,7 @@ func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketCli
 		return
 	}
 	if h.recorder != nil && h.modes.Get(channel).Mode == channelmode.Mixed {
-		h.recorder.Record(RecordFrameInput{
+		h.recorder.Record(recording.Input{
 			Channel: channel, Direction: "local", Kind: adapter.FrameKind(typ), Data: data,
 			Adapter: client.adapter, RateCapHz: h.modes.Get(channel).RateCapHz,
 		})

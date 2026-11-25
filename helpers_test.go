@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"nhooyr.io/websocket"
 
 	"ditto/internal/adapter"
+	"ditto/internal/eventlog"
 )
 
 // writeProto writes a .proto file into dir, creating it, and returns dir.
@@ -57,4 +59,26 @@ func decodeProfileEnvelope(t *testing.T, data []byte) (struct {
 		t.Fatalf("inner JSON error: %v; event=%s", err, env.Event)
 	}
 	return env, inner
+}
+
+func waitForBurstSummary(t *testing.T, events <-chan eventlog.Event, channel string) int {
+	t.Helper()
+	deadline := time.After(1500 * time.Millisecond)
+	for {
+		select {
+		case event := <-events:
+			if event.Type != "SOCKET" || event.Method != "DISPATCH_BURST" || event.Path != channel {
+				continue
+			}
+			var body struct {
+				TotalFrames int `json:"total_frames"`
+			}
+			if err := json.Unmarshal([]byte(event.ResponseBody), &body); err != nil {
+				t.Fatalf("summary body invalid JSON: %v", err)
+			}
+			return body.TotalFrames
+		case <-deadline:
+			t.Fatalf("timed out waiting for DISPATCH_BURST")
+		}
+	}
 }

@@ -19,6 +19,7 @@ import (
 	"ditto/internal/adapter"
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
+	"ditto/internal/recording"
 	"ditto/internal/schema"
 )
 
@@ -890,9 +891,9 @@ func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
 	if err := modes.Set(channelmode.Config{Channel: "/burst-record", Mode: channelmode.Record}); err != nil {
 		t.Fatalf("Set() error = %v", err)
 	}
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir(), Modes: modes, Bus: bus})
+	rec, err := recording.NewRecorder(recording.Config{Dir: t.TempDir(), Modes: modes, Bus: bus})
 	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
+		t.Fatalf("recording.NewRecorder() error = %v", err)
 	}
 	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
 	manifest, err := rec.Start("Burst Recording", "")
@@ -970,9 +971,9 @@ func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
 		t.Fatalf("Set mixed mode: %v", err)
 	}
 	recDir := t.TempDir()
-	rec, err := NewRecorder(RecorderConfig{Dir: recDir, Modes: modes, Bus: bus})
+	rec, err := recording.NewRecorder(recording.Config{Dir: recDir, Modes: modes, Bus: bus})
 	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
+		t.Fatalf("recording.NewRecorder() error = %v", err)
 	}
 	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
 	client := &SocketClient{

@@ -23,6 +23,7 @@ import (
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/httpmock"
+	"ditto/internal/recording"
 	"ditto/internal/schema"
 )
 
@@ -125,7 +126,7 @@ type Server struct {
 	ProxyMgr   *ProxyManager
 	SocketHub  *SocketHub
 	Modes      *channelmode.Registry
-	Recorder   *Recorder
+	Recorder   *recording.Recorder
 	LiveTarget *LiveTargetManager
 	Schemas    *schema.Registry
 	Templates  *EventTemplateRegistry
@@ -195,7 +196,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
 	}
-	recorder, err := NewRecorder(RecorderConfig{Dir: cfg.Layout.RecordingsDir, Schemas: schemaRegistry,
+	recorder, err := recording.NewRecorder(recording.Config{Dir: cfg.Layout.RecordingsDir, Schemas: schemaRegistry,
 		Adapters: adapters, Modes: modeRegistry, Bus: bus})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load recorder: %w", err)

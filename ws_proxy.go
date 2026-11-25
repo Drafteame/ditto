@@ -18,6 +18,7 @@ import (
 	"ditto/internal/adapter"
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
+	"ditto/internal/recording"
 )
 
 type LiveTargetManager struct {
@@ -388,7 +389,7 @@ func (h *SocketHub) forwardFromUpstreamID(channel string, typ websocket.MessageT
 	}
 	if h.recorder != nil && h.isRecordingMode(channel) {
 		cfg := h.modes.Get(channel)
-		h.recorder.Record(RecordFrameInput{
+		h.recorder.Record(recording.Input{
 			Channel: channel, Direction: "upstream", Kind: adapter.FrameKind(typ), Data: data,
 			Adapter: adapterName, RateCapHz: cfg.RateCapHz,
 		})
