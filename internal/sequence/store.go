@@ -1,4 +1,7 @@
-package main
+// Package sequence stores timed event sequences (steps of templates or
+// inline payloads with delays) and plays them on the socket hub with
+// play, pause, seek, speed and loop controls.
+package sequence
 
 import (
 	"crypto/sha256"
@@ -6,9 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,26 +24,27 @@ import (
 	"ditto/internal/socket"
 )
 
-const (
-	maxEventSequenceBodyBytes = 1 << 20
-	maxSequenceStepDelay      = 24 * time.Hour
-)
+const maxSequenceStepDelay = 24 * time.Hour
 
-var ErrEventSequenceNotFound = errors.New("event sequence not found")
+// ErrNotFound is returned for an unknown sequence ID.
+var ErrNotFound = errors.New("event sequence not found")
 
-type EventSequence struct {
+// Sequence is a timeline of steps played on the socket hub.
+type Sequence struct {
 	Version     int                        `json:"version"`
 	ID          string                     `json:"id"`
 	Name        string                     `json:"name"`
 	Description string                     `json:"description,omitempty"`
-	Steps       []EventSequenceStep        `json:"steps"`
+	Steps       []Step                     `json:"steps"`
 	Vars        map[string]json.RawMessage `json:"vars,omitempty"`
 	OnEnd       string                     `json:"on_end"`
 	CreatedAt   time.Time                  `json:"created_at"`
 	UpdatedAt   time.Time                  `json:"updated_at"`
 }
 
-type EventSequenceStep struct {
+// Step dispatches a template (with optional overrides) or an inline
+// payload after DelayMs.
+type Step struct {
 	ID           string                     `json:"id"`
 	Name         string                     `json:"name,omitempty"`
 	DelayMs      int64                      `json:"delay_ms"`
@@ -54,37 +56,21 @@ type EventSequenceStep struct {
 	VarsOverride map[string]json.RawMessage `json:"vars_override,omitempty"`
 }
 
-type EventSequenceRegistry struct {
+// Store keeps sequences as one JSON file each in a directory. It is safe
+// for concurrent use.
+type Store struct {
 	mu        sync.RWMutex
 	dir       string
-	sequences map[string]EventSequence
+	sequences map[string]Sequence
 	templates *eventtemplate.Store
 	schemas   *schema.Registry
 	adapters  *adapter.Registry
 }
 
-type eventSequencesResponse struct {
-	Sequences []EventSequence `json:"sequences"`
-}
-
-type sequencePlayRequest struct {
-	Vars      map[string]json.RawMessage `json:"vars,omitempty"`
-	StartStep *int                       `json:"start_step,omitempty"`
-	Speed     *float64                   `json:"speed,omitempty"`
-}
-
-type sequenceSeekRequest struct {
-	Step int `json:"step"`
-}
-
-type sequenceSpeedRequest struct {
-	Speed float64 `json:"speed"`
-}
-
-// NewEventSequenceRegistry loads the sequences in dir. Sequences that reference
-// unknown templates, adapters or schema types are skipped, so those
-// registries must be loaded first.
-func NewEventSequenceRegistry(dir string, templates *eventtemplate.Store, schemas *schema.Registry, adapters *adapter.Registry) (*EventSequenceRegistry, error) {
+// NewStore loads the sequences in dir. Sequences referencing unknown
+// templates, adapters or protobuf types are skipped, so those must be
+// loaded first.
+func NewStore(dir string, templates *eventtemplate.Store, schemas *schema.Registry, adapters *adapter.Registry) (*Store, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -92,9 +78,9 @@ func NewEventSequenceRegistry(dir string, templates *eventtemplate.Store, schema
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
 		return nil, err
 	}
-	reg := &EventSequenceRegistry{
+	reg := &Store{
 		dir:       absDir,
-		sequences: make(map[string]EventSequence),
+		sequences: make(map[string]Sequence),
 		templates: templates,
 		schemas:   schemas,
 		adapters:  adapters,
@@ -105,11 +91,12 @@ func NewEventSequenceRegistry(dir string, templates *eventtemplate.Store, schema
 	return reg, nil
 }
 
-func (r *EventSequenceRegistry) Load() error {
+// Load re-reads every sequence file, skipping invalid ones with a log line.
+func (r *Store) Load() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	next := make(map[string]EventSequence)
+	next := make(map[string]Sequence)
 	entries, err := os.ReadDir(r.dir)
 	if err != nil {
 		return err
@@ -128,7 +115,7 @@ func (r *EventSequenceRegistry) Load() error {
 			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
 			continue
 		}
-		var seq EventSequence
+		var seq Sequence
 		if err := json.Unmarshal(data, &seq); err != nil {
 			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
 			continue
@@ -141,7 +128,7 @@ func (r *EventSequenceRegistry) Load() error {
 			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
 			continue
 		}
-		seq = normalizeEventSequence(seq)
+		seq = normalize(seq)
 		seq.ID = fileID
 		if seq.ID != id || !jsonfile.ValidID(seq.ID) {
 			log.Printf("event sequence %s skipped: id mismatch", entry.Name())
@@ -151,18 +138,19 @@ func (r *EventSequenceRegistry) Load() error {
 			log.Printf("event sequence %s skipped: %v", entry.Name(), err)
 			continue
 		}
-		next[seq.ID] = cloneEventSequence(seq)
+		next[seq.ID] = clone(seq)
 	}
 	r.sequences = next
 	return nil
 }
 
-func (r *EventSequenceRegistry) Sequences() []EventSequence {
+// Sequences returns every sequence sorted by name.
+func (r *Store) Sequences() []Sequence {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	sequences := make([]EventSequence, 0, len(r.sequences))
+	sequences := make([]Sequence, 0, len(r.sequences))
 	for _, seq := range r.sequences {
-		sequences = append(sequences, cloneEventSequence(seq))
+		sequences = append(sequences, clone(seq))
 	}
 	sort.Slice(sequences, func(i, j int) bool {
 		if sequences[i].Name == sequences[j].Name {
@@ -173,31 +161,33 @@ func (r *EventSequenceRegistry) Sequences() []EventSequence {
 	return sequences
 }
 
-func (r *EventSequenceRegistry) Get(id string) (EventSequence, error) {
+// Get returns the sequence with id, or ErrNotFound.
+func (r *Store) Get(id string) (Sequence, error) {
 	if !jsonfile.ValidID(id) {
-		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return Sequence{}, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	seq, ok := r.sequences[id]
 	if !ok {
-		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return Sequence{}, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
-	return cloneEventSequence(seq), nil
+	return clone(seq), nil
 }
 
-func (r *EventSequenceRegistry) Create(seq EventSequence) (EventSequence, error) {
+// Create validates seq, assigns IDs to it and its steps and saves it.
+func (r *Store) Create(seq Sequence) (Sequence, error) {
 	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
-		return EventSequence{}, err
+		return Sequence{}, err
 	}
-	seq = normalizeEventSequence(seq)
+	seq = normalize(seq)
 	now := time.Now().UTC()
 	seq.ID = ""
 	seq.CreatedAt = now
 	seq.UpdatedAt = now
 	assignSequenceStepIDs(&seq)
 	if err := r.validate(seq); err != nil {
-		return EventSequence{}, err
+		return Sequence{}, err
 	}
 
 	r.mu.Lock()
@@ -211,30 +201,32 @@ func (r *EventSequenceRegistry) Create(seq EventSequence) (EventSequence, error)
 		}
 	}
 	if err != nil {
-		return EventSequence{}, err
+		return Sequence{}, err
 	}
-	r.sequences[seq.ID] = cloneEventSequence(seq)
-	return cloneEventSequence(seq), nil
+	r.sequences[seq.ID] = clone(seq)
+	return clone(seq), nil
 }
 
-func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSequence, error) {
+// Update validates and replaces the sequence with id, keeping step IDs
+// that were sent and generating missing ones.
+func (r *Store) Update(id string, seq Sequence) (Sequence, error) {
 	if !jsonfile.ValidID(id) {
-		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return Sequence{}, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	if err := validateSequenceVariableKeyCollisions(seq); err != nil {
-		return EventSequence{}, err
+		return Sequence{}, err
 	}
-	seq = normalizeEventSequence(seq)
+	seq = normalize(seq)
 	assignSequenceStepIDs(&seq)
 	if err := r.validate(seq); err != nil {
-		return EventSequence{}, err
+		return Sequence{}, err
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	existing, ok := r.sequences[id]
 	if !ok {
-		return EventSequence{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return Sequence{}, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	seq.ID = id
 	seq.CreatedAt = existing.CreatedAt
@@ -243,20 +235,22 @@ func (r *EventSequenceRegistry) Update(id string, seq EventSequence) (EventSeque
 	}
 	seq.UpdatedAt = time.Now().UTC()
 	if err := r.writeLocked(seq, true); err != nil {
-		return EventSequence{}, err
+		return Sequence{}, err
 	}
-	r.sequences[id] = cloneEventSequence(seq)
-	return cloneEventSequence(seq), nil
+	r.sequences[id] = clone(seq)
+	return clone(seq), nil
 }
 
-func (r *EventSequenceRegistry) Delete(id string) error {
+// Delete removes the sequence with id. Use Player.DeleteWhenIdle to avoid
+// deleting a sequence that is playing.
+func (r *Store) Delete(id string) error {
 	if !jsonfile.ValidID(id) {
-		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.sequences[id]; !ok {
-		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	if err := os.Remove(r.pathForIDLocked(id)); err != nil && !os.IsNotExist(err) {
 		return err
@@ -268,7 +262,7 @@ func (r *EventSequenceRegistry) Delete(id string) error {
 // ResolveStep renders step with the sequence, step and runtime variables
 // (later ones win) and returns it ready to dispatch. A step that references a
 // template starts from the template's render and applies the step overrides.
-func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenceStep, runtimeVars map[string]string, index int) (socket.Dispatch, error) {
+func (r *Store) ResolveStep(seq Sequence, step Step, runtimeVars map[string]string, index int) (socket.Dispatch, error) {
 	vars, err := sequenceVariablesToStrings(seq.Vars, step.VarsOverride)
 	if err != nil {
 		return socket.Dispatch{}, err
@@ -335,7 +329,7 @@ func (r *EventSequenceRegistry) ResolveStep(seq EventSequence, step EventSequenc
 	}, nil
 }
 
-func (r *EventSequenceRegistry) validate(seq EventSequence) error {
+func (r *Store) validate(seq Sequence) error {
 	if seq.Version != 1 {
 		return fmt.Errorf("unsupported event sequence version %d", seq.Version)
 	}
@@ -411,9 +405,9 @@ func (r *EventSequenceRegistry) validate(seq EventSequence) error {
 	return nil
 }
 
-func (r *EventSequenceRegistry) nextIDLocked(name string) string {
+func (r *Store) nextIDLocked(name string) string {
 	for attempt := 0; ; attempt++ {
-		id := eventSequenceID(name, attempt)
+		id := sequenceID(name, attempt)
 		if _, exists := r.sequences[id]; !exists {
 			if _, err := os.Stat(r.pathForIDLocked(id)); errors.Is(err, os.ErrNotExist) {
 				return id
@@ -422,15 +416,15 @@ func (r *EventSequenceRegistry) nextIDLocked(name string) string {
 	}
 }
 
-func (r *EventSequenceRegistry) writeLocked(seq EventSequence, overwrite bool) error {
+func (r *Store) writeLocked(seq Sequence, overwrite bool) error {
 	return jsonfile.Write(r.pathForIDLocked(seq.ID), seq, overwrite)
 }
 
-func (r *EventSequenceRegistry) pathForIDLocked(id string) string {
+func (r *Store) pathForIDLocked(id string) string {
 	return filepath.Join(r.dir, id+".json")
 }
 
-func normalizeEventSequence(seq EventSequence) EventSequence {
+func normalize(seq Sequence) Sequence {
 	if seq.Version == 0 {
 		seq.Version = 1
 	}
@@ -469,7 +463,7 @@ func normalizeEventSequence(seq EventSequence) EventSequence {
 	return seq
 }
 
-func assignSequenceStepIDs(seq *EventSequence) {
+func assignSequenceStepIDs(seq *Sequence) {
 	seen := make(map[string]struct{}, len(seq.Steps))
 	for i := range seq.Steps {
 		id := strings.TrimSpace(seq.Steps[i].ID)
@@ -480,7 +474,7 @@ func assignSequenceStepIDs(seq *EventSequence) {
 			}
 		}
 		for attempt := 0; ; attempt++ {
-			next := eventSequenceStepID(seq.Name, seq.Steps[i], i, attempt)
+			next := stepID(seq.Name, seq.Steps[i], i, attempt)
 			if _, ok := seen[next]; !ok {
 				seq.Steps[i].ID = next
 				seen[next] = struct{}{}
@@ -490,11 +484,11 @@ func assignSequenceStepIDs(seq *EventSequence) {
 	}
 }
 
-func eventSequenceID(name string, attempt int) string {
+func sequenceID(name string, attempt int) string {
 	return jsonfile.HashedID(name, "event-sequence", jsonfile.NameAttempt(name, attempt))
 }
 
-func eventSequenceStepID(name string, step EventSequenceStep, index int, attempt int) string {
+func stepID(name string, step Step, index int, attempt int) string {
 	input := fmt.Sprintf("%s\n%d\n%s\n%s\n%s\n%s\n%d", name, index, step.Name, step.TemplateRef, step.Channel, string(step.Payload), attempt)
 	sum := sha256.Sum256([]byte(input))
 	return "step-" + hex.EncodeToString(sum[:])[:8]
@@ -509,7 +503,7 @@ func isSequenceOnEnd(onEnd string) bool {
 	}
 }
 
-func cloneEventSequence(seq EventSequence) EventSequence {
+func clone(seq Sequence) Sequence {
 	if seq.Vars != nil {
 		vars := make(map[string]json.RawMessage, len(seq.Vars))
 		for key, value := range seq.Vars {
@@ -518,16 +512,16 @@ func cloneEventSequence(seq EventSequence) EventSequence {
 		seq.Vars = vars
 	}
 	if seq.Steps != nil {
-		steps := make([]EventSequenceStep, len(seq.Steps))
+		steps := make([]Step, len(seq.Steps))
 		for i, step := range seq.Steps {
-			steps[i] = cloneEventSequenceStep(step)
+			steps[i] = cloneStep(step)
 		}
 		seq.Steps = steps
 	}
 	return seq
 }
 
-func cloneEventSequenceStep(step EventSequenceStep) EventSequenceStep {
+func cloneStep(step Step) Step {
 	step.Payload = append(json.RawMessage(nil), step.Payload...)
 	if step.VarsOverride != nil {
 		vars := make(map[string]json.RawMessage, len(step.VarsOverride))
@@ -595,7 +589,7 @@ func validateSequenceVariableKeys(vars map[string]json.RawMessage, label string)
 
 // validateSequenceVariableKeyCollisions runs against raw input before
 // normalize trims keys, so "foo" and " foo " are caught.
-func validateSequenceVariableKeyCollisions(seq EventSequence) error {
+func validateSequenceVariableKeyCollisions(seq Sequence) error {
 	if err := validateSequenceVariableKeys(seq.Vars, "sequence vars"); err != nil {
 		return err
 	}
@@ -605,233 +599,4 @@ func validateSequenceVariableKeyCollisions(seq EventSequence) error {
 		}
 	}
 	return nil
-}
-
-func decodeEventSequenceJSON(w http.ResponseWriter, r *http.Request, dst any, allowEmpty bool) bool {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxEventSequenceBodyBytes))
-	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-		} else {
-			http.Error(w, "failed to read request body: "+err.Error(), http.StatusBadRequest)
-		}
-		return false
-	}
-	if len(strings.TrimSpace(string(body))) == 0 {
-		if allowEmpty {
-			return true
-		}
-		http.Error(w, "request body is required", http.StatusBadRequest)
-		return false
-	}
-	if err := json.Unmarshal(body, dst); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
-		return false
-	}
-	return true
-}
-
-func splitSequencePath(rest string) (id string, action string, ok bool) {
-	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) == 1 && jsonfile.ValidID(parts[0]) {
-		return parts[0], "", true
-	}
-	if len(parts) == 2 && jsonfile.ValidID(parts[0]) {
-		switch parts[1] {
-		case "play", "pause", "stop", "seek", "speed":
-			return parts[0], parts[1], true
-		}
-	}
-	return "", "", false
-}
-
-func RegisterSequenceRoutes(mux *http.ServeMux, registry *EventSequenceRegistry, player *SequencePlayer, broadcaster *PlayerBroadcaster) {
-	if registry == nil || player == nil {
-		return
-	}
-	mux.HandleFunc("/__ditto__/api/sequences", func(w http.ResponseWriter, r *http.Request) {
-		if !socket.OriginAllowed(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(eventSequencesResponse{Sequences: registry.Sequences()})
-		case http.MethodPost:
-			if !hasJSONContentType(r) {
-				http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
-				return
-			}
-			var seq EventSequence
-			if ok := decodeEventSequenceJSON(w, r, &seq, false); !ok {
-				return
-			}
-			created, err := registry.Create(seq)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(created)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-	mux.HandleFunc("/__ditto__/api/sequences/state", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !socket.OriginAllowed(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"states": player.States()})
-	})
-	mux.HandleFunc("/__ditto__/api/sequences/events", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !socket.OriginAllowed(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		if broadcaster == nil {
-			http.Error(w, "player broadcaster is not available", http.StatusInternalServerError)
-			return
-		}
-		broadcaster.ServeHTTP(w, r)
-	})
-	mux.HandleFunc("/__ditto__/api/sequences/", func(w http.ResponseWriter, r *http.Request) {
-		if !socket.OriginAllowed(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		rest := strings.TrimPrefix(r.URL.Path, "/__ditto__/api/sequences/")
-		id, action, ok := splitSequencePath(rest)
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		if action != "" {
-			handleSequencePlayerAction(w, r, player, id, action)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			seq, err := registry.Get(id)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusNotFound)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(seq)
-		case http.MethodPut:
-			if !hasJSONContentType(r) {
-				http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
-				return
-			}
-			var seq EventSequence
-			if ok := decodeEventSequenceJSON(w, r, &seq, false); !ok {
-				return
-			}
-			updated, err := registry.Update(id, seq)
-			if err != nil {
-				status := http.StatusBadRequest
-				if errors.Is(err, ErrEventSequenceNotFound) {
-					status = http.StatusNotFound
-				}
-				http.Error(w, err.Error(), status)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(updated)
-		case http.MethodDelete:
-			if err := player.DeleteWhenIdle(id, func() error {
-				return registry.Delete(id)
-			}); err != nil {
-				status := http.StatusNotFound
-				if errors.Is(err, ErrSequencePlayerActive) {
-					status = http.StatusConflict
-				}
-				http.Error(w, err.Error(), status)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-}
-
-func handleSequencePlayerAction(w http.ResponseWriter, r *http.Request, player *SequencePlayer, id string, action string) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if requestHasBody(r) && !hasJSONContentType(r) {
-		http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
-		return
-	}
-	var state PlayerState
-	var err error
-	switch action {
-	case "play":
-		var req sequencePlayRequest
-		if ok := decodeEventSequenceJSON(w, r, &req, true); !ok {
-			return
-		}
-		vars, varErr := eventtemplate.VarsFromJSON(req.Vars)
-		if varErr != nil {
-			http.Error(w, varErr.Error(), http.StatusBadRequest)
-			return
-		}
-		opts := PlayOptions{Vars: vars}
-		if req.StartStep != nil {
-			opts.StartStep = *req.StartStep
-		}
-		if req.Speed != nil {
-			opts.Speed = *req.Speed
-			opts.SpeedSet = true
-		}
-		state, err = player.Play(id, opts)
-	case "pause":
-		state, err = player.Pause(id)
-	case "stop":
-		state, err = player.Stop(id)
-	case "seek":
-		var req sequenceSeekRequest
-		if ok := decodeEventSequenceJSON(w, r, &req, false); !ok {
-			return
-		}
-		state, err = player.Seek(id, req.Step)
-	case "speed":
-		var req sequenceSpeedRequest
-		if ok := decodeEventSequenceJSON(w, r, &req, false); !ok {
-			return
-		}
-		state, err = player.SetSpeed(id, req.Speed)
-	default:
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, ErrEventSequenceNotFound) {
-			status = http.StatusNotFound
-		}
-		http.Error(w, err.Error(), status)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(state)
-}
-
-func requestHasBody(r *http.Request) bool {
-	return r.Body != nil && r.ContentLength != 0
 }

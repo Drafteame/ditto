@@ -1,4 +1,4 @@
-package main
+package sequence
 
 import (
 	"encoding/json"
@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"ditto/internal/eventtemplate"
-	"ditto/internal/jsonfile"
 )
 
 func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
@@ -16,15 +15,15 @@ func TestEventSequenceRegistryCRUDAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  " Ticket Flow ",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{{
+		Steps: []Step{{
 			DelayMs: 0,
 			Channel: "tickets",
 			Payload: json.RawMessage(`{"id":"{{ticketId}}"}`),
@@ -69,17 +68,17 @@ func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Typed Vars",
 		OnEnd: "stay",
 		Vars: map[string]json.RawMessage{
 			"matchId": json.RawMessage(`12345`),
 		},
-		Steps: []EventSequenceStep{{
+		Steps: []Step{{
 			DelayMs: 0,
 			Channel: "matches",
 			Payload: json.RawMessage(`{"matchId":"{{int:matchId}}"}`),
@@ -102,10 +101,10 @@ func TestEventSequenceVarsAcceptTypedJSONValues(t *testing.T) {
 
 func TestEventSequenceUpdatePreservesStepIDsWhenSent(t *testing.T) {
 	reg := newTestSequenceRegistry(t)
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "IDs",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{{
+		Steps: []Step{{
 			DelayMs: 0,
 			Channel: "tickets",
 			Payload: json.RawMessage(`{"ok":true}`),
@@ -127,10 +126,10 @@ func TestEventSequenceUpdatePreservesStepIDsWhenSent(t *testing.T) {
 
 func TestEventSequenceUpdateRegeneratesMissingStepIDs(t *testing.T) {
 	reg := newTestSequenceRegistry(t)
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Missing IDs",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{{
+		Steps: []Step{{
 			DelayMs: 0,
 			Channel: "tickets",
 			Payload: json.RawMessage(`{"ok":true}`),
@@ -151,14 +150,14 @@ func TestEventSequenceUpdateRegeneratesMissingStepIDs(t *testing.T) {
 
 func TestEventSequenceRejectsTrimmedVariableKeyCollision(t *testing.T) {
 	reg := newTestSequenceRegistry(t)
-	_, err := reg.Create(EventSequence{
+	_, err := reg.Create(Sequence{
 		Name:  "Collision",
 		OnEnd: "stay",
 		Vars: map[string]json.RawMessage{
 			"foo":   json.RawMessage(`"a"`),
 			" foo ": json.RawMessage(`"b"`),
 		},
-		Steps: []EventSequenceStep{{
+		Steps: []Step{{
 			DelayMs: 0,
 			Channel: "tickets",
 			Payload: json.RawMessage(`{"ok":true}`),
@@ -169,29 +168,14 @@ func TestEventSequenceRejectsTrimmedVariableKeyCollision(t *testing.T) {
 	}
 }
 
-func TestSequenceIDsRejectDotsAndSlashesInPath(t *testing.T) {
-	invalid := []string{".", "..", "../x", "x/y", `x\y`}
-	for _, id := range invalid {
-		if jsonfile.ValidID(id) {
-			t.Fatalf("expected id %q to be unsafe", id)
-		}
-		if gotID, _, ok := splitSequencePath(id); ok {
-			t.Fatalf("expected path %q to be rejected, got id %q", id, gotID)
-		}
-	}
-	if jsonfile.ValidID("my.seq-abc12345") {
-		t.Fatal("interior dots should be rejected by slug-safe ids")
-	}
-}
-
-func newTestSequenceRegistry(t *testing.T) *EventSequenceRegistry {
+func newTestSequenceRegistry(t *testing.T) *Store {
 	t.Helper()
 	dir := t.TempDir()
 	templates, err := eventtemplate.NewStore(filepath.Join(dir, "templates"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package main
+package sequence
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"sort"
 	"strings"
@@ -18,19 +19,23 @@ import (
 	"ditto/internal/socket"
 )
 
-var ErrSequencePlayerActive = errors.New("sequence has an active player")
+// ErrActive is returned when deleting a sequence that is playing or paused.
+var ErrActive = errors.New("sequence has an active player")
 
-type PlayerStatus string
+// Status is a player's state for one sequence.
+type Status string
 
 const (
-	PlayerIdle      PlayerStatus = "idle"
-	PlayerPlaying   PlayerStatus = "playing"
-	PlayerPaused    PlayerStatus = "paused"
-	PlayerCompleted PlayerStatus = "completed"
-	PlayerStopped   PlayerStatus = "stopped"
-	PlayerError     PlayerStatus = "error"
+	StatusIdle      Status = "idle"
+	StatusPlaying   Status = "playing"
+	StatusPaused    Status = "paused"
+	StatusCompleted Status = "completed"
+	StatusStopped   Status = "stopped"
+	StatusError     Status = "error"
 )
 
+// PlayOptions configures a run: runtime variables, the starting step and
+// the speed (honoured only when SpeedSet, so 0 can mean "no delays").
 type PlayOptions struct {
 	Vars      map[string]string
 	StartStep int
@@ -38,28 +43,30 @@ type PlayOptions struct {
 	SpeedSet  bool
 }
 
-type PlayerState struct {
-	SequenceID          string       `json:"sequence_id"`
-	Status              PlayerStatus `json:"status"`
-	CurrentStep         int          `json:"current_step"`
-	TotalSteps          int          `json:"total_steps"`
-	Speed               float64      `json:"speed"`
-	StartedAt           *time.Time   `json:"started_at,omitempty"`
-	UpdatedAt           time.Time    `json:"updated_at"`
-	LastError           string       `json:"last_error,omitempty"`
-	LastDispatchSummary string       `json:"last_dispatch_summary,omitempty"`
+// State is a sequence's playback state.
+type State struct {
+	SequenceID          string     `json:"sequence_id"`
+	Status              Status     `json:"status"`
+	CurrentStep         int        `json:"current_step"`
+	TotalSteps          int        `json:"total_steps"`
+	Speed               float64    `json:"speed"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+	LastError           string     `json:"last_error,omitempty"`
+	LastDispatchSummary string     `json:"last_dispatch_summary,omitempty"`
 }
 
-type PlayerEvent struct {
-	Type            string      `json:"type"`
-	State           PlayerState `json:"state"`
-	SequenceID      string      `json:"sequence_id"`
-	StepID          string      `json:"step_id,omitempty"`
-	StepIndex       int         `json:"step_index,omitempty"`
-	DelayMs         int64       `json:"delay_ms,omitempty"`
-	DispatchSummary string      `json:"dispatch_summary,omitempty"`
-	Error           string      `json:"error,omitempty"`
-	At              time.Time   `json:"at"`
+// Event is a player notification sent to dashboard subscribers.
+type Event struct {
+	Type            string    `json:"type"`
+	State           State     `json:"state"`
+	SequenceID      string    `json:"sequence_id"`
+	StepID          string    `json:"step_id,omitempty"`
+	StepIndex       int       `json:"step_index,omitempty"`
+	DelayMs         int64     `json:"delay_ms,omitempty"`
+	DispatchSummary string    `json:"dispatch_summary,omitempty"`
+	Error           string    `json:"error,omitempty"`
+	At              time.Time `json:"at"`
 }
 
 type stepCacheEntry struct {
@@ -67,17 +74,20 @@ type stepCacheEntry struct {
 	encoded     adapter.Payload
 }
 
-type PlayerBroadcaster struct {
+// Broadcaster fans player events out to SSE subscribers.
+type Broadcaster struct {
 	mu      sync.Mutex
-	clients map[chan PlayerEvent]struct{}
+	clients map[chan Event]struct{}
 }
 
-func NewPlayerBroadcaster() *PlayerBroadcaster {
-	return &PlayerBroadcaster{clients: make(map[chan PlayerEvent]struct{})}
+// NewBroadcaster returns a broadcaster with no subscribers.
+func NewBroadcaster() *Broadcaster {
+	return &Broadcaster{clients: make(map[chan Event]struct{})}
 }
 
-func (b *PlayerBroadcaster) Subscribe() chan PlayerEvent {
-	ch := make(chan PlayerEvent, 64)
+// Subscribe returns a channel of later events.
+func (b *Broadcaster) Subscribe() chan Event {
+	ch := make(chan Event, 64)
 	b.mu.Lock()
 	b.clients[ch] = struct{}{}
 	b.mu.Unlock()
@@ -89,13 +99,15 @@ func (b *PlayerBroadcaster) Subscribe() chan PlayerEvent {
 // The channel is intentionally not closed: Publish snapshots subscribers under
 // the lock and sends without the lock held, so a concurrent close could panic.
 // Owning goroutines should exit on their own signal, usually r.Context().Done().
-func (b *PlayerBroadcaster) Unsubscribe(ch chan PlayerEvent) {
+func (b *Broadcaster) Unsubscribe(ch chan Event) {
 	b.mu.Lock()
 	delete(b.clients, ch)
 	b.mu.Unlock()
 }
 
-func (b *PlayerBroadcaster) Publish(event PlayerEvent) {
+// Publish sends event to every subscriber, dropping it for those whose
+// buffer is full.
+func (b *Broadcaster) Publish(event Event) {
 	if b == nil {
 		return
 	}
@@ -103,7 +115,7 @@ func (b *PlayerBroadcaster) Publish(event PlayerEvent) {
 		event.At = time.Now().UTC()
 	}
 	b.mu.Lock()
-	clients := make([]chan PlayerEvent, 0, len(b.clients))
+	clients := make([]chan Event, 0, len(b.clients))
 	for ch := range b.clients {
 		clients = append(clients, ch)
 	}
@@ -116,7 +128,8 @@ func (b *PlayerBroadcaster) Publish(event PlayerEvent) {
 	}
 }
 
-func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP streams player events as server-sent events.
+func (b *Broadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
@@ -148,34 +161,37 @@ func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type SequencePlayer struct {
-	reg         *EventSequenceRegistry
+// Player runs sequences on the socket hub, one runner goroutine per
+// sequence, and publishes their progress. It is safe for concurrent use.
+type Player struct {
+	reg         *Store
 	schemas     *schema.Registry
 	hub         *socket.Hub
-	broadcaster *PlayerBroadcaster
+	broadcaster *Broadcaster
 	clock       Clock
 
 	mu      sync.RWMutex
 	runners map[string]*sequenceRunner
 }
 
-// SequencePlayerConfig holds the player's collaborators. Sequences, Hub and
+// PlayerConfig holds the player's collaborators. Sequences, Hub and
 // Broadcaster are required; Schemas is needed only for protobuf steps and a
 // nil Clock uses the system clock.
-type SequencePlayerConfig struct {
-	Sequences   *EventSequenceRegistry
+type PlayerConfig struct {
+	Sequences   *Store
 	Schemas     *schema.Registry
 	Hub         *socket.Hub
-	Broadcaster *PlayerBroadcaster
+	Broadcaster *Broadcaster
 	Clock       Clock
 }
 
-func NewSequencePlayer(cfg SequencePlayerConfig) *SequencePlayer {
+// NewPlayer returns a player with no running sequences.
+func NewPlayer(cfg PlayerConfig) *Player {
 	clock := cfg.Clock
 	if clock == nil {
 		clock = systemClock
 	}
-	return &SequencePlayer{
+	return &Player{
 		reg:         cfg.Sequences,
 		schemas:     cfg.Schemas,
 		hub:         cfg.Hub,
@@ -185,22 +201,24 @@ func NewSequencePlayer(cfg SequencePlayerConfig) *SequencePlayer {
 	}
 }
 
-func (p *SequencePlayer) Play(id string, opts PlayOptions) (PlayerState, error) {
+// Play starts the sequence, resumes it when paused, or returns its state
+// when it is already playing.
+func (p *Player) Play(id string, opts PlayOptions) (State, error) {
 	// TODO: M7 — support fire-and-forget runs for HTTP triggers so concurrent
 	// trigger hits can launch independent snapshots of the same sequence ID.
 	if !jsonfile.ValidID(id) {
-		return PlayerState{}, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return State{}, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	opts = normalizePlayOptions(opts)
 
 	p.mu.Lock()
 	if runner := p.runners[id]; runner != nil {
 		state := runner.State()
-		if state.Status == PlayerPlaying {
+		if state.Status == StatusPlaying {
 			p.mu.Unlock()
 			return state, nil
 		}
-		if state.Status == PlayerPaused {
+		if state.Status == StatusPaused {
 			p.mu.Unlock()
 			return runner.command(playerCommand{kind: playerCommandResume, opts: opts})
 		}
@@ -210,11 +228,11 @@ func (p *SequencePlayer) Play(id string, opts PlayOptions) (PlayerState, error) 
 	seq, err := p.reg.Get(id)
 	if err != nil {
 		p.mu.Unlock()
-		return PlayerState{}, err
+		return State{}, err
 	}
 	if err := p.reg.validate(seq); err != nil {
 		p.mu.Unlock()
-		return PlayerState{}, err
+		return State{}, err
 	}
 	runner := newSequenceRunner(p, seq, opts)
 	p.runners[id] = runner
@@ -224,59 +242,65 @@ func (p *SequencePlayer) Play(id string, opts PlayOptions) (PlayerState, error) 
 	return runner.State(), nil
 }
 
-func (p *SequencePlayer) Pause(id string) (PlayerState, error) {
+// Pause pauses a playing sequence, keeping the remaining delay.
+func (p *Player) Pause(id string) (State, error) {
 	runner, err := p.runner(id)
 	if err != nil {
-		return PlayerState{}, err
+		return State{}, err
 	}
 	return runner.command(playerCommand{kind: playerCommandPause})
 }
 
-func (p *SequencePlayer) Stop(id string) (PlayerState, error) {
+// Stop stops the sequence.
+func (p *Player) Stop(id string) (State, error) {
 	runner, err := p.runner(id)
 	if err != nil {
-		return PlayerState{}, err
+		return State{}, err
 	}
 	return runner.command(playerCommand{kind: playerCommandStop})
 }
 
-func (p *SequencePlayer) Seek(id string, step int) (PlayerState, error) {
+// Seek moves the sequence to step.
+func (p *Player) Seek(id string, step int) (State, error) {
 	runner, err := p.runner(id)
 	if err != nil {
-		return PlayerState{}, err
+		return State{}, err
 	}
 	return runner.command(playerCommand{kind: playerCommandSeek, step: step})
 }
 
-func (p *SequencePlayer) SetSpeed(id string, speed float64) (PlayerState, error) {
+// SetSpeed changes the playback speed, rescaling any pending delay.
+func (p *Player) SetSpeed(id string, speed float64) (State, error) {
 	if speed < 0 {
-		return PlayerState{}, fmt.Errorf("speed must be >= 0")
+		return State{}, fmt.Errorf("speed must be >= 0")
 	}
 	runner, err := p.runner(id)
 	if err != nil {
-		return PlayerState{}, err
+		return State{}, err
 	}
 	return runner.command(playerCommand{kind: playerCommandSpeed, speed: speed})
 }
 
-func (p *SequencePlayer) State(id string) (PlayerState, bool) {
+// State returns the sequence's playback state, if it has a runner.
+func (p *Player) State(id string) (State, bool) {
 	p.mu.RLock()
 	runner := p.runners[id]
 	p.mu.RUnlock()
 	if runner == nil {
-		return PlayerState{}, false
+		return State{}, false
 	}
 	return runner.State(), true
 }
 
-func (p *SequencePlayer) States() []PlayerState {
+// States returns the playback state of every sequence with a runner.
+func (p *Player) States() []State {
 	p.mu.RLock()
 	runners := make([]*sequenceRunner, 0, len(p.runners))
 	for _, runner := range p.runners {
 		runners = append(runners, runner)
 	}
 	p.mu.RUnlock()
-	states := make([]PlayerState, 0, len(runners))
+	states := make([]State, 0, len(runners))
 	for _, runner := range runners {
 		states = append(states, runner.State())
 	}
@@ -286,7 +310,8 @@ func (p *SequencePlayer) States() []PlayerState {
 	return states
 }
 
-func (p *SequencePlayer) Shutdown(ctx context.Context) error {
+// Shutdown stops every runner, waiting until ctx is done.
+func (p *Player) Shutdown(ctx context.Context) error {
 	p.mu.Lock()
 	runners := make([]*sequenceRunner, 0, len(p.runners))
 	for id, runner := range p.runners {
@@ -313,17 +338,19 @@ func (p *SequencePlayer) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error {
+// DeleteWhenIdle calls deleteFn unless the sequence is playing or paused,
+// in which case it returns ErrActive.
+func (p *Player) DeleteWhenIdle(id string, deleteFn func() error) error {
 	if !jsonfile.ValidID(id) {
-		return fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	p.mu.Lock()
 	runner := p.runners[id]
 	if runner != nil {
 		state := runner.State()
-		if isActivePlayerStatus(state.Status) {
+		if isActiveStatus(state.Status) {
 			p.mu.Unlock()
-			return ErrSequencePlayerActive
+			return ErrActive
 		}
 	}
 	if err := deleteFn(); err != nil {
@@ -340,15 +367,15 @@ func (p *SequencePlayer) DeleteWhenIdle(id string, deleteFn func() error) error 
 	return nil
 }
 
-func (p *SequencePlayer) runner(id string) (*sequenceRunner, error) {
+func (p *Player) runner(id string) (*sequenceRunner, error) {
 	if !jsonfile.ValidID(id) {
-		return nil, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return nil, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	p.mu.RLock()
 	runner := p.runners[id]
 	p.mu.RUnlock()
 	if runner == nil {
-		return nil, fmt.Errorf("%w: %q", ErrEventSequenceNotFound, id)
+		return nil, fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	return runner, nil
 }
@@ -373,13 +400,13 @@ type playerCommand struct {
 }
 
 type playerCommandReply struct {
-	state PlayerState
+	state State
 	err   error
 }
 
 type sequenceRunner struct {
-	player *SequencePlayer
-	seq    EventSequence
+	player *Player
+	seq    Sequence
 	vars   map[string]string
 	cache  map[string]stepCacheEntry
 
@@ -387,15 +414,15 @@ type sequenceRunner struct {
 	done     chan struct{}
 
 	mu    sync.RWMutex
-	state PlayerState
+	state State
 }
 
-func newSequenceRunner(player *SequencePlayer, seq EventSequence, opts PlayOptions) *sequenceRunner {
+func newSequenceRunner(player *Player, seq Sequence, opts PlayOptions) *sequenceRunner {
 	now := player.clock.Now().UTC()
 	current := clampStep(opts.StartStep, len(seq.Steps))
-	state := PlayerState{
+	state := State{
 		SequenceID:  seq.ID,
-		Status:      PlayerPlaying,
+		Status:      StatusPlaying,
 		CurrentStep: current,
 		TotalSteps:  len(seq.Steps),
 		Speed:       opts.Speed,
@@ -404,8 +431,8 @@ func newSequenceRunner(player *SequencePlayer, seq EventSequence, opts PlayOptio
 	}
 	return &sequenceRunner{
 		player:   player,
-		seq:      cloneEventSequence(seq),
-		vars:     cloneStringMap(opts.Vars),
+		seq:      clone(seq),
+		vars:     maps.Clone(opts.Vars),
 		cache:    make(map[string]stepCacheEntry),
 		commands: make(chan playerCommand, 16),
 		done:     make(chan struct{}),
@@ -418,21 +445,21 @@ func (r *sequenceRunner) start() {
 	r.publishState("state")
 }
 
-func (r *sequenceRunner) State() PlayerState {
+func (r *sequenceRunner) State() State {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return clonePlayerState(r.state)
+	return cloneState(r.state)
 }
 
-func (r *sequenceRunner) setState(mut func(*PlayerState)) PlayerState {
+func (r *sequenceRunner) setState(mut func(*State)) State {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	mut(&r.state)
 	r.state.UpdatedAt = r.player.clock.Now().UTC()
-	return clonePlayerState(r.state)
+	return cloneState(r.state)
 }
 
-func (r *sequenceRunner) command(cmd playerCommand) (PlayerState, error) {
+func (r *sequenceRunner) command(cmd playerCommand) (State, error) {
 	cmd.reply = make(chan playerCommandReply, 1)
 	select {
 	case r.commands <- cmd:
@@ -465,11 +492,11 @@ func (r *sequenceRunner) loop() {
 	var remaining time.Duration
 	for {
 		state := r.State()
-		if state.Status == PlayerPlaying && !waiting {
+		if state.Status == StatusPlaying && !waiting {
 			if state.CurrentStep >= len(r.seq.Steps) {
 				r.complete()
 				state = r.State()
-				if state.Status != PlayerPlaying {
+				if state.Status != StatusPlaying {
 					continue
 				}
 			}
@@ -529,7 +556,7 @@ func (r *sequenceRunner) loop() {
 }
 
 func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting bool, waitUntil time.Time, remaining time.Duration) (bool, time.Duration, bool) {
-	reply := func(state PlayerState, err error) {
+	reply := func(state State, err error) {
 		if cmd.reply != nil {
 			cmd.reply <- playerCommandReply{state: state, err: err}
 		}
@@ -537,7 +564,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 	switch cmd.kind {
 	case playerCommandResume:
 		current := r.State()
-		if current.Status != PlayerPaused {
+		if current.Status != StatusPaused {
 			reply(current, fmt.Errorf("cannot resume: status is %s", current.Status))
 			return waiting, remaining, false
 		}
@@ -549,8 +576,8 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 		if nextRemaining > 0 {
 			resetTimer(timer, nextRemaining)
 		}
-		state := r.setState(func(s *PlayerState) {
-			s.Status = PlayerPlaying
+		state := r.setState(func(s *State) {
+			s.Status = StatusPlaying
 			s.LastError = ""
 			if opts.SpeedSet {
 				s.Speed = opts.Speed
@@ -564,7 +591,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 		return nextRemaining > 0, nextRemaining, false
 	case playerCommandPause:
 		current := r.State()
-		if current.Status != PlayerPlaying {
+		if current.Status != StatusPlaying {
 			reply(current, fmt.Errorf("cannot pause: status is %s", current.Status))
 			return waiting, remaining, false
 		}
@@ -575,9 +602,9 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 				remaining = 0
 			}
 		}
-		state := r.setState(func(s *PlayerState) {
-			if s.Status == PlayerPlaying {
-				s.Status = PlayerPaused
+		state := r.setState(func(s *State) {
+			if s.Status == StatusPlaying {
+				s.Status = StatusPaused
 			}
 		})
 		r.publishState("state")
@@ -585,15 +612,15 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 		return false, remaining, false
 	case playerCommandStop:
 		current := r.State()
-		if !isActivePlayerStatus(current.Status) {
+		if !isActiveStatus(current.Status) {
 			reply(current, fmt.Errorf("cannot stop: status is %s", current.Status))
 			return waiting, remaining, false
 		}
 		if waiting {
 			stopTimer(timer)
 		}
-		state := r.setState(func(s *PlayerState) {
-			s.Status = PlayerStopped
+		state := r.setState(func(s *State) {
+			s.Status = StatusStopped
 		})
 		r.publishState("stopped")
 		reply(state, nil)
@@ -603,7 +630,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 			stopTimer(timer)
 		}
 		step := clampStep(cmd.step, len(r.seq.Steps))
-		state := r.setState(func(s *PlayerState) {
+		state := r.setState(func(s *State) {
 			s.CurrentStep = step
 			s.LastError = ""
 		})
@@ -628,12 +655,12 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 			if nextRemaining > 0 {
 				resetTimer(timer, nextRemaining)
 			}
-		} else if currentState.Status == PlayerPaused && remaining > 0 {
+		} else if currentState.Status == StatusPaused && remaining > 0 {
 			nextRemaining = rescaleRemaining(remaining, oldSpeed, cmd.speed)
 		} else {
 			nextRemaining = remaining
 		}
-		state := r.setState(func(s *PlayerState) {
+		state := r.setState(func(s *State) {
 			s.Speed = cmd.speed
 		})
 		r.publishState("state")
@@ -646,12 +673,12 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 		if waiting {
 			stopTimer(timer)
 		}
-		state := r.setState(func(s *PlayerState) {
-			if isActivePlayerStatus(s.Status) {
-				s.Status = PlayerStopped
+		state := r.setState(func(s *State) {
+			if isActiveStatus(s.Status) {
+				s.Status = StatusStopped
 			}
 		})
-		if state.Status == PlayerStopped {
+		if state.Status == StatusStopped {
 			r.publishState("stopped")
 		}
 		reply(state, nil)
@@ -664,7 +691,7 @@ func (r *sequenceRunner) handleCommand(cmd playerCommand, timer Timer, waiting b
 
 func (r *sequenceRunner) dispatchCurrentStep() {
 	state := r.State()
-	if state.Status != PlayerPlaying || state.CurrentStep >= len(r.seq.Steps) {
+	if state.Status != StatusPlaying || state.CurrentStep >= len(r.seq.Steps) {
 		return
 	}
 	index := state.CurrentStep
@@ -685,7 +712,7 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 		return
 	}
 	summary := result.Summary()
-	r.setState(func(s *PlayerState) {
+	r.setState(func(s *State) {
 		s.CurrentStep = index + 1
 		s.LastDispatchSummary = summary
 	})
@@ -694,7 +721,7 @@ func (r *sequenceRunner) dispatchCurrentStep() {
 
 // encodeStep pre-encodes a protobuf step, reusing the cached bytes while the
 // step's type and payload are unchanged.
-func (r *sequenceRunner) encodeStep(step EventSequenceStep, dispatch socket.Dispatch) (socket.Dispatch, error) {
+func (r *sequenceRunner) encodeStep(step Step, dispatch socket.Dispatch) (socket.Dispatch, error) {
 	typeName := strings.TrimSpace(dispatch.TypeName)
 	if typeName == "" {
 		return dispatch, nil
@@ -720,8 +747,8 @@ func (r *sequenceRunner) encodeStep(step EventSequenceStep, dispatch socket.Disp
 
 func (r *sequenceRunner) fail(err error) {
 	// TODO: M5 — make per-step error policy configurable.
-	state := r.setState(func(s *PlayerState) {
-		s.Status = PlayerError
+	state := r.setState(func(s *State) {
+		s.Status = StatusError
 		s.LastError = err.Error()
 	})
 	r.publishError(state, err)
@@ -730,21 +757,21 @@ func (r *sequenceRunner) fail(err error) {
 func (r *sequenceRunner) complete() {
 	switch r.seq.OnEnd {
 	case "loop":
-		state := r.setState(func(s *PlayerState) {
+		state := r.setState(func(s *State) {
 			s.CurrentStep = 0
-			s.Status = PlayerPlaying
+			s.Status = StatusPlaying
 		})
 		r.publishStateSnapshot("looped", state)
 	case "reset":
-		state := r.setState(func(s *PlayerState) {
+		state := r.setState(func(s *State) {
 			s.CurrentStep = 0
-			s.Status = PlayerCompleted
+			s.Status = StatusCompleted
 		})
 		r.publishStateSnapshot("completed", state)
 	default:
-		state := r.setState(func(s *PlayerState) {
-			s.CurrentStep = maxInt(0, len(r.seq.Steps)-1)
-			s.Status = PlayerCompleted
+		state := r.setState(func(s *State) {
+			s.CurrentStep = max(0, len(r.seq.Steps)-1)
+			s.Status = StatusCompleted
 		})
 		r.publishStateSnapshot("completed", state)
 	}
@@ -754,8 +781,8 @@ func (r *sequenceRunner) publishState(kind string) {
 	r.publishStateSnapshot(kind, r.State())
 }
 
-func (r *sequenceRunner) publishStateSnapshot(kind string, state PlayerState) {
-	r.player.broadcaster.Publish(PlayerEvent{
+func (r *sequenceRunner) publishStateSnapshot(kind string, state State) {
+	r.player.broadcaster.Publish(Event{
 		Type:       kind,
 		State:      state,
 		SequenceID: r.seq.ID,
@@ -764,7 +791,7 @@ func (r *sequenceRunner) publishStateSnapshot(kind string, state PlayerState) {
 }
 
 func (r *sequenceRunner) publishStep(stepID string, stepIndex int, summary string) {
-	r.player.broadcaster.Publish(PlayerEvent{
+	r.player.broadcaster.Publish(Event{
 		Type:            "step",
 		State:           r.State(),
 		SequenceID:      r.seq.ID,
@@ -780,7 +807,7 @@ func (r *sequenceRunner) publishWaiting(stepIndex int, delay time.Duration) {
 		return
 	}
 	step := r.seq.Steps[stepIndex]
-	r.player.broadcaster.Publish(PlayerEvent{
+	r.player.broadcaster.Publish(Event{
 		Type:       "waiting",
 		State:      r.State(),
 		SequenceID: r.seq.ID,
@@ -791,8 +818,8 @@ func (r *sequenceRunner) publishWaiting(stepIndex int, delay time.Duration) {
 	})
 }
 
-func (r *sequenceRunner) publishError(state PlayerState, err error) {
-	r.player.broadcaster.Publish(PlayerEvent{
+func (r *sequenceRunner) publishError(state State, err error) {
+	r.player.broadcaster.Publish(Event{
 		Type:       "error",
 		State:      state,
 		SequenceID: r.seq.ID,
@@ -859,18 +886,7 @@ func resetTimer(timer Timer, d time.Duration) {
 	timer.Reset(d)
 }
 
-func cloneStringMap(in map[string]string) map[string]string {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func clonePlayerState(state PlayerState) PlayerState {
+func cloneState(state State) State {
 	if state.StartedAt != nil {
 		started := *state.StartedAt
 		state.StartedAt = &started
@@ -878,13 +894,6 @@ func clonePlayerState(state PlayerState) PlayerState {
 	return state
 }
 
-func isActivePlayerStatus(status PlayerStatus) bool {
-	return status == PlayerPlaying || status == PlayerPaused
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+func isActiveStatus(status Status) bool {
+	return status == StatusPlaying || status == StatusPaused
 }

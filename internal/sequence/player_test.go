@@ -1,4 +1,4 @@
-package main
+package sequence
 
 import (
 	"context"
@@ -28,14 +28,14 @@ func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Fast",
 		OnEnd: "reset",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 1_000, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 			{DelayMs: 1_000, Channel: "tickets", Payload: json.RawMessage(`{"n":2}`)},
 			{DelayMs: 1_000, Channel: "tickets", Payload: json.RawMessage(`{"n":3}`)},
@@ -45,10 +45,10 @@ func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
@@ -56,9 +56,9 @@ func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
 	}
 
 	var steps int
-	var completed PlayerState
+	var completed State
 	deadline := time.After(2 * time.Second)
-	for completed.Status != PlayerCompleted {
+	for completed.Status != StatusCompleted {
 		select {
 		case event := <-ch:
 			if event.Type == "step" {
@@ -85,25 +85,25 @@ func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Loop Event",
 		OnEnd: "loop",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 10, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestSequencePlayerLoopPublishesLoopedNotCompleted(t *testing.T) {
 	waitForRunnerArmed(t, ch, 500*time.Millisecond)
 	clock.Advance(10 * time.Millisecond)
 	event := waitForPlayerEvent(t, ch, "looped", 500*time.Millisecond)
-	if event.State.Status != PlayerPlaying {
+	if event.State.Status != StatusPlaying {
 		t.Fatalf("looped event should keep playing status, got %s", event.State.Status)
 	}
 	assertNoPlayerEvent(t, ch, "completed")
@@ -126,24 +126,24 @@ func TestSequencePlayerTerminalControlsReturnErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Terminal",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"n":"{{missing}}"}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -165,10 +165,10 @@ func TestSequenceRunnerCachesEncodedPayloadByStepAndPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &sequenceRunner{
-		player: &SequencePlayer{schemas: schemas},
+		player: &Player{schemas: schemas},
 		cache:  make(map[string]stepCacheEntry),
 	}
-	step := EventSequenceStep{ID: "step-cache"}
+	step := Step{ID: "step-cache"}
 	rendered := socket.Dispatch{
 		TypeName: "ditto.cache.Event",
 		Payload:  json.RawMessage(`{"id":"a"}`),
@@ -208,20 +208,20 @@ func TestSequencePlayerRejectsZeroStepSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	reg.mu.Lock()
-	reg.sequences["empty-00000000"] = EventSequence{
+	reg.sequences["empty-00000000"] = Sequence{
 		Version: 1,
 		ID:      "empty-00000000",
 		Name:    "Empty",
 		OnEnd:   "stay",
-		Steps:   []EventSequenceStep{},
+		Steps:   []Step{},
 	}
 	reg.mu.Unlock()
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewBroadcaster()})
 	if _, err := player.Play("empty-00000000", PlayOptions{}); err == nil {
 		t.Fatal("expected zero-step sequence to be rejected")
 	}
@@ -233,14 +233,14 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Controls",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"n":2}`)},
 		},
@@ -248,11 +248,11 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
@@ -263,7 +263,7 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != PlayerPaused {
+	if state.Status != StatusPaused {
 		t.Fatalf("expected paused, got %s", state.Status)
 	}
 	state, err = player.Seek(seq.ID, 1)
@@ -277,7 +277,7 @@ func TestSequencePlayerPauseSeekAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != PlayerStopped {
+	if state.Status != StatusStopped {
 		t.Fatalf("expected stopped, got %s", state.Status)
 	}
 }
@@ -288,14 +288,14 @@ func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Loop",
 		OnEnd: "loop",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"n":2}`)},
 			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"n":3}`)},
@@ -304,11 +304,11 @@ func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -319,7 +319,7 @@ func TestSequencePlayerZeroDelayLoopCanStop(t *testing.T) {
 	start := time.Now()
 	go func() {
 		state, err := player.Stop(seq.ID)
-		if err == nil && state.Status != PlayerStopped {
+		if err == nil && state.Status != StatusStopped {
 			err = errors.New("expected stopped state")
 		}
 		done <- err
@@ -343,25 +343,25 @@ func TestSequencePlayerSpeedZeroDuringWaitDispatchesImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Speed Zero",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -379,25 +379,25 @@ func TestSequencePlayerSpeedDuringPauseScalesRemaining(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Paused Speed",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 500, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -425,25 +425,25 @@ func TestSequencePlayerResumeWithDifferentSpeedRescales(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Resume Speed",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 500, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -468,25 +468,25 @@ func TestSequencePlayerSpeedDuringWaitScalesRemaining(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Wait Speed",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 500, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -508,25 +508,25 @@ func TestSequencePlayerStopDuringWaitDoesNotDispatchPendingStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Stop During Wait",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 500, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -545,25 +545,25 @@ func TestSequencePlayerEmitsWaitingEventBeforeStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Waiting",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 1_000, Channel: "tickets", Payload: json.RawMessage(`{"n":1}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
 	clock := newFakeClock(testClockStart())
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster, Clock: clock})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -595,24 +595,24 @@ func TestSequencePlayerTemplateDeletedMidRunErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Template Error",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 50, TemplateRef: tmpl.ID},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -632,34 +632,34 @@ func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	okSeq, err := reg.Create(EventSequence{
+	okSeq, err := reg.Create(Sequence{
 		Name:  "Broadcast OK",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"ok":true}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	errSeq, err := reg.Create(EventSequence{
+	errSeq, err := reg.Create(Sequence{
 		Name:  "Broadcast Error",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 0, Channel: "tickets", Payload: json.RawMessage(`{"bad":"{{missing}}"}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
 	defer player.Shutdown(t.Context())
 
 	if _, err := player.Play(okSeq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
@@ -669,10 +669,10 @@ func TestSequencePlayerBroadcastsStateStepCompletedStoppedAndError(t *testing.T)
 	waitForPlayerEvent(t, ch, "step", 500*time.Millisecond)
 	waitForPlayerEvent(t, ch, "completed", 500*time.Millisecond)
 
-	longSeq, err := reg.Create(EventSequence{
+	longSeq, err := reg.Create(Sequence{
 		Name:  "Broadcast Stopped",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"ok":true}`)},
 		},
 	})
@@ -699,21 +699,21 @@ func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Concurrent",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"ok":true}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewBroadcaster()})
 	defer player.Shutdown(t.Context())
 
 	var wg sync.WaitGroup
@@ -733,7 +733,7 @@ func TestSequencePlayerConcurrentPlayIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if states := player.States(); len(states) != 1 || states[0].Status != PlayerPlaying {
+	if states := player.States(); len(states) != 1 || states[0].Status != StatusPlaying {
 		t.Fatalf("expected one playing runner, got %#v", states)
 	}
 }
@@ -745,24 +745,24 @@ func TestSequencePlayerShutdownPublishesStoppedAndReleasesRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "Shutdown",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 10_000, Channel: "tickets", Payload: json.RawMessage(`{"ok":true}`)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	broadcaster := NewPlayerBroadcaster()
+	broadcaster := NewBroadcaster()
 	ch := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(ch)
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: broadcaster})
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -782,14 +782,14 @@ func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(Sequence{
 		Name:  "WS E2E",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{
+		Steps: []Step{
 			{DelayMs: 0, Channel: "/scores", Payload: json.RawMessage(`{"score":1}`)},
 			{DelayMs: 0, Channel: "/scores", Payload: json.RawMessage(`{"score":2}`)},
 		},
@@ -822,7 +822,7 @@ func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: hub, Broadcaster: NewPlayerBroadcaster()})
+	player := NewPlayer(PlayerConfig{Sequences: reg, Hub: hub, Broadcaster: NewBroadcaster()})
 	defer player.Shutdown(t.Context())
 	if _, err := player.Play(seq.ID, PlayOptions{Speed: 0, SpeedSet: true}); err != nil {
 		t.Fatal(err)
@@ -841,8 +841,8 @@ func TestSequencePlayerDispatchesToRawWebSocketClient(t *testing.T) {
 }
 
 func TestPlayerBroadcasterPublishUnsubscribeRace(t *testing.T) {
-	b := NewPlayerBroadcaster()
-	subs := make([]chan PlayerEvent, 100)
+	b := NewBroadcaster()
+	subs := make([]chan Event, 100)
 	for i := range subs {
 		subs[i] = b.Subscribe()
 	}
@@ -851,7 +851,7 @@ func TestPlayerBroadcasterPublishUnsubscribeRace(t *testing.T) {
 	var drainWG sync.WaitGroup
 	for _, ch := range subs {
 		drainWG.Add(1)
-		go func(ch chan PlayerEvent) {
+		go func(ch chan Event) {
 			defer drainWG.Done()
 			for {
 				select {
@@ -868,7 +868,7 @@ func TestPlayerBroadcasterPublishUnsubscribeRace(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 500; i++ {
-			b.Publish(PlayerEvent{Type: "step"})
+			b.Publish(Event{Type: "step"})
 			runtime.Gosched()
 		}
 	}()
@@ -884,7 +884,7 @@ func TestPlayerBroadcasterPublishUnsubscribeRace(t *testing.T) {
 	drainWG.Wait()
 }
 
-func waitForPlayerEvent(t *testing.T, ch <-chan PlayerEvent, eventType string, timeout time.Duration) PlayerEvent {
+func waitForPlayerEvent(t *testing.T, ch <-chan Event, eventType string, timeout time.Duration) Event {
 	t.Helper()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -900,12 +900,12 @@ func waitForPlayerEvent(t *testing.T, ch <-chan PlayerEvent, eventType string, t
 	}
 }
 
-func waitForRunnerArmed(t *testing.T, ch <-chan PlayerEvent, timeout time.Duration) PlayerEvent {
+func waitForRunnerArmed(t *testing.T, ch <-chan Event, timeout time.Duration) Event {
 	t.Helper()
 	return waitForPlayerEvent(t, ch, "waiting", timeout)
 }
 
-func assertNoPlayerEvent(t *testing.T, ch <-chan PlayerEvent, eventType string) {
+func assertNoPlayerEvent(t *testing.T, ch <-chan Event, eventType string) {
 	t.Helper()
 	timer := time.NewTimer(20 * time.Millisecond)
 	defer timer.Stop()

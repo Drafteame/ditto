@@ -16,7 +16,9 @@ import (
 	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/eventtemplate"
+	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
+	"ditto/internal/sequence"
 	"ditto/internal/socket"
 )
 
@@ -388,14 +390,14 @@ func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := sequence.NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(sequence.Sequence{
 		Name:  "Active",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{{
+		Steps: []sequence.Step{{
 			DelayMs: 10_000,
 			Channel: "tickets",
 			Payload: json.RawMessage(`{"ok":true}`),
@@ -404,14 +406,14 @@ func TestRegisterSequenceRoutesRejectsDeleteWhileActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
-	if _, err := player.Play(seq.ID, PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
+	player := sequence.NewPlayer(sequence.PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: sequence.NewBroadcaster()})
+	if _, err := player.Play(seq.ID, sequence.PlayOptions{Speed: 1, SpeedSet: true}); err != nil {
 		t.Fatal(err)
 	}
 	defer player.Shutdown(t.Context())
 
 	mux := http.NewServeMux()
-	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
+	RegisterSequenceRoutes(mux, reg, player, sequence.NewBroadcaster())
 	req := httptest.NewRequest(http.MethodDelete, "/__ditto__/api/sequences/"+seq.ID, nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
@@ -427,13 +429,13 @@ func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg, err := NewEventSequenceRegistry(filepath.Join(dir, "sequences"), templates, nil, nil)
+	reg, err := sequence.NewStore(filepath.Join(dir, "sequences"), templates, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
+	player := sequence.NewPlayer(sequence.PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: sequence.NewBroadcaster()})
 	mux := http.NewServeMux()
-	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
+	RegisterSequenceRoutes(mux, reg, player, sequence.NewBroadcaster())
 
 	req := httptest.NewRequest(http.MethodGet, "/__ditto__/api/sequences/%2e%2e/nope", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
@@ -456,10 +458,10 @@ func TestRegisterSequenceRoutesBodyLimitAndPathTraversal(t *testing.T) {
 
 func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
 	reg := newTestSequenceRegistry(t)
-	seq, err := reg.Create(EventSequence{
+	seq, err := reg.Create(sequence.Sequence{
 		Name:  "HTTP",
 		OnEnd: "stay",
-		Steps: []EventSequenceStep{{
+		Steps: []sequence.Step{{
 			DelayMs: 0,
 			Channel: "tickets",
 			Payload: json.RawMessage(`{"ok":true}`),
@@ -468,9 +470,9 @@ func TestRegisterSequenceRoutesRejectsBodyWithoutContentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	player := NewSequencePlayer(SequencePlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: NewPlayerBroadcaster()})
+	player := sequence.NewPlayer(sequence.PlayerConfig{Sequences: reg, Hub: socket.NewHub(socket.Config{Bus: eventlog.NewBus(nil)}), Broadcaster: sequence.NewBroadcaster()})
 	mux := http.NewServeMux()
-	RegisterSequenceRoutes(mux, reg, player, NewPlayerBroadcaster())
+	RegisterSequenceRoutes(mux, reg, player, sequence.NewBroadcaster())
 
 	req := httptest.NewRequest(http.MethodPost, "/__ditto__/api/sequences/"+seq.ID+"/seek", strings.NewReader(`{"step":0}`))
 	req.RemoteAddr = "127.0.0.1:1234"
@@ -509,5 +511,20 @@ func (w *cancelOnFlushRecorder) Flush() {
 	if !w.flushed {
 		w.flushed = true
 		w.cancel()
+	}
+}
+
+func TestSequenceIDsRejectDotsAndSlashesInPath(t *testing.T) {
+	invalid := []string{".", "..", "../x", "x/y", `x\y`}
+	for _, id := range invalid {
+		if jsonfile.ValidID(id) {
+			t.Fatalf("expected id %q to be unsafe", id)
+		}
+		if gotID, _, ok := splitSequencePath(id); ok {
+			t.Fatalf("expected path %q to be rejected, got id %q", id, gotID)
+		}
+	}
+	if jsonfile.ValidID("my.seq-abc12345") {
+		t.Fatal("interior dots should be rejected by slug-safe ids")
 	}
 }

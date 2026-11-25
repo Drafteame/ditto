@@ -1,12 +1,14 @@
-package main
+package sequence
 
 import "time"
 
+// Clock is the time source for delays; tests substitute a fake.
 type Clock interface {
 	Now() time.Time
 	NewTimer(d time.Duration) Timer
 }
 
+// Timer is the subset of *time.Timer the player uses.
 type Timer interface {
 	C() <-chan time.Time
 	Stop() bool

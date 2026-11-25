@@ -26,6 +26,7 @@ import (
 	"ditto/internal/httpmock"
 	"ditto/internal/recording"
 	"ditto/internal/schema"
+	"ditto/internal/sequence"
 	"ditto/internal/socket"
 )
 
@@ -132,8 +133,8 @@ type Server struct {
 	LiveTarget *socket.LiveTargets
 	Schemas    *schema.Registry
 	Templates  *eventtemplate.Store
-	Sequences  *EventSequenceRegistry
-	Player     *SequencePlayer
+	Sequences  *sequence.Store
+	Player     *sequence.Player
 	Info       ServerInfo
 	Config     ServerConfig
 	CertPath   string
@@ -194,7 +195,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event template registry: %w", err)
 	}
-	eventSequences, err := NewEventSequenceRegistry(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry, adapters)
+	eventSequences, err := sequence.NewStore(cfg.Layout.SequencesDir, eventTemplates, schemaRegistry, adapters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load event sequence registry: %w", err)
 	}
@@ -212,8 +213,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Adapters: adapters, Recorder: recorder, LiveTargets: liveTargets})
 	// Registered after the hub's own listener to keep the original call order.
 	modeRegistry.OnChange(recorder.HandleModeChange)
-	playerBroadcaster := NewPlayerBroadcaster()
-	sequencePlayer := NewSequencePlayer(SequencePlayerConfig{Sequences: eventSequences, Schemas: schemaRegistry, Hub: socketHub, Broadcaster: playerBroadcaster})
+	playerBroadcaster := sequence.NewBroadcaster()
+	sequencePlayer := sequence.NewPlayer(sequence.PlayerConfig{Sequences: eventSequences, Schemas: schemaRegistry, Hub: socketHub, Broadcaster: playerBroadcaster})
 
 	var certPath, keyPath string
 	if cfg.HTTPS {
