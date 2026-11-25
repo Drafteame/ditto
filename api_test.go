@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ditto/internal/eventlog"
+	"ditto/internal/schema"
 )
 
 func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
@@ -137,9 +138,9 @@ func TestEventTemplateRoutesRejectInvalidPayloadAndPathTraversal(t *testing.T) {
 }
 
 func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
-	schemas, err := NewSchemaRegistry(t.TempDir())
+	schemas, err := schema.NewRegistry(t.TempDir())
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("schema.NewRegistry() error = %v", err)
 	}
 	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
 	if err != nil {
@@ -170,9 +171,9 @@ func TestEventTemplateRoutesValidateSchemaAndNotFound(t *testing.T) {
 func TestEventTemplateDispatchWithDeletedSchemaFailsUsefully(t *testing.T) {
 	schemaRoot := t.TempDir()
 	packDir := writeProto(t, filepath.Join(schemaRoot, "events"), "event.proto", `syntax = "proto3"; package ditto.events; message Ticket { string ticket_id = 1; }`)
-	schemas, err := NewSchemaRegistry(schemaRoot)
+	schemas, err := schema.NewRegistry(schemaRoot)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("schema.NewRegistry() error = %v", err)
 	}
 	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"ditto/internal/jsonfile"
+	"ditto/internal/schema"
 )
 
 const (
@@ -62,7 +63,7 @@ type EventTemplateRegistry struct {
 	mu        sync.RWMutex
 	dir       string
 	templates map[string]EventTemplate
-	schemas   *SchemaRegistry
+	schemas   *schema.Registry
 	adapters  *AdapterRegistry
 }
 
@@ -86,7 +87,7 @@ type eventTemplateDispatchResponse struct {
 // NewEventTemplateRegistry loads the templates in dir. Templates that name an
 // adapter or schema type unknown to adapters or schemas are skipped, so both
 // must be loaded first.
-func NewEventTemplateRegistry(dir string, schemas *SchemaRegistry, adapters *AdapterRegistry) (*EventTemplateRegistry, error) {
+func NewEventTemplateRegistry(dir string, schemas *schema.Registry, adapters *AdapterRegistry) (*EventTemplateRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -713,7 +714,7 @@ func splitEventTemplatePath(rest string) (id string, action string, ok bool) {
 	return "", "", false
 }
 
-func validateEventTemplate(tmpl EventTemplate, schemas *SchemaRegistry, adapters *AdapterRegistry) error {
+func validateEventTemplate(tmpl EventTemplate, schemas *schema.Registry, adapters *AdapterRegistry) error {
 	if tmpl.Version != 1 {
 		return fmt.Errorf("unsupported event template version %d", tmpl.Version)
 	}

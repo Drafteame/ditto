@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ditto/internal/jsonfile"
+	"ditto/internal/schema"
 )
 
 var ErrSequencePlayerActive = errors.New("sequence has an active player")
@@ -147,7 +148,7 @@ func (b *PlayerBroadcaster) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type SequencePlayer struct {
 	reg         *EventSequenceRegistry
-	schemas     *SchemaRegistry
+	schemas     *schema.Registry
 	hub         *SocketHub
 	broadcaster *PlayerBroadcaster
 	clock       Clock
@@ -161,7 +162,7 @@ type SequencePlayer struct {
 // nil Clock uses the system clock.
 type SequencePlayerConfig struct {
 	Sequences   *EventSequenceRegistry
-	Schemas     *SchemaRegistry
+	Schemas     *schema.Registry
 	Hub         *SocketHub
 	Broadcaster *PlayerBroadcaster
 	Clock       Clock

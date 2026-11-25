@@ -21,6 +21,7 @@ import (
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
 	"ditto/internal/httpmock"
+	"ditto/internal/schema"
 )
 
 // ProxyManager allows changing the target URL at runtime.
@@ -124,7 +125,7 @@ type Server struct {
 	Modes      *ChannelModeRegistry
 	Recorder   *Recorder
 	LiveTarget *LiveTargetManager
-	Schemas    *SchemaRegistry
+	Schemas    *schema.Registry
 	Templates  *EventTemplateRegistry
 	Sequences  *EventSequenceRegistry
 	Player     *SequencePlayer
@@ -176,7 +177,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 	// Load order matters: templates skip entries whose adapter or schema type
 	// is unknown, and sequences skip entries whose template is unknown.
-	schemaRegistry, err := NewSchemaRegistry(cfg.Layout.DescriptorsDir)
+	schemaRegistry, err := schema.NewRegistry(cfg.Layout.DescriptorsDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load schema registry: %w", err)
 	}

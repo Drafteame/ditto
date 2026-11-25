@@ -1,4 +1,4 @@
-package main
+package schema
 
 import (
 	"archive/zip"
@@ -32,9 +32,9 @@ message ScoreEvent {
 		t.Fatal(err)
 	}
 
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	types := reg.Types()
 	if len(types) != 1 || types[0].FullName != "ditto.test.ScoreEvent" {
@@ -76,9 +76,9 @@ func TestSchemaRegistrySkipsBrokenPackOnLoad(t *testing.T) {
 	writeProto(t, filepath.Join(root, "good"), "good.proto", `syntax = "proto3"; package ditto.good; message Event { string id = 1; }`)
 	writeProto(t, filepath.Join(root, "bad"), "bad.proto", `syntax = "proto3"; package ditto.bad; message Broken { string id = 1;`)
 
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	types := reg.Types()
 	if len(types) != 1 || types[0].FullName != "ditto.good.Event" {
@@ -91,9 +91,9 @@ func TestSchemaRegistryFailedPackDoesNotPoisonRegistry(t *testing.T) {
 	first := writeProto(t, filepath.Join(root, "first"), "event.proto", `syntax = "proto3"; package ditto.same; message Event { string id = 1; }`)
 	second := writeProto(t, filepath.Join(root, "second"), "event.proto", `syntax = "proto3"; package ditto.same; message Event { int32 id = 1; }`)
 
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	before := reg.Types()
 	if len(before) != 1 {
@@ -115,9 +115,9 @@ func TestSchemaRegistryFailedPackDoesNotPoisonRegistry(t *testing.T) {
 
 func TestSchemaRegistryRejectsDifferentDescriptorsWithSamePath(t *testing.T) {
 	root := t.TempDir()
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	first := writeProto(t, filepath.Join(root, "a-pack"), "event.proto", `syntax = "proto3"; package ditto.a; message Event { string id = 1; }`)
 	second := writeProto(t, filepath.Join(root, "b-pack"), "event.proto", `syntax = "proto3"; package ditto.b; message Event { string id = 1; }`)
@@ -132,9 +132,9 @@ func TestSchemaRegistryRejectsDifferentDescriptorsWithSamePath(t *testing.T) {
 
 func TestSchemaRegistryZipUploadPreservesManifest(t *testing.T) {
 	root := t.TempDir()
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 
 	var buf bytes.Buffer
@@ -145,9 +145,9 @@ func TestSchemaRegistryZipUploadPreservesManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pack, err := reg.ImportUploadedPack("events.zip", bytes.NewReader(buf.Bytes()))
+	pack, err := reg.Import("events.zip", bytes.NewReader(buf.Bytes()))
 	if err != nil {
-		t.Fatalf("ImportUploadedPack() error = %v", err)
+		t.Fatalf("Import() error = %v", err)
 	}
 	if pack.ID != "custom-pack" || pack.Name != "custom-pack" || pack.Version != "1.2.3" {
 		t.Fatalf("pack metadata = %#v", pack)
@@ -159,9 +159,9 @@ func TestSchemaRegistryZipUploadPreservesManifest(t *testing.T) {
 
 func TestSchemaRegistryRejectsUnsupportedManifestVersion(t *testing.T) {
 	root := t.TempDir()
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	dir := writeProto(t, filepath.Join(root, "bad-version"), "event.proto", `syntax = "proto3"; package ditto.badversion; message Event { string id = 1; }`)
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"manifest_version":2,"name":"bad"}`), 0o644); err != nil {
@@ -175,9 +175,9 @@ func TestSchemaRegistryRejectsUnsupportedManifestVersion(t *testing.T) {
 
 func TestSchemaRegistryRejectsManifestWithoutVersion(t *testing.T) {
 	root := t.TempDir()
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	dir := writeProto(t, filepath.Join(root, "missing-version"), "event.proto", `syntax = "proto3"; package ditto.missingversion; message Event { string id = 1; }`)
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"missing"}`), 0o644); err != nil {
@@ -191,9 +191,9 @@ func TestSchemaRegistryRejectsManifestWithoutVersion(t *testing.T) {
 
 func TestSchemaRegistryRejectsPackOutsideRegistryDir(t *testing.T) {
 	root := t.TempDir()
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	outside := writeProto(t, filepath.Join(t.TempDir(), "outside"), "event.proto", `syntax = "proto3"; package ditto.outside; message Event { string id = 1; }`)
 
@@ -206,9 +206,9 @@ func TestSchemaRegistryLoadSkipsHiddenUploadDir(t *testing.T) {
 	root := t.TempDir()
 	writeProto(t, filepath.Join(root, ".upload-events"), "event.proto", `syntax = "proto3"; package ditto.hidden; message Event { string id = 1; }`)
 
-	reg, err := NewSchemaRegistry(root)
+	reg, err := NewRegistry(root)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	if got := reg.Types(); len(got) != 0 {
 		t.Fatalf("Types() = %#v, want hidden upload dir skipped", got)

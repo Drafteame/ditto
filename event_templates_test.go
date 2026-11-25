@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"ditto/internal/schema"
 )
 
 func TestEventTemplateRegistryLoadSkipsMalformedFiles(t *testing.T) {
@@ -274,9 +276,9 @@ func TestDescribeInvalidCastsDeduplicatesAndSorts(t *testing.T) {
 func TestEventTemplateRenderKeepsPlainPlaceholderStringForProtobuf(t *testing.T) {
 	schemaRoot := t.TempDir()
 	writeProto(t, filepath.Join(schemaRoot, "events"), "event.proto", `syntax = "proto3"; package ditto.events; message Ticket { string ticket_id = 1; int32 attempt = 2; }`)
-	schemas, err := NewSchemaRegistry(schemaRoot)
+	schemas, err := schema.NewRegistry(schemaRoot)
 	if err != nil {
-		t.Fatalf("NewSchemaRegistry() error = %v", err)
+		t.Fatalf("schema.NewRegistry() error = %v", err)
 	}
 	reg, err := NewEventTemplateRegistry(t.TempDir(), schemas, nil)
 	if err != nil {

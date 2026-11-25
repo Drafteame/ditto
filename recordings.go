@@ -23,6 +23,7 @@ import (
 
 	"ditto/internal/eventlog"
 	"ditto/internal/jsonfile"
+	"ditto/internal/schema"
 )
 
 const (
@@ -95,7 +96,7 @@ type RecordFrameInput struct {
 type Recorder struct {
 	mu       sync.Mutex
 	dir      string
-	schemas  *SchemaRegistry
+	schemas  *schema.Registry
 	adapters *AdapterRegistry
 	modes    *ChannelModeRegistry
 	bus      *eventlog.Bus
@@ -138,7 +139,7 @@ type rateLimiter struct {
 // other fields are optional.
 type RecorderConfig struct {
 	Dir      string
-	Schemas  *SchemaRegistry
+	Schemas  *schema.Registry
 	Adapters *AdapterRegistry
 	Modes    *ChannelModeRegistry
 	Bus      *eventlog.Bus
@@ -476,7 +477,7 @@ func (r *Recorder) decodeAppSyncProfile(profile AdapterProfile, data []byte) (*D
 
 // DecodeFrame decodes a text frame's envelope for the named adapter so logs
 // and recordings can show the logical payload. Binary frames are not decoded.
-func (r *AdapterRegistry) DecodeFrame(schemas *SchemaRegistry, kind string, data []byte, adapter string) (*DecodedFrame, string) {
+func (r *AdapterRegistry) DecodeFrame(schemas *schema.Registry, kind string, data []byte, adapter string) (*DecodedFrame, string) {
 	if kind == "binary" {
 		return nil, "binary frame has no envelope decoder"
 	}
@@ -506,7 +507,7 @@ func hasEnvelopeDecoder(baseAdapter string) bool {
 	}
 }
 
-func decodeAppSyncEnvelope(schemas *SchemaRegistry, profile AdapterProfile, data []byte) (*DecodedFrame, string) {
+func decodeAppSyncEnvelope(schemas *schema.Registry, profile AdapterProfile, data []byte) (*DecodedFrame, string) {
 	var outer map[string]any
 	if err := json.Unmarshal(data, &outer); err != nil {
 		return nil, err.Error()
@@ -928,7 +929,7 @@ func channelFileName(channel string) string {
 	return fmt.Sprintf("%s-%s.jsonl", base, hex.EncodeToString(sum[:])[:8])
 }
 
-func schemaPackIDs(schemas *SchemaRegistry) []string {
+func schemaPackIDs(schemas *schema.Registry) []string {
 	if schemas == nil {
 		return []string{}
 	}

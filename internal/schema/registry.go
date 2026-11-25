@@ -1,4 +1,7 @@
-package main
+// Package schema loads user-supplied protobuf schema packs (.proto files,
+// optionally zipped with a manifest) at runtime and converts payloads
+// between protojson and protobuf wire bytes with dynamic descriptors.
+package schema
 
 import (
 	"archive/zip"
@@ -11,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,42 +32,50 @@ import (
 	"ditto/internal/jsonfile"
 )
 
+// MaxUploadBytes is the largest schema pack upload accepted.
+const MaxUploadBytes = 128 << 20
+
 const (
-	maxSchemaUploadBytes = 128 << 20
 	maxSchemaUnpackBytes = 256 << 20
 	maxProtoFileBytes    = 32 << 20
 	maxManifestBytes     = 1 << 20
 )
 
-type SchemaRegistry struct {
+// Registry holds the schema packs found in one directory and the message
+// types they define, indexed by full name. It is safe for concurrent use.
+type Registry struct {
 	mu       sync.RWMutex
 	dir      string
-	packs    map[string]SchemaPack
+	packs    map[string]Pack
 	types    map[string]protoreflect.MessageDescriptor
 	files    *protoregistry.Files
 	resolver *dynamicpb.Types
 }
 
-type SchemaPack struct {
-	ID       string           `json:"id"`
-	Name     string           `json:"name"`
-	Version  string           `json:"version,omitempty"`
-	Path     string           `json:"path"`
-	LoadedAt string           `json:"loaded_at"`
-	Types    []TypeDescriptor `json:"types"`
+// Pack is one loaded schema pack.
+type Pack struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Version  string `json:"version,omitempty"`
+	Path     string `json:"path"`
+	LoadedAt string `json:"loaded_at"`
+	Types    []Type `json:"types"`
 }
 
-type TypeDescriptor struct {
+// Type describes a message type for the dashboard: its fields and an
+// example payload.
+type Type struct {
 	FullName    string          `json:"full_name"`
 	Name        string          `json:"name"`
 	Package     string          `json:"package"`
 	File        string          `json:"file"`
 	PackID      string          `json:"pack_id"`
-	Fields      []FieldInfo     `json:"fields"`
+	Fields      []Field         `json:"fields"`
 	ExampleJSON json.RawMessage `json:"example_json"`
 }
 
-type FieldInfo struct {
+// Field describes one field of a Type.
+type Field struct {
 	Name        string `json:"name"`
 	JSONName    string `json:"json_name"`
 	Type        string `json:"type"`
@@ -87,15 +97,8 @@ type schemaPackManifest struct {
 	DittoMinVersion string `json:"ditto_min_version,omitempty"`
 }
 
-type schemaPacksResponse struct {
-	Packs []SchemaPack `json:"packs"`
-}
-
-type schemaTypesResponse struct {
-	Types []TypeDescriptor `json:"types"`
-}
-
-func NewSchemaRegistry(dir string) (*SchemaRegistry, error) {
+// NewRegistry creates dir if needed and loads the packs in it.
+func NewRegistry(dir string) (*Registry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -103,9 +106,9 @@ func NewSchemaRegistry(dir string) (*SchemaRegistry, error) {
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
 		return nil, err
 	}
-	reg := &SchemaRegistry{
+	reg := &Registry{
 		dir:   absDir,
-		packs: make(map[string]SchemaPack),
+		packs: make(map[string]Pack),
 		types: make(map[string]protoreflect.MessageDescriptor),
 	}
 	reg.resetDescriptorsLocked()
@@ -115,11 +118,13 @@ func NewSchemaRegistry(dir string) (*SchemaRegistry, error) {
 	return reg, nil
 }
 
-func (s *SchemaRegistry) Load() error {
+// Load re-reads every pack in the directory. A pack that fails to compile
+// is skipped with a log line and does not affect the others.
+func (s *Registry) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.packs = make(map[string]SchemaPack)
+	s.packs = make(map[string]Pack)
 	s.types = make(map[string]protoreflect.MessageDescriptor)
 	s.resetDescriptorsLocked()
 
@@ -143,11 +148,12 @@ func (s *SchemaRegistry) Load() error {
 	return nil
 }
 
-func (s *SchemaRegistry) Packs() []SchemaPack {
+// Packs returns the loaded packs.
+func (s *Registry) Packs() []Pack {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	packs := make([]SchemaPack, 0, len(s.packs))
+	packs := make([]Pack, 0, len(s.packs))
 	for _, pack := range s.packs {
 		packs = append(packs, pack)
 	}
@@ -157,11 +163,12 @@ func (s *SchemaRegistry) Packs() []SchemaPack {
 	return packs
 }
 
-func (s *SchemaRegistry) Types() []TypeDescriptor {
+// Types returns every message type across the loaded packs.
+func (s *Registry) Types() []Type {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	types := make([]TypeDescriptor, 0)
+	types := make([]Type, 0)
 	for _, pack := range s.packs {
 		types = append(types, pack.Types...)
 	}
@@ -171,13 +178,16 @@ func (s *SchemaRegistry) Types() []TypeDescriptor {
 	return types
 }
 
-func (s *SchemaRegistry) RegisterPack(path string) (SchemaPack, error) {
+// RegisterPack loads the pack at path, which must be inside the registry
+// directory, and adds its types.
+func (s *Registry) RegisterPack(path string) (Pack, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.registerPackLocked(path)
 }
 
-func (s *SchemaRegistry) DeletePack(id string) error {
+// DeletePack removes the pack's files and reloads the remaining packs.
+func (s *Registry) DeletePack(id string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return fmt.Errorf("schema pack id is required")
@@ -195,7 +205,8 @@ func (s *SchemaRegistry) DeletePack(id string) error {
 	return s.Load()
 }
 
-func (s *SchemaRegistry) Descriptor(typeName string) protoreflect.MessageDescriptor {
+// Descriptor returns the message descriptor for typeName, or nil.
+func (s *Registry) Descriptor(typeName string) protoreflect.MessageDescriptor {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.types[strings.TrimSpace(typeName)]
@@ -203,7 +214,7 @@ func (s *SchemaRegistry) Descriptor(typeName string) protoreflect.MessageDescrip
 
 // Encode converts a protojson payload to protobuf wire bytes for typeName.
 // An empty payload encodes the zero message.
-func (s *SchemaRegistry) Encode(typeName string, payload json.RawMessage) ([]byte, error) {
+func (s *Registry) Encode(typeName string, payload json.RawMessage) ([]byte, error) {
 	typeName = strings.TrimSpace(typeName)
 	if typeName == "" {
 		return nil, fmt.Errorf("type name is required")
@@ -227,7 +238,8 @@ func (s *SchemaRegistry) Encode(typeName string, payload json.RawMessage) ([]byt
 	return proto.Marshal(msg)
 }
 
-func (s *SchemaRegistry) Decode(typeName string, data []byte) (json.RawMessage, error) {
+// Decode converts protobuf wire bytes of typeName to protojson.
+func (s *Registry) Decode(typeName string, data []byte) (json.RawMessage, error) {
 	typeName = strings.TrimSpace(typeName)
 	if typeName == "" {
 		return nil, fmt.Errorf("type name is required")
@@ -252,14 +264,16 @@ func (s *SchemaRegistry) Decode(typeName string, data []byte) (json.RawMessage, 
 	return out, nil
 }
 
-func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (SchemaPack, error) {
+// Import stores an uploaded .proto file or .zip pack under the registry
+// directory and loads it, enforcing the size and unpack limits.
+func (s *Registry) Import(filename string, reader io.Reader) (Pack, error) {
 	baseName := jsonfile.Slug(strings.TrimSuffix(filename, filepath.Ext(filename)))
 	if baseName == "" {
 		baseName = "schema-pack"
 	}
 	tmpDir, err := os.MkdirTemp("", "ditto-schema-upload-"+baseName+"-*")
 	if err != nil {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	cleanupTmp := true
 	defer func() {
@@ -273,82 +287,82 @@ func (s *SchemaRegistry) ImportUploadedPack(filename string, reader io.Reader) (
 	case ".proto":
 		data, err := readLimited(reader, maxProtoFileBytes, filename)
 		if err != nil {
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 		if err := os.WriteFile(filepath.Join(tmpDir, filepath.Base(filename)), data, 0o644); err != nil {
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 	case ".zip":
 		tmp, err := os.CreateTemp("", "ditto-schema-*.zip")
 		if err != nil {
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 		tmpPath := tmp.Name()
-		if _, err := copyLimited(tmp, reader, maxSchemaUploadBytes, filename); err != nil {
+		if _, err := copyLimited(tmp, reader, MaxUploadBytes, filename); err != nil {
 			tmp.Close()
 			os.Remove(tmpPath)
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 		if err := tmp.Close(); err != nil {
 			os.Remove(tmpPath)
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 		if err := extractZip(tmpPath, tmpDir); err != nil {
 			os.Remove(tmpPath)
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 		os.Remove(tmpPath)
 		if err := normalizeExtractedPackLayout(tmpDir); err != nil {
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 	default:
-		return SchemaPack{}, fmt.Errorf("upload a .proto file or a .zip schema pack")
+		return Pack{}, fmt.Errorf("upload a .proto file or a .zip schema pack")
 	}
 
 	metadata, err := schemaPackMetadata(tmpDir, baseName)
 	if err != nil {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	dest := filepath.Join(s.dir, metadata.ID)
 	if _, err := os.Stat(dest); err == nil {
-		return SchemaPack{}, fmt.Errorf("schema pack %q already exists", metadata.ID)
+		return Pack{}, fmt.Errorf("schema pack %q already exists", metadata.ID)
 	} else if !os.IsNotExist(err) {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	if err := moveDir(tmpDir, dest); err != nil {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	cleanupTmp = false
 
 	pack, err := s.RegisterPack(dest)
 	if err != nil {
 		os.RemoveAll(dest)
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	return pack, nil
 }
 
-func (s *SchemaRegistry) registerPackLocked(packPath string) (SchemaPack, error) {
+func (s *Registry) registerPackLocked(packPath string) (Pack, error) {
 	managedPath, err := s.managedPackPath(packPath)
 	if err != nil {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	packPath = managedPath
 
 	protos, err := protoFiles(packPath)
 	if err != nil {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	if len(protos) == 0 {
-		return SchemaPack{}, fmt.Errorf("no .proto files found")
+		return Pack{}, fmt.Errorf("no .proto files found")
 	}
 
 	metadata, err := schemaPackMetadata(packPath, filepath.Base(packPath))
 	if err != nil {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	if _, exists := s.packs[metadata.ID]; exists {
-		return SchemaPack{}, fmt.Errorf("schema pack id %q is already loaded", metadata.ID)
+		return Pack{}, fmt.Errorf("schema pack id %q is already loaded", metadata.ID)
 	}
 
 	compiler := protocompile.Compiler{
@@ -358,33 +372,33 @@ func (s *SchemaRegistry) registerPackLocked(packPath string) (SchemaPack, error)
 	}
 	files, err := compiler.Compile(context.Background(), protos...)
 	if err != nil {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 
 	candidateFiles := &protoregistry.Files{}
 	if err := copyFiles(s.files, candidateFiles); err != nil {
-		return SchemaPack{}, err
+		return Pack{}, err
 	}
 	candidateTypes := copyTypeMap(s.types)
 	candidatePacks := copyPackMap(s.packs)
 
-	pack := SchemaPack{
+	pack := Pack{
 		ID:       metadata.ID,
 		Name:     metadata.Name,
 		Version:  metadata.Version,
 		Path:     packPath,
 		LoadedAt: time.Now().Format(time.RFC3339),
-		Types:    make([]TypeDescriptor, 0),
+		Types:    make([]Type, 0),
 	}
 	for _, file := range files {
 		if err := registerFileRecursive(candidateFiles, file); err != nil {
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 	}
 
 	for _, file := range files {
 		if err := collectMessageTypes(file.Messages(), file, metadata.ID, &pack.Types, candidateTypes); err != nil {
-			return SchemaPack{}, err
+			return Pack{}, err
 		}
 	}
 	sort.Slice(pack.Types, func(i, j int) bool {
@@ -399,7 +413,7 @@ func (s *SchemaRegistry) registerPackLocked(packPath string) (SchemaPack, error)
 	return pack, nil
 }
 
-func (s *SchemaRegistry) managedPackPath(packPath string) (string, error) {
+func (s *Registry) managedPackPath(packPath string) (string, error) {
 	absPath, err := filepath.Abs(packPath)
 	if err != nil {
 		return "", err
@@ -420,7 +434,7 @@ func (s *SchemaRegistry) managedPackPath(packPath string) (string, error) {
 	return absPath, nil
 }
 
-func (s *SchemaRegistry) resetDescriptorsLocked() {
+func (s *Registry) resetDescriptorsLocked() {
 	s.files = &protoregistry.Files{}
 	s.resolver = dynamicpb.NewTypes(s.files)
 }
@@ -447,78 +461,6 @@ func fileDescriptorEqual(a, b protoreflect.FileDescriptor) bool {
 	ap.SourceCodeInfo = nil
 	bp.SourceCodeInfo = nil
 	return proto.Equal(ap, bp)
-}
-
-func RegisterSchemaRoutes(mux *http.ServeMux, schemas *SchemaRegistry) {
-	if schemas == nil {
-		return
-	}
-	mux.HandleFunc("/__ditto__/api/schemas/packs", func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedSocketAPIRequest(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(schemaPacksResponse{Packs: schemas.Packs()})
-		case http.MethodPost:
-			r.Body = http.MaxBytesReader(w, r.Body, maxSchemaUploadBytes)
-			if err := r.ParseMultipartForm(maxSchemaUploadBytes); err != nil {
-				http.Error(w, "invalid multipart upload: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			file, header, err := r.FormFile("pack")
-			if err != nil {
-				http.Error(w, "missing upload field \"pack\"", http.StatusBadRequest)
-				return
-			}
-			defer file.Close()
-
-			pack, err := schemas.ImportUploadedPack(header.Filename, file)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(pack)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-	mux.HandleFunc("/__ditto__/api/schemas/packs/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !isAllowedSocketAPIRequest(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/__ditto__/api/schemas/packs/"))
-		if id == "" || id == "." || id == ".." || strings.Contains(id, "/") || strings.Contains(id, string(os.PathSeparator)) {
-			http.NotFound(w, r)
-			return
-		}
-		if err := schemas.DeletePack(id); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("/__ditto__/api/schemas/types", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !isAllowedSocketAPIRequest(r) {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(schemaTypesResponse{Types: schemas.Types()})
-	})
 }
 
 type schemaPackMeta struct {
@@ -625,8 +567,8 @@ func copyTypeMap(src map[string]protoreflect.MessageDescriptor) map[string]proto
 	return dest
 }
 
-func copyPackMap(src map[string]SchemaPack) map[string]SchemaPack {
-	dest := make(map[string]SchemaPack, len(src))
+func copyPackMap(src map[string]Pack) map[string]Pack {
+	dest := make(map[string]Pack, len(src))
 	for key, value := range src {
 		dest[key] = value
 	}
@@ -717,7 +659,7 @@ func protoFiles(root string) ([]string, error) {
 	return files, err
 }
 
-func collectMessageTypes(messages protoreflect.MessageDescriptors, file protoreflect.FileDescriptor, packID string, out *[]TypeDescriptor, index map[string]protoreflect.MessageDescriptor) error {
+func collectMessageTypes(messages protoreflect.MessageDescriptors, file protoreflect.FileDescriptor, packID string, out *[]Type, index map[string]protoreflect.MessageDescriptor) error {
 	for i := 0; i < messages.Len(); i++ {
 		msg := messages.Get(i)
 		fullName := string(msg.FullName())
@@ -726,7 +668,7 @@ func collectMessageTypes(messages protoreflect.MessageDescriptors, file protoref
 		}
 		index[fullName] = msg
 		example, _ := json.MarshalIndent(exampleForMessage(msg, 0), "", "  ")
-		*out = append(*out, TypeDescriptor{
+		*out = append(*out, Type{
 			FullName:    fullName,
 			Name:        string(msg.Name()),
 			Package:     string(file.Package()),
@@ -742,12 +684,12 @@ func collectMessageTypes(messages protoreflect.MessageDescriptors, file protoref
 	return nil
 }
 
-func fieldInfos(msg protoreflect.MessageDescriptor) []FieldInfo {
+func fieldInfos(msg protoreflect.MessageDescriptor) []Field {
 	fields := msg.Fields()
-	out := make([]FieldInfo, 0, fields.Len())
+	out := make([]Field, 0, fields.Len())
 	for i := 0; i < fields.Len(); i++ {
 		field := fields.Get(i)
-		info := FieldInfo{
+		info := Field{
 			Name:     string(field.Name()),
 			JSONName: field.JSONName(),
 			Type:     field.Kind().String(),

@@ -20,6 +20,7 @@ import (
 
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
+	"ditto/internal/schema"
 )
 
 func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
@@ -307,7 +308,7 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 	if err := os.WriteFile(filepath.Join(pack, "item.proto"), []byte(protoSource), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	schemas, err := NewSchemaRegistry(root)
+	schemas, err := schema.NewRegistry(root)
 	if err != nil {
 		t.Fatal(err)
 	}

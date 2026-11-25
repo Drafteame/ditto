@@ -16,6 +16,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"ditto/internal/eventlog"
+	"ditto/internal/schema"
 )
 
 func TestSequencePlayerSpeedMaxPublishesStepAndCompleted(t *testing.T) {
@@ -156,7 +157,7 @@ func TestSequencePlayerTerminalControlsReturnErrors(t *testing.T) {
 func TestSequenceRunnerCachesEncodedPayloadByStepAndPayload(t *testing.T) {
 	root := t.TempDir()
 	writeProto(t, filepath.Join(root, "pack"), "event.proto", `syntax = "proto3"; package ditto.cache; message Event { string id = 1; }`)
-	schemas, err := NewSchemaRegistry(root)
+	schemas, err := schema.NewRegistry(root)
 	if err != nil {
 		t.Fatal(err)
 	}

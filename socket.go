@@ -20,6 +20,7 @@ import (
 
 	"ditto/internal/capture"
 	"ditto/internal/eventlog"
+	"ditto/internal/schema"
 )
 
 type ClientMsg struct {
@@ -153,7 +154,7 @@ type SocketHub struct {
 	modes    *ChannelModeRegistry
 	live     *LiveBridge
 	recorder *Recorder
-	schemas  *SchemaRegistry
+	schemas  *schema.Registry
 	adapters *AdapterRegistry
 	events   *eventlog.Coalescer
 
@@ -329,7 +330,7 @@ type SocketDispatch struct {
 type SocketHubConfig struct {
 	Bus      *eventlog.Bus
 	Modes    *ChannelModeRegistry
-	Schemas  *SchemaRegistry
+	Schemas  *schema.Registry
 	Adapters *AdapterRegistry
 	Recorder *Recorder
 	// LiveTargets enables live/mixed channel forwarding to an upstream.

@@ -17,6 +17,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"ditto/internal/eventlog"
+	"ditto/internal/schema"
 )
 
 func TestSubscriptionRegistryTracksClientsByChannel(t *testing.T) {
@@ -716,7 +717,7 @@ func TestBundledDrafteaProfileDispatchesStringifiedRealtimeEnvelope(t *testing.T
 	if err != nil {
 		t.Fatalf("Protocol(appsync-draftea) error = %v", err)
 	}
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: &SchemaRegistry{}, Adapters: adapters})
+	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: &schema.Registry{}, Adapters: adapters})
 	client := &SocketClient{
 		id:            "appsync-draftea-1",
 		adapter:       "appsync-draftea",
@@ -778,7 +779,7 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 		t.Fatalf("Subprotocols() = %v, want none", protocol.Subprotocols())
 	}
 
-	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: &SchemaRegistry{}, Adapters: adapters})
+	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Schemas: &schema.Registry{}, Adapters: adapters})
 	client := &SocketClient{
 		id:            "relay-draftea-1",
 		adapter:       "relay-draftea",
@@ -917,7 +918,7 @@ func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
 func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.T) {
 	root := t.TempDir()
 	writeProto(t, filepath.Join(root, "events"), "event.proto", `syntax = "proto3"; package ditto.frame; message Event { string message = 1; }`)
-	schemas, err := NewSchemaRegistry(root)
+	schemas, err := schema.NewRegistry(root)
 	if err != nil {
 		t.Fatal(err)
 	}

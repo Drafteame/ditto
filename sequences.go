@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"ditto/internal/jsonfile"
+	"ditto/internal/schema"
 )
 
 const (
@@ -55,7 +56,7 @@ type EventSequenceRegistry struct {
 	dir       string
 	sequences map[string]EventSequence
 	templates *EventTemplateRegistry
-	schemas   *SchemaRegistry
+	schemas   *schema.Registry
 	adapters  *AdapterRegistry
 }
 
@@ -80,7 +81,7 @@ type sequenceSpeedRequest struct {
 // NewEventSequenceRegistry loads the sequences in dir. Sequences that reference
 // unknown templates, adapters or schema types are skipped, so those
 // registries must be loaded first.
-func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *SchemaRegistry, adapters *AdapterRegistry) (*EventSequenceRegistry, error) {
+func NewEventSequenceRegistry(dir string, templates *EventTemplateRegistry, schemas *schema.Registry, adapters *AdapterRegistry) (*EventSequenceRegistry, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
