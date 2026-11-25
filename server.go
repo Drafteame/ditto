@@ -71,6 +71,17 @@ func (pm *ProxyManager) SetTarget(target string) error {
 	return nil
 }
 
+// Director returns the current reverse proxy's request director and target
+// as one snapshot, or a nil director when no target is configured.
+func (pm *ProxyManager) Director() (func(*http.Request), string) {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if pm.proxy == nil || pm.target == "" {
+		return nil, ""
+	}
+	return pm.proxy.Director, pm.target
+}
+
 func (pm *ProxyManager) Target() string {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
@@ -244,9 +255,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				http.Error(w, "origin not allowed", http.StatusForbidden)
 				return
 			}
-			if shouldProxyWebSocket(r) && proxyMgr.Target() != "" {
-				proxyMgr.ProxyWebSocket(w, r, socketHub)
-				return
+			if shouldProxyWebSocket(r) {
+				if direct, target := proxyMgr.Director(); direct != nil {
+					socketHub.Tunnel(w, r, target, direct)
+					return
+				}
 			}
 			socketHub.ServeHTTP(w, r)
 			return

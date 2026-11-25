@@ -51,7 +51,7 @@ func TestDirectWebSocketProxyStreamsAndLogsBidirectionalFrames(t *testing.T) {
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	proxy := NewProxyManager(upstream.URL + "/base?from=target")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !proxy.ProxyWebSocket(w, r, hub) {
+		if !tunnelThrough(proxy, hub, w, r) {
 			http.NotFound(w, r)
 		}
 	}))
@@ -139,7 +139,7 @@ func TestDirectWebSocketProxyReplaysFullUpstreamRejectionBody(t *testing.T) {
 	hub := NewSocketHub(SocketHubConfig{Bus: bus})
 	proxy := NewProxyManager(upstream.URL)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxy.ProxyWebSocket(w, r, hub)
+		tunnelThrough(proxy, hub, w, r)
 	}))
 	defer server.Close()
 
@@ -186,7 +186,7 @@ func TestDirectWebSocketProxyPreservesUpstreamCloseCodeAndReason(t *testing.T) {
 	defer upstream.Close()
 	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil)})
 	proxy := NewProxyManager(upstream.URL)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxy.ProxyWebSocket(w, r, hub) }))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { tunnelThrough(proxy, hub, w, r) }))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -389,4 +389,14 @@ func TestDispatchLogsPerClientQueueDrop(t *testing.T) {
 		}
 	}
 	t.Fatal("dropped client frame was not retained")
+}
+
+// tunnelThrough tunnels r to proxy's target, reporting false when no target is set.
+func tunnelThrough(proxy *ProxyManager, hub *SocketHub, w http.ResponseWriter, r *http.Request) bool {
+	direct, target := proxy.Director()
+	if direct == nil {
+		return false
+	}
+	hub.Tunnel(w, r, target, direct)
+	return true
 }
