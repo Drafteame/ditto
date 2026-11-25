@@ -14,6 +14,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"ditto/internal/adapter"
+	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 )
 
@@ -40,14 +41,14 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 	defer upstream.Close()
 
 	bus := eventlog.NewBus(nil)
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
+	modes, err := channelmode.NewRegistry(t.TempDir(), bus)
 	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+		t.Fatalf("channelmode.NewRegistry() error = %v", err)
 	}
 	target := NewLiveTargetManager(httpToWS(upstream.URL), nil)
 	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, LiveTargets: target})
 	bridge := hub.live
-	if err := modes.Set(ChannelConfig{Channel: "/live", Mode: ModeLive}); err != nil {
+	if err := modes.Set(channelmode.Config{Channel: "/live", Mode: channelmode.Live}); err != nil {
 		t.Fatalf("Set live mode: %v", err)
 	}
 
@@ -94,7 +95,7 @@ func TestLiveBridgeForwardsBidirectionallyAndSwitchesMode(t *testing.T) {
 	if bridgeChannelClientCount(bridge, "/live") != 1 {
 		t.Fatalf("bridge client count = %d, want 1", bridgeChannelClientCount(bridge, "/live"))
 	}
-	if err := modes.Set(ChannelConfig{Channel: "/live", Mode: ModeMock}); err != nil {
+	if err := modes.Set(channelmode.Config{Channel: "/live", Mode: channelmode.Mock}); err != nil {
 		t.Fatalf("switch mock: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -117,12 +118,12 @@ func TestLiveBridgeForwardsAuthHeaders(t *testing.T) {
 	defer upstream.Close()
 
 	bus := eventlog.NewBus(nil)
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
+	modes, err := channelmode.NewRegistry(t.TempDir(), bus)
 	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+		t.Fatalf("channelmode.NewRegistry() error = %v", err)
 	}
 	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, LiveTargets: NewLiveTargetManager(httpToWS(upstream.URL), nil)})
-	if err := modes.Set(ChannelConfig{Channel: "/auth", Mode: ModeLive}); err != nil {
+	if err := modes.Set(channelmode.Config{Channel: "/auth", Mode: channelmode.Live}); err != nil {
 		t.Fatalf("Set live mode: %v", err)
 	}
 	local := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))

@@ -20,6 +20,7 @@ import (
 
 	"ditto/internal/adapter"
 	"ditto/internal/capture"
+	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/httpmock"
 	"ditto/internal/schema"
@@ -123,7 +124,7 @@ type Server struct {
 	Bus        *eventlog.Bus
 	ProxyMgr   *ProxyManager
 	SocketHub  *SocketHub
-	Modes      *ChannelModeRegistry
+	Modes      *channelmode.Registry
 	Recorder   *Recorder
 	LiveTarget *LiveTargetManager
 	Schemas    *schema.Registry
@@ -172,7 +173,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	bus := eventlog.NewBus(eventlog.NewPrinter(os.Stdout, cfg.JSONLogs))
 	proxyMgr := NewProxyManager(cfg.Target)
-	modeRegistry, err := NewChannelModeRegistry(cfg.Layout.ChannelModesDir, bus)
+	modeRegistry, err := channelmode.NewRegistry(cfg.Layout.ChannelModesDir, bus)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load channel mode registry: %w", err)
 	}

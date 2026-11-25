@@ -19,6 +19,7 @@ import (
 
 	"ditto/internal/adapter"
 	"ditto/internal/capture"
+	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/schema"
 )
@@ -87,7 +88,7 @@ func (r *SubscriptionRegistry) Clients(channel string) []string {
 type SocketHub struct {
 	registry *SubscriptionRegistry
 	bus      *eventlog.Bus
-	modes    *ChannelModeRegistry
+	modes    *channelmode.Registry
 	live     *LiveBridge
 	recorder *Recorder
 	schemas  *schema.Registry
@@ -265,7 +266,7 @@ type SocketDispatch struct {
 // field is optional and its zero value disables the matching feature.
 type SocketHubConfig struct {
 	Bus      *eventlog.Bus
-	Modes    *ChannelModeRegistry
+	Modes    *channelmode.Registry
 	Schemas  *schema.Registry
 	Adapters *adapter.Registry
 	Recorder *Recorder
@@ -288,11 +289,11 @@ func NewSocketHub(cfg SocketHubConfig) *SocketHub {
 		hub.live = NewLiveBridge(cfg.LiveTargets, hub)
 	}
 	if cfg.Modes != nil {
-		cfg.Modes.OnChange(func(change ChannelConfig) {
+		cfg.Modes.OnChange(func(change channelmode.Config) {
 			if hub.live == nil {
 				return
 			}
-			if change.Mode == ModeLive || change.Mode == ModeMixed {
+			if change.Mode == channelmode.Live || change.Mode == channelmode.Mixed {
 				hub.attachLiveSubscribers(change.Channel)
 				return
 			}
@@ -1067,7 +1068,7 @@ func (h *SocketHub) isLiveMode(channel string) bool {
 		return false
 	}
 	mode := h.modes.Get(channel).Mode
-	return mode == ModeLive || mode == ModeMixed
+	return mode == channelmode.Live || mode == channelmode.Mixed
 }
 
 func (h *SocketHub) isRecordingMode(channel string) bool {
@@ -1075,14 +1076,14 @@ func (h *SocketHub) isRecordingMode(channel string) bool {
 		return false
 	}
 	mode := h.modes.Get(channel).Mode
-	return mode == ModeRecord || mode == ModeMixed
+	return mode == channelmode.Record || mode == channelmode.Mixed
 }
 
 func (h *SocketHub) forwardLiveFromClient(ctx context.Context, client *SocketClient, channel string, typ websocket.MessageType, data []byte, dispatchID string) {
 	if !h.isLiveMode(channel) {
 		return
 	}
-	if h.recorder != nil && h.modes.Get(channel).Mode == ModeMixed {
+	if h.recorder != nil && h.modes.Get(channel).Mode == channelmode.Mixed {
 		h.recorder.Record(RecordFrameInput{
 			Channel: channel, Direction: "local", Kind: adapter.FrameKind(typ), Data: data,
 			Adapter: client.adapter, RateCapHz: h.modes.Get(channel).RateCapHz,

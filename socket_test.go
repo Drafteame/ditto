@@ -17,6 +17,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"ditto/internal/adapter"
+	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/schema"
 )
@@ -841,13 +842,13 @@ func TestBundledRelayProfileDispatchesRelayEnvelope(t *testing.T) {
 }
 
 func TestHubDispatchSuppressedByMode(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
+	reg, err := channelmode.NewRegistry(t.TempDir(), nil)
 	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+		t.Fatalf("channelmode.NewRegistry() error = %v", err)
 	}
 	hub := NewSocketHub(SocketHubConfig{Bus: eventlog.NewBus(nil), Modes: reg})
-	for _, mode := range []ChannelMode{ModeLive, ModeRecord} {
-		if err := reg.Set(ChannelConfig{Channel: "/blocked", Mode: mode}); err != nil {
+	for _, mode := range []channelmode.Mode{channelmode.Live, channelmode.Record} {
+		if err := reg.Set(channelmode.Config{Channel: "/blocked", Mode: mode}); err != nil {
 			t.Fatalf("Set(%s) error = %v", mode, err)
 		}
 		result, err := hub.Dispatch(SocketDispatch{
@@ -861,8 +862,8 @@ func TestHubDispatchSuppressedByMode(t *testing.T) {
 			t.Fatalf("Dispatch(%s) errors = %#v, want suppression", mode, result.Errors)
 		}
 	}
-	for _, mode := range []ChannelMode{ModeMock, ModeMixed} {
-		if err := reg.Set(ChannelConfig{Channel: "/allowed", Mode: mode}); err != nil {
+	for _, mode := range []channelmode.Mode{channelmode.Mock, channelmode.Mixed} {
+		if err := reg.Set(channelmode.Config{Channel: "/allowed", Mode: mode}); err != nil {
 			t.Fatalf("Set(%s) error = %v", mode, err)
 		}
 		result, err := hub.Dispatch(SocketDispatch{
@@ -882,11 +883,11 @@ func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
 	bus := eventlog.NewBus(nil)
 	events := bus.Subscribe()
 	defer bus.Unsubscribe(events)
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
+	modes, err := channelmode.NewRegistry(t.TempDir(), bus)
 	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+		t.Fatalf("channelmode.NewRegistry() error = %v", err)
 	}
-	if err := modes.Set(ChannelConfig{Channel: "/burst-record", Mode: ModeRecord}); err != nil {
+	if err := modes.Set(channelmode.Config{Channel: "/burst-record", Mode: channelmode.Record}); err != nil {
 		t.Fatalf("Set() error = %v", err)
 	}
 	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir(), Modes: modes, Bus: bus})
@@ -961,11 +962,11 @@ func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.
 
 func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
 	bus := eventlog.NewBus(nil)
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
+	modes, err := channelmode.NewRegistry(t.TempDir(), bus)
 	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+		t.Fatalf("channelmode.NewRegistry() error = %v", err)
 	}
-	if err := modes.Set(ChannelConfig{Channel: "/mixed", Mode: ModeMixed}); err != nil {
+	if err := modes.Set(channelmode.Config{Channel: "/mixed", Mode: channelmode.Mixed}); err != nil {
 		t.Fatalf("Set mixed mode: %v", err)
 	}
 	recDir := t.TempDir()

@@ -20,6 +20,7 @@ import (
 
 	"ditto/internal/adapter"
 	"ditto/internal/capture"
+	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/schema"
 )
@@ -232,12 +233,12 @@ func TestLiveBridgeLogsQueuedWrittenAndUpstreamFanoutWithCorrelatedIDs(t *testin
 	}))
 	defer upstream.Close()
 	bus := eventlog.NewBus(nil)
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
+	modes, err := channelmode.NewRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, LiveTargets: NewLiveTargetManager(httpToWS(upstream.URL), nil)})
-	if err := modes.Set(ChannelConfig{Channel: "/live", Mode: ModeLive}); err != nil {
+	if err := modes.Set(channelmode.Config{Channel: "/live", Mode: channelmode.Live}); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeHTTP))
@@ -344,12 +345,12 @@ func TestDispatchWithoutSubscribersRetainsEncodedProtobufAndSuppression(t *testi
 		t.Fatalf("decoded payload = %s", detail.DecodedPayload)
 	}
 
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
+	modes, err := channelmode.NewRegistry(t.TempDir(), bus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	suppressedHub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes})
-	if err := modes.Set(ChannelConfig{Channel: "/suppressed", Mode: ModeLive}); err != nil {
+	if err := modes.Set(channelmode.Config{Channel: "/suppressed", Mode: channelmode.Live}); err != nil {
 		t.Fatal(err)
 	}
 	_, err = suppressedHub.Dispatch(SocketDispatch{Channel: "/suppressed", Source: "sequence", Payload: json.RawMessage(`{"visible":true}`)})

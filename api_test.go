@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ditto/internal/adapter"
+	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/schema"
 )
@@ -61,9 +62,9 @@ func TestSocketAdapterProfilesEndpointListsLoadedProfiles(t *testing.T) {
 }
 
 func TestChannelModeRouteDelete(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
+	reg, err := channelmode.NewRegistry(t.TempDir(), nil)
 	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
+		t.Fatalf("channelmode.NewRegistry() error = %v", err)
 	}
 	mux := http.NewServeMux()
 	RegisterChannelModeRoutes(mux, reg)
@@ -92,7 +93,9 @@ func TestChannelModeRouteDelete(t *testing.T) {
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("GET status = %d, body %q", getRec.Code, getRec.Body.String())
 	}
-	var body channelModeState
+	var body struct {
+		Channels []channelmode.Config `json:"channels"`
+	}
 	if err := json.Unmarshal(getRec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("GET body invalid JSON: %v", err)
 	}

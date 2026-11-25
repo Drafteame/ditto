@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"ditto/internal/adapter"
+	"ditto/internal/channelmode"
 	"ditto/internal/eventlog"
 	"ditto/internal/jsonfile"
 	"ditto/internal/schema"
@@ -91,7 +92,7 @@ type Recorder struct {
 	dir      string
 	schemas  *schema.Registry
 	adapters *adapter.Registry
-	modes    *ChannelModeRegistry
+	modes    *channelmode.Registry
 	bus      *eventlog.Bus
 	active   *recordingSession
 	options  RecorderOptions
@@ -134,7 +135,7 @@ type RecorderConfig struct {
 	Dir      string
 	Schemas  *schema.Registry
 	Adapters *adapter.Registry
-	Modes    *ChannelModeRegistry
+	Modes    *channelmode.Registry
 	Bus      *eventlog.Bus
 	// Options tunes queueing and flushing; zero fields use the defaults.
 	Options RecorderOptions
@@ -213,7 +214,7 @@ func (r *Recorder) Start(name, description string) (RecordingManifest, error) {
 	r.active = session
 	if r.modes != nil {
 		for _, cfg := range r.modes.Snapshot() {
-			if cfg.Mode == ModeRecord || cfg.Mode == ModeMixed {
+			if cfg.Mode == channelmode.Record || cfg.Mode == channelmode.Mixed {
 				session.ensureChannel(cfg.Channel, cfg.RateCapHz, "")
 			}
 		}
@@ -329,8 +330,8 @@ func (r *Recorder) Record(input RecordFrameInput) {
 	}
 }
 
-func (r *Recorder) HandleModeChange(cfg ChannelConfig) {
-	if cfg.Mode != ModeRecord && cfg.Mode != ModeMixed {
+func (r *Recorder) HandleModeChange(cfg channelmode.Config) {
+	if cfg.Mode != channelmode.Record && cfg.Mode != channelmode.Mixed {
 		return
 	}
 	r.mu.Lock()
