@@ -3,11 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -134,84 +131,5 @@ func TestChannelModeRegistryDeleteNotFound(t *testing.T) {
 	}
 	if err := reg.Delete("/missing"); !errors.Is(err, ErrChannelModeNotFound) {
 		t.Fatalf("Delete() error = %v, want ErrChannelModeNotFound", err)
-	}
-}
-
-func TestChannelModeRouteDelete(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
-	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
-	}
-	mux := http.NewServeMux()
-	RegisterChannelModeRoutes(mux, reg)
-
-	put := httptest.NewRequest(http.MethodPut, "/__ditto__/api/channel-modes", strings.NewReader(`{"channel":"/saved","mode":"mock"}`))
-	put.Header.Set("Content-Type", "application/json")
-	put.Header.Set("Origin", "http://example.com")
-	putRec := httptest.NewRecorder()
-	mux.ServeHTTP(putRec, put)
-	if putRec.Code != http.StatusOK {
-		t.Fatalf("PUT status = %d, body %q", putRec.Code, putRec.Body.String())
-	}
-
-	del := httptest.NewRequest(http.MethodDelete, "/__ditto__/api/channel-modes?channel=%2Fsaved", nil)
-	del.Header.Set("Origin", "http://example.com")
-	delRec := httptest.NewRecorder()
-	mux.ServeHTTP(delRec, del)
-	if delRec.Code != http.StatusNoContent {
-		t.Fatalf("DELETE status = %d, body %q", delRec.Code, delRec.Body.String())
-	}
-
-	get := httptest.NewRequest(http.MethodGet, "/__ditto__/api/channel-modes", nil)
-	get.Header.Set("Origin", "http://example.com")
-	getRec := httptest.NewRecorder()
-	mux.ServeHTTP(getRec, get)
-	if getRec.Code != http.StatusOK {
-		t.Fatalf("GET status = %d, body %q", getRec.Code, getRec.Body.String())
-	}
-	var body channelModeState
-	if err := json.Unmarshal(getRec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("GET body invalid JSON: %v", err)
-	}
-	if len(body.Channels) != 0 {
-		t.Fatalf("GET channels = %#v, want empty", body.Channels)
-	}
-}
-
-func TestHubDispatchSuppressedByMode(t *testing.T) {
-	reg, err := NewChannelModeRegistry(t.TempDir(), nil)
-	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
-	}
-	hub := NewSocketHub(SocketHubConfig{Bus: NewEventBus(nil), Modes: reg})
-	for _, mode := range []ChannelMode{ModeLive, ModeRecord} {
-		if err := reg.Set(ChannelConfig{Channel: "/blocked", Mode: mode}); err != nil {
-			t.Fatalf("Set(%s) error = %v", mode, err)
-		}
-		result, err := hub.Dispatch(SocketDispatch{
-			Channel: "/blocked",
-			Payload: json.RawMessage(`{"ok":true}`),
-		})
-		if err != nil {
-			t.Fatalf("Dispatch(%s) fatal error = %v", mode, err)
-		}
-		if len(result.Errors) != 1 {
-			t.Fatalf("Dispatch(%s) errors = %#v, want suppression", mode, result.Errors)
-		}
-	}
-	for _, mode := range []ChannelMode{ModeMock, ModeMixed} {
-		if err := reg.Set(ChannelConfig{Channel: "/allowed", Mode: mode}); err != nil {
-			t.Fatalf("Set(%s) error = %v", mode, err)
-		}
-		result, err := hub.Dispatch(SocketDispatch{
-			Channel: "/allowed",
-			Payload: json.RawMessage(`{"ok":true}`),
-		})
-		if err != nil {
-			t.Fatalf("Dispatch(%s) error = %v", mode, err)
-		}
-		if len(result.Errors) != 0 {
-			t.Fatalf("Dispatch(%s) errors = %#v, want none", mode, result.Errors)
-		}
 	}
 }

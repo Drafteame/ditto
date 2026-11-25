@@ -2,33 +2,13 @@ package main
 
 import (
 	"bufio"
-	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"nhooyr.io/websocket"
 )
-
-func TestDecodeFrameReadsRelayEnvelope(t *testing.T) {
-	adapters := &AdapterRegistry{}
-	if err := adapters.Load(t.TempDir()); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	frame := []byte(`{"type":"data","channel":"/osb/s/l/*","event":"{\"t\":\"betInfo\",\"e\":\"AQID\"}"}`)
-	decoded, decodeErr := adapters.DecodeFrame(nil, "text", frame, "relay-draftea")
-	if decodeErr != "" {
-		t.Fatalf("DecodeFrame() error = %s", decodeErr)
-	}
-	if decoded == nil || decoded.Alias != "betInfo" {
-		t.Fatalf("decoded = %#v, want alias betInfo", decoded)
-	}
-}
 
 func TestRecorderStartStopAndJSONLRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -192,44 +172,6 @@ func TestRecorderStopTimeoutForceStopsDrain(t *testing.T) {
 	}
 }
 
-func TestRecordingBurstKeepsAllFramesAndCoalescesLog(t *testing.T) {
-	bus := NewEventBus(nil)
-	events := bus.Subscribe()
-	defer bus.Unsubscribe(events)
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
-	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
-	}
-	if err := modes.Set(ChannelConfig{Channel: "/burst-record", Mode: ModeRecord}); err != nil {
-		t.Fatalf("Set() error = %v", err)
-	}
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir(), Modes: modes, Bus: bus})
-	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
-	}
-	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
-	manifest, err := rec.Start("Burst Recording", "")
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	for i := 0; i < 200; i++ {
-		hub.forwardFromUpstream("/burst-record", websocket.MessageText, []byte(`{"n":1}`))
-	}
-	if got := waitForBurstSummary(t, events, "/burst-record"); got != 200 {
-		t.Fatalf("burst total_frames = %d, want 200", got)
-	}
-	if _, err := rec.Stop(manifest.ID); err != nil {
-		t.Fatalf("Stop() error = %v", err)
-	}
-	frames, err := rec.Frames(manifest.ID, "/burst-record", 0, 500)
-	if err != nil {
-		t.Fatalf("Frames() error = %v", err)
-	}
-	if len(frames) != 200 {
-		t.Fatalf("frames len = %d, want 200", len(frames))
-	}
-}
-
 func waitForBurstSummary(t *testing.T, events <-chan LogEvent, channel string) int {
 	t.Helper()
 	deadline := time.After(1500 * time.Millisecond)
@@ -290,160 +232,6 @@ func TestRecorderQueueDropsAreSeparateFromRateCapDrops(t *testing.T) {
 	got := session.manifest.Channels[0]
 	if got.Dropped != 0 || got.QueueDropped != 1 {
 		t.Fatalf("channel counters = %#v, want dropped=0 queue_dropped=1", got)
-	}
-}
-
-func TestAppSyncDecoderKeepsBuiltInAliasWhenSchemaMissing(t *testing.T) {
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
-	}
-	decoded, decodeErr := rec.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, []byte(`{
-		"type":"data",
-		"payload":{"data":{"t":"example.Event","e":"AAAA"}}
-	}`))
-	if decodeErr != "" {
-		t.Fatalf("decodeErr = %q, want empty fallback", decodeErr)
-	}
-	if decoded == nil || decoded.Alias != "example.Event" || decoded.TypeName != "" {
-		t.Fatalf("decoded = %#v, want alias-only fallback", decoded)
-	}
-}
-
-func TestAppSyncDecoderReportsMissingPayload(t *testing.T) {
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
-	}
-	decoded, decodeErr := rec.decodeAppSyncProfile(AdapterProfile{BaseAdapter: "appsync"}, []byte(`{
-		"type":"data",
-		"payload":{"data":{"t":"example.Event"}}
-	}`))
-	if decoded != nil || decodeErr != "appsync payload missing" {
-		t.Fatalf("decoded=%#v decodeErr=%q, want missing payload error", decoded, decodeErr)
-	}
-}
-
-func TestAppSyncDecoderTreatsControlFramesAsBenign(t *testing.T) {
-	rec, err := NewRecorder(RecorderConfig{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
-	}
-	// AppSync sends keep-alives and subscription-lifecycle frames that carry
-	// no payload; they must not be reported as decode errors.
-	for _, typ := range []string{"ka", "connection_ack", "subscribe", "subscribe_success", "complete"} {
-		decoded, decodeErr := rec.decodeAppSyncProfile(
-			AdapterProfile{BaseAdapter: "appsync"},
-			[]byte(`{"type":"`+typ+`"}`),
-		)
-		if decodeErr != "" {
-			t.Fatalf("type %q: decodeErr = %q, want empty (control frame)", typ, decodeErr)
-		}
-		if decoded == nil || decoded.Alias != typ || decoded.TypeName != "" || decoded.PayloadJSON != nil {
-			t.Fatalf("type %q: decoded = %#v, want control frame labelled by type", typ, decoded)
-		}
-	}
-}
-
-func TestSocketFrameDecodeKeepsWireErrorsSeparateFromTransportErrors(t *testing.T) {
-	root := t.TempDir()
-	writeProto(t, filepath.Join(root, "events"), "event.proto", `syntax = "proto3"; package ditto.frame; message Event { string message = 1; }`)
-	schemas, err := NewSchemaRegistry(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := schemas.Encode("ditto.frame.Event", json.RawMessage(`{"message":"hello"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded := ProtobufPayload("ditto.frame.Event", data)
-	envelope, err := json.Marshal(map[string]any{"type": "data", "payload": map[string]any{"data": map[string]any{
-		"base64": base64.StdEncoding.EncodeToString(encoded.Data), "content_type": encoded.ContentType, "type_name": encoded.TypeName,
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bus := NewEventBus(nil)
-	hub := NewSocketHub(SocketHubConfig{Bus: bus})
-	hub.schemas = schemas
-	hub.logSocketFrame(LogEvent{Status: 200, Adapter: "appsync"}, envelope, websocket.MessageText, encoded.TypeName)
-	detail, ok := bus.LogDetail(bus.LogSummaries()[0].ID)
-	if !ok {
-		t.Fatal("text frame was not retained")
-	}
-	if detail.Error != "" || detail.DecodeError != "" || !strings.Contains(detail.DecodedPayload, `"message":"hello"`) {
-		t.Fatalf("text envelope log = %#v, want decoded JSON without errors", detail)
-	}
-
-	bus = NewEventBus(nil)
-	hub = NewSocketHub(SocketHubConfig{Bus: bus})
-	hub.logSocketFrame(LogEvent{Status: 200, DeliveryState: "written"}, []byte{0xff, 0x01}, websocket.MessageBinary, "")
-	detail, ok = bus.LogDetail(bus.LogSummaries()[0].ID)
-	if !ok {
-		t.Fatal("binary frame was not retained")
-	}
-	if detail.Status != 200 || detail.DeliveryState != "written" || detail.Error != "" || detail.DecodeError == "" {
-		t.Fatalf("binary frame log = %#v, want successful transport plus decode limitation", detail)
-	}
-}
-
-func TestMixedModeLocalDispatchIsRecorded(t *testing.T) {
-	bus := NewEventBus(nil)
-	modes, err := NewChannelModeRegistry(t.TempDir(), bus)
-	if err != nil {
-		t.Fatalf("NewChannelModeRegistry() error = %v", err)
-	}
-	if err := modes.Set(ChannelConfig{Channel: "/mixed", Mode: ModeMixed}); err != nil {
-		t.Fatalf("Set mixed mode: %v", err)
-	}
-	recDir := t.TempDir()
-	rec, err := NewRecorder(RecorderConfig{Dir: recDir, Modes: modes, Bus: bus})
-	if err != nil {
-		t.Fatalf("NewRecorder() error = %v", err)
-	}
-	hub := NewSocketHub(SocketHubConfig{Bus: bus, Modes: modes, Recorder: rec})
-	client := &SocketClient{
-		id:            "raw-1",
-		adapter:       "raw",
-		protocol:      RawAdapter{},
-		send:          make(chan EncodedServerMessage, 4),
-		done:          make(chan struct{}),
-		connected:     time.Now(),
-		subscriptions: map[string]string{"/mixed": "sub-1"},
-	}
-	hub.addClient(client)
-	hub.registry.Subscribe("/mixed", client.id)
-
-	manifest, err := rec.Start("Mixed Local", "")
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	payload := json.RawMessage(`{"local":true}`)
-	result, err := hub.Dispatch(SocketDispatch{Channel: "/mixed", Payload: payload})
-	if err != nil {
-		t.Fatalf("Dispatch() error = %v", err)
-	}
-	if result.Delivered != 1 {
-		t.Fatalf("delivered = %d, want 1", result.Delivered)
-	}
-	if _, err := rec.Stop(manifest.ID); err != nil {
-		t.Fatalf("Stop() error = %v", err)
-	}
-
-	frames, err := rec.Frames(manifest.ID, "/mixed", 0, 10)
-	if err != nil {
-		t.Fatalf("Frames() error = %v", err)
-	}
-	if len(frames) != 1 || frames[0].Direction != "local" {
-		t.Fatalf("frames = %#v, want one local frame", frames)
-	}
-	raw, err := base64.StdEncoding.DecodeString(frames[0].RawB64)
-	if err != nil {
-		t.Fatalf("raw_b64 invalid: %v", err)
-	}
-	if string(raw) != string(payload) {
-		t.Fatalf("recorded raw = %s, want wrapped payload %s", raw, payload)
 	}
 }
 

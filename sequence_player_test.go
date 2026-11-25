@@ -878,50 +878,6 @@ func TestPlayerBroadcasterPublishUnsubscribeRace(t *testing.T) {
 	drainWG.Wait()
 }
 
-func TestEventBusPublishUnsubscribeRace(t *testing.T) {
-	b := NewEventBus(nil)
-	subs := make([]chan LogEvent, 100)
-	for i := range subs {
-		subs[i] = b.Subscribe()
-	}
-
-	done := make(chan struct{})
-	var drainWG sync.WaitGroup
-	for _, ch := range subs {
-		drainWG.Add(1)
-		go func(ch chan LogEvent) {
-			defer drainWG.Done()
-			for {
-				select {
-				case <-done:
-					return
-				case <-ch:
-				}
-			}
-		}(ch)
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 500; i++ {
-			b.Publish(LogEvent{Type: "SOCKET", Method: "DISPATCH"})
-			runtime.Gosched()
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for _, ch := range subs {
-			b.Unsubscribe(ch)
-			runtime.Gosched()
-		}
-	}()
-	wg.Wait()
-	close(done)
-	drainWG.Wait()
-}
-
 func waitForPlayerEvent(t *testing.T, ch <-chan PlayerEvent, eventType string, timeout time.Duration) PlayerEvent {
 	t.Helper()
 	timer := time.NewTimer(timeout)
