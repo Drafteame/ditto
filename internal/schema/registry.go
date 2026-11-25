@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -141,7 +141,7 @@ func (s *Registry) Load() error {
 		}
 		packPath := filepath.Join(s.dir, entry.Name())
 		if _, err := s.registerPackLocked(packPath); err != nil {
-			log.Printf("schema pack %s skipped: %v", entry.Name(), err)
+			slog.Warn("schema pack skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 	}

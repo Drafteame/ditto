@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -232,7 +232,7 @@ func (s *Server) serve(srv *http.Server, ln net.Listener) {
 	}
 	// Restart closes the old listener on purpose; Shutdown closes the server.
 	if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		log.Printf("server on %s stopped: %v", ln.Addr(), err)
+		slog.Error("server stopped", "addr", ln.Addr().String(), "err", err)
 	}
 }
 

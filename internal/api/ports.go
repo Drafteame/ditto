@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os/exec"
@@ -79,7 +79,9 @@ func registerPortRoutes(mux *http.ServeMux, srv Listener, proxyMgr *proxy.Upstre
 			// Respond before restarting; this connection survives the
 			// listener swap, so the client still reads the response.
 			if cfgStore != nil {
-				cfgStore.SetPort(req.Port)
+				if err := cfgStore.SetPort(req.Port); err != nil {
+					slog.Warn("saving the port failed", "port", req.Port, "err", err)
+				}
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
@@ -89,7 +91,7 @@ func registerPortRoutes(mux *http.ServeMux, srv Listener, proxyMgr *proxy.Upstre
 				f.Flush()
 			}
 			if err := srv.Restart(req.Port); err != nil {
-				log.Printf("Failed to restart on port %d: %v", req.Port, err)
+				slog.Error("port change failed", "port", req.Port, "err", err)
 			}
 
 		default:
@@ -120,7 +122,9 @@ func registerPortRoutes(mux *http.ServeMux, srv Listener, proxyMgr *proxy.Upstre
 			return
 		}
 		if cfgStore != nil {
-			cfgStore.SetTarget(req.Target)
+			if err := cfgStore.SetTarget(req.Target); err != nil {
+				slog.Warn("saving the target failed", "target", req.Target, "err", err)
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -132,7 +136,10 @@ func registerPortRoutes(mux *http.ServeMux, srv Listener, proxyMgr *proxy.Upstre
 			return
 		}
 		if cfgStore != nil {
-			cfgStore.Reset()
+			if err := cfgStore.Reset(); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 	})

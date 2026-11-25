@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"ditto/internal/jsonfile"
 )
 
 // Store holds the mocks loaded from one directory, one JSON file per mock,
@@ -409,7 +411,7 @@ func writeMockFile(dir string, mock Mock) error {
 	}
 
 	filePath := filepath.Join(dir, mock.Source)
-	return os.WriteFile(filePath, data, 0o644)
+	return jsonfile.WriteAtomic(filePath, data, 0o644)
 }
 
 func loadMocksFromDir(dir string) ([]Mock, error) {

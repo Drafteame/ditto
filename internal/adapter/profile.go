@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -455,11 +455,11 @@ func (r *Registry) Load(dir string) error {
 		path := filepath.Join(dir, entry.Name())
 		profile, err := readAdapterProfile(path)
 		if err != nil {
-			log.Printf("adapter profile %s skipped: %v", entry.Name(), err)
+			slog.Warn("adapter profile skipped", "file", entry.Name(), "err", err)
 			continue
 		}
 		if _, exists := profiles[profile.Name]; exists {
-			log.Printf("adapter profile %s skipped: duplicate profile name %q", entry.Name(), profile.Name)
+			slog.Warn("adapter profile skipped", "file", entry.Name(), "reason", "duplicate profile name", "name", profile.Name)
 			continue
 		}
 		profiles[profile.Name] = profile
